@@ -1,0 +1,5 @@
+[workspace]
+members = []
+
+[workspace.package]
+edition = "2024"
