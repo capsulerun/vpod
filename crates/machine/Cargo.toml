@@ -1,0 +1,8 @@
+[package]
+name = "machine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+riscv-core = { path = "../riscv-core" }
+log = "0.4"
