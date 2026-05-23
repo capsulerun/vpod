@@ -1,0 +1,1474 @@
+use crate::csr::{Csr, PrivMode};
+use crate::decode::{Instruction, sign_extend};
+use crate::extensions as ext;
+use crate::gpr::Gpr;
+use crate::mmu::{Mmu, MmuFault};
+use crate::system_bus::SystemBus;
+use crate::trap::{StepResult, TrapCause};
+
+pub const ICACHE_SIZE: usize = 4096;
+const ICACHE_TAG_SHIFT: u32 = 1 + ICACHE_SIZE.trailing_zeros();
+
+const OP_LUI: u32 = 0x37;
+const OP_AUIPC: u32 = 0x17;
+const OP_JAL: u32 = 0x6f;
+const OP_JALR: u32 = 0x67;
+const OP_BRANCH: u32 = 0x63;
+const OP_LOAD: u32 = 0x03;
+const OP_STORE: u32 = 0x23;
+const OP_IMM: u32 = 0x13;
+const OP_IMM32: u32 = 0x1b;
+const OP_REG: u32 = 0x33;
+const OP_REG32: u32 = 0x3b;
+const OP_SYSTEM: u32 = 0x73;
+const OP_FENCE: u32 = 0x0f;
+const OP_AMO: u32 = 0x2f;
+const OP_LOAD_FP: u32 = 0x07;
+const OP_STORE_FP: u32 = 0x27;
+const OP_OP_FP: u32 = 0x53;
+const OP_FMADD: u32 = 0x43;
+const OP_FMSUB: u32 = 0x47;
+const OP_FNMSUB: u32 = 0x4B;
+const OP_FNMADD: u32 = 0x4F;
+const OP_VEC: u32 = 0x57;
+
+pub struct ExecContext<'a, B: SystemBus> {
+    pub regs: &'a mut Gpr,
+    pub csr: &'a mut Csr,
+    pub mmu: &'a mut Mmu,
+    pub bus: &'a mut B,
+    pub priv_mode: &'a mut PrivMode,
+    pub lr_addr: &'a mut Option<u64>,
+    pub fetch_vpage: &'a mut u64,
+    pub fetch_ppage: &'a mut u64,
+    pub fetch_satp: &'a mut u64,
+    pub vregs: &'a mut Box<[[u8; crate::hart::VLEN_BYTES]; crate::hart::VREG_COUNT]>,
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub icache_tags: &'a mut Box<[u64; ICACHE_SIZE]>,
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub icache_data: &'a mut Box<[u32; ICACHE_SIZE]>,
+}
+
+fn invalidate_fetch_cache<B: SystemBus>(ctx: &mut ExecContext<B>) {
+    *ctx.fetch_vpage = u64::MAX;
+    #[cfg(not(target_arch = "wasm32"))]
+    ctx.icache_tags.fill(u64::MAX);
+}
+
+pub fn run<B: SystemBus>(ctx: &mut ExecContext<B>, max_steps: u64) -> StepResult {
+    for _ in 0..max_steps {
+        match step(ctx) {
+            StepResult::Ok => {}
+            other => return other,
+        }
+    }
+    StepResult::Ok
+}
+
+pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
+    if let Some(irq) = ctx.csr.pending_interrupt(*ctx.priv_mode) {
+        // Interrupt but address space mapping is unchanged.
+        *ctx.fetch_vpage = u64::MAX;
+        return take_interrupt(ctx, irq);
+    }
+
+    let pc = ctx.regs.pc;
+    let effective_satp = if *ctx.priv_mode == PrivMode::M { 0 } else { ctx.csr.satp };
+
+    let vpage = pc >> 12;
+    let fetch_pa = if vpage == *ctx.fetch_vpage && effective_satp == *ctx.fetch_satp {
+        (*ctx.fetch_ppage << 12) | (pc & 0xfff)
+    } else {
+        let pa = match ctx.mmu.translate_fetch(pc, effective_satp, ctx.bus) {
+            Ok(pa) => pa,
+            Err(f) => return trap_from_mmu(ctx, f),
+        };
+        *ctx.fetch_vpage = vpage;
+        *ctx.fetch_ppage = pa >> 12;
+        *ctx.fetch_satp = effective_satp;
+        pa
+    };
+
+    let raw = if fetch_pa & 0xfff == 0xffe {
+        let lo = ctx.bus.read_halfword(fetch_pa) as u32;
+
+        if lo & 0x3 != 0x3 {
+            lo
+        } else {
+            let next_pc = pc + 2;
+            let next_pa = match ctx.mmu.translate_fetch(next_pc, effective_satp, ctx.bus) {
+                Ok(pa) => pa,
+                Err(f) => return trap_from_mmu(ctx, f),
+            };
+
+            *ctx.fetch_vpage = next_pc >> 12;
+            *ctx.fetch_ppage = next_pa >> 12;
+            *ctx.fetch_satp = effective_satp;
+            let hi = ctx.bus.read_halfword(next_pa) as u32;
+            lo | (hi << 16)
+        }
+    } else {
+        #[cfg(target_arch = "wasm32")]
+        { ctx.bus.read_word(fetch_pa) }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let idx = ((fetch_pa >> 1) as usize) & (ICACHE_SIZE - 1);
+            let tag = fetch_pa >> ICACHE_TAG_SHIFT;
+            if ctx.icache_tags[idx] == tag {
+                ctx.icache_data[idx]
+            } else {
+                let w = ctx.bus.read_word(fetch_pa);
+                ctx.icache_tags[idx] = tag;
+                ctx.icache_data[idx] = w;
+                w
+            }
+        }
+    };
+
+    let result = if raw & 0x3 != 0x3 {
+        exec_compressed(ctx, raw as u16)
+    } else {
+        let inst = Instruction(raw);
+        exec_full(ctx, inst, raw, pc)
+    };
+
+    match result {
+        StepResult::Trap(ref cause) => {
+            let (mcause_code, tval) = match cause {
+                TrapCause::IllegalInstruction(encoding) => (2, *encoding as u64),
+                TrapCause::InstructionAddressMisaligned => (0, pc),
+                TrapCause::LoadAddressMisaligned => (4, 0),
+                TrapCause::StoreAddressMisaligned => (6, 0),
+                TrapCause::Breakpoint => (3, pc),
+                _ => return result,
+            };
+            take_exception(ctx, mcause_code, tval);
+            StepResult::Ok
+        }
+        other => other,
+    }
+}
+
+fn exec_full<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32, pc: u64) -> StepResult {
+    let effective_satp = if *ctx.priv_mode == PrivMode::M { 0 } else { ctx.csr.satp };
+
+    match inst.opcode() {
+        OP_LUI => {
+            ctx.regs.write(inst.rd(), inst.imm_u() as u64);
+            ctx.regs.pc = pc.wrapping_add(4);
+        }
+        OP_AUIPC => {
+            ctx.regs
+                .write(inst.rd(), pc.wrapping_add(inst.imm_u() as u64));
+            ctx.regs.pc = pc.wrapping_add(4);
+        }
+
+        OP_JAL => {
+            let target = pc.wrapping_add(inst.imm_j() as u64);
+            if target & 0x1 != 0 {
+                return StepResult::Trap(TrapCause::InstructionAddressMisaligned);
+            }
+            ctx.regs.write(inst.rd(), pc.wrapping_add(4));
+            ctx.regs.pc = target;
+        }
+
+        OP_JALR => {
+            let target = ctx.regs.read(inst.rs1()).wrapping_add(inst.imm_i() as u64) & !1;
+
+            if target & 0x1 != 0 {
+                return StepResult::Trap(TrapCause::InstructionAddressMisaligned);
+            }
+
+            ctx.regs.write(inst.rd(), pc.wrapping_add(4));
+            ctx.regs.pc = target;
+        }
+
+        OP_BRANCH => {
+            let rs1 = ctx.regs.read(inst.rs1());
+            let rs2 = ctx.regs.read(inst.rs2());
+            let taken = match inst.funct3() {
+                0x0 => rs1 == rs2,
+                0x1 => rs1 != rs2,
+                0x4 => (rs1 as i64) < (rs2 as i64),
+                0x5 => (rs1 as i64) >= (rs2 as i64),
+                0x6 => rs1 < rs2,
+                0x7 => rs1 >= rs2,
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+
+            if taken {
+                let target = pc.wrapping_add(inst.imm_b() as u64);
+
+                if target & 0x1 != 0 {
+                    return StepResult::Trap(TrapCause::InstructionAddressMisaligned);
+                }
+
+                ctx.regs.pc = target;
+            } else {
+                ctx.regs.pc = pc.wrapping_add(4);
+            }
+        }
+
+        OP_LOAD => {
+            let va = ctx.regs.read(inst.rs1()).wrapping_add(inst.imm_i() as u64);
+            let pa = match ctx.mmu.translate_load(va, effective_satp, ctx.bus) {
+                Ok(pa) => pa,
+                Err(f) => return trap_from_mmu(ctx, f),
+            };
+            let val: u64 = match inst.funct3() {
+                0x0 => ctx.bus.read_byte(pa) as i8 as i64 as u64,
+                0x1 => ctx.bus.read_halfword(pa) as i16 as i64 as u64,
+                0x2 => ctx.bus.read_word(pa) as i32 as i64 as u64,
+                0x3 => ctx.bus.read_doubleword(pa),
+                0x4 => ctx.bus.read_byte(pa) as u64,
+                0x5 => ctx.bus.read_halfword(pa) as u64,
+                0x6 => ctx.bus.read_word(pa) as u64,
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+
+            ctx.regs.write(inst.rd(), val);
+            ctx.regs.pc = pc.wrapping_add(4);
+        }
+
+        OP_STORE => {
+            let va = ctx.regs.read(inst.rs1()).wrapping_add(inst.imm_s() as u64);
+            let src = ctx.regs.read(inst.rs2());
+            let pa = match ctx.mmu.translate_store(va, effective_satp, ctx.bus) {
+                Ok(pa) => pa,
+                Err(f) => return trap_from_mmu(ctx, f),
+            };
+
+            match inst.funct3() {
+                0x0 => ctx.bus.write_byte(pa, src as u8),
+                0x1 => ctx.bus.write_halfword(pa, src as u16),
+                0x2 => ctx.bus.write_word(pa, src as u32),
+                0x3 => ctx.bus.write_doubleword(pa, src),
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            }
+
+            ctx.regs.pc = pc.wrapping_add(4);
+        }
+
+        OP_IMM => {
+            let rs1 = ctx.regs.read(inst.rs1());
+            let imm = inst.imm_i();
+            let shamt = (imm & 0x3f) as u32;
+            let funct7 = inst.funct7();
+            let val = match inst.funct3() {
+                0x0 => rs1.wrapping_add(imm as u64),
+                0x1 => match funct7 >> 1 {
+                    0x00 => rs1 << shamt,
+                    0x18 => match shamt {
+                        0 => rs1.leading_zeros() as u64,
+                        1 => rs1.trailing_zeros() as u64,
+                        2 => rs1.count_ones() as u64,
+                        _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+                    },
+                    0x1a => match shamt {
+                        2 => rs1 as i8 as i64 as u64,
+                        4 => rs1 as i16 as i64 as u64,
+                        _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+                    },
+                    _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+                },
+                0x2 => ((rs1 as i64) < imm) as u64,
+                0x3 => (rs1 < imm as u64) as u64,
+                0x4 => rs1 ^ imm as u64,
+                0x5 => match funct7 >> 1 {
+                    0x00 => rs1 >> shamt,
+                    0x10 => ((rs1 as i64) >> shamt) as u64,
+                    0x14 if shamt == 7  => orc_b(rs1),
+                    0x35 if shamt == 24 => rs1.swap_bytes(),
+                    0x35 if shamt == 8  => rs1.swap_bytes(),
+                    0x18 => rs1.rotate_right(shamt),
+                    _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+                },
+                0x6 => rs1 | imm as u64,
+                0x7 => rs1 & imm as u64,
+                _ => unreachable!(),
+            };
+
+            ctx.regs.write(inst.rd(), val);
+            ctx.regs.pc = pc.wrapping_add(4);
+        }
+
+        OP_IMM32 => {
+            let rs1 = ctx.regs.read(inst.rs1()) as u32;
+            let imm = inst.imm_i();
+            let shamt = (imm & 0x1f) as u32;
+            let funct7 = inst.funct7();
+
+            let val: i32 = match inst.funct3() {
+                0x0 => rs1.wrapping_add(imm as u32) as i32,
+                0x1 => match funct7 {
+                    0x00 => (rs1 << shamt) as i32,
+                    0x30 => match shamt {
+                        0 => rs1.leading_zeros() as i32,
+                        1 => rs1.trailing_zeros() as i32,
+                        2 => rs1.count_ones() as i32,
+                        _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+                    },
+                    _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+                },
+                0x5 => match funct7 {
+                    0x00 => (rs1 >> shamt) as i32,
+                    0x20 => (rs1 as i32) >> shamt,
+                    0x30 => rs1.rotate_right(shamt) as i32,
+                    _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+                },
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+            ctx.regs.write(inst.rd(), val as i64 as u64);
+            ctx.regs.pc = pc.wrapping_add(4);
+        }
+
+        OP_REG => {
+            let rs1 = ctx.regs.read(inst.rs1());
+            let rs2 = ctx.regs.read(inst.rs2());
+            let shamt = (rs2 & 0x3f) as u32;
+
+            let val = match (inst.funct3(), inst.funct7()) {
+                // Base ISA
+                (0x0, 0x00) => rs1.wrapping_add(rs2),
+                (0x0, 0x20) => rs1.wrapping_sub(rs2),
+                (0x1, 0x00) => rs1 << shamt,
+                (0x2, 0x00) => ((rs1 as i64) < (rs2 as i64)) as u64,
+                (0x3, 0x00) => (rs1 < rs2) as u64,
+                (0x4, 0x00) => rs1 ^ rs2,
+                (0x5, 0x00) => rs1 >> shamt,
+                (0x5, 0x20) => ((rs1 as i64) >> shamt) as u64,
+                (0x6, 0x00) => rs1 | rs2,
+                (0x7, 0x00) => rs1 & rs2,
+                // M extension
+                (0x0, 0x01) => ext::mul(rs1, rs2),
+                (0x1, 0x01) => ext::mulh(rs1, rs2),
+                (0x2, 0x01) => ext::mulhsu(rs1, rs2),
+                (0x3, 0x01) => ext::mulhu(rs1, rs2),
+                (0x4, 0x01) => ext::div(rs1, rs2),
+                (0x5, 0x01) => ext::divu(rs1, rs2),
+                (0x6, 0x01) => ext::rem(rs1, rs2),
+                (0x7, 0x01) => ext::remu(rs1, rs2),
+
+                // Zbb
+                (0x4, 0x20) => rs1 ^ !rs2,
+                (0x6, 0x20) => rs1 | !rs2,
+                (0x7, 0x20) => rs1 & !rs2,
+                (0x1, 0x30) => rs1.rotate_left(shamt),
+                (0x5, 0x30) => rs1.rotate_right(shamt),
+                (0x4, 0x05) => if (rs1 as i64) < (rs2 as i64) {
+                    rs1
+                } else {
+                    rs2
+                },
+                (0x5, 0x05) => if (rs1 as i64) > (rs2 as i64) {
+                    rs1
+                } else {
+                    rs2
+                },
+                (0x6, 0x05) => rs1.min(rs2),
+                (0x7, 0x05) => rs1.max(rs2),
+                (0x4, 0x04) => rs1 as u16 as u64,
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+
+            ctx.regs.write(inst.rd(), val);
+            ctx.regs.pc = pc.wrapping_add(4);
+        }
+
+        OP_REG32 => {
+            let rs1 = ctx.regs.read(inst.rs1());
+            let rs2 = ctx.regs.read(inst.rs2());
+            let val = match (inst.funct3(), inst.funct7()) {
+                (0x0, 0x00) => (rs1 as u32).wrapping_add(rs2 as u32) as i32 as i64 as u64,
+                (0x0, 0x20) => (rs1 as u32).wrapping_sub(rs2 as u32) as i32 as i64 as u64,
+                (0x1, 0x00) => ((rs1 as u32) << (rs2 & 0x1f)) as i32 as i64 as u64,
+                (0x5, 0x00) => ((rs1 as u32) >> (rs2 & 0x1f)) as i32 as i64 as u64,
+                (0x5, 0x20) => ((rs1 as i32) >> (rs2 & 0x1f)) as i64 as u64,
+
+                (0x0, 0x01) => ext::mulw(rs1, rs2),
+                (0x4, 0x01) => ext::divw(rs1, rs2),
+                (0x5, 0x01) => ext::divuw(rs1, rs2),
+                (0x6, 0x01) => ext::remw(rs1, rs2),
+                (0x7, 0x01) => ext::remuw(rs1, rs2),
+                // Zbb: rolw/rorw
+                (0x1, 0x30) => ((rs1 as u32).rotate_left((rs2 & 0x1f) as u32)) as i32 as i64 as u64,
+                (0x5, 0x30) => ((rs1 as u32).rotate_right((rs2 & 0x1f) as u32)) as i32 as i64 as u64,
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+
+            ctx.regs.write(inst.rd(), val);
+            ctx.regs.pc = pc.wrapping_add(4);
+        }
+
+        OP_AMO => return exec_amo(ctx, inst, raw),
+
+        OP_FENCE => {
+            ctx.regs.pc = pc.wrapping_add(4);
+        }
+
+        OP_SYSTEM => return exec_system(ctx, inst, raw),
+
+        OP_LOAD_FP => return exec_load_fp(ctx, inst, raw, pc),
+        OP_STORE_FP => return exec_store_fp(ctx, inst, raw, pc),
+        OP_OP_FP => return exec_op_fp(ctx, inst, raw, pc),
+        OP_FMADD | OP_FMSUB | OP_FNMSUB | OP_FNMADD => return exec_fma(ctx, inst, raw, pc),
+        OP_VEC => return exec_vec(ctx, inst, raw, pc),
+
+        _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+    }
+
+    ctx.csr.instret = ctx.csr.instret.wrapping_add(1);
+    StepResult::Ok
+}
+
+fn exec_amo<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32) -> StepResult {
+    let effective_satp = if *ctx.priv_mode == PrivMode::M {
+        0
+    } else {
+        ctx.csr.satp
+    };
+
+    let funct5 = inst.funct7() >> 2;
+    let width = inst.funct3();
+    let va = ctx.regs.read(inst.rs1());
+    let src = ctx.regs.read(inst.rs2());
+    let pc = ctx.regs.pc;
+
+    let pa = match ctx.mmu.translate_store(va, effective_satp, ctx.bus) {
+        Ok(pa) => pa,
+        Err(f) => return trap_from_mmu(ctx, f),
+    };
+
+    match funct5 {
+        0x02 => {
+            let val = if width == 2 {
+                ctx.bus.read_word(pa) as i32 as i64 as u64
+            } else {
+                ctx.bus.read_doubleword(pa)
+            };
+
+            ctx.regs.write(inst.rd(), val);
+            *ctx.lr_addr = Some(pa);
+            ctx.regs.pc = pc.wrapping_add(4);
+
+            return StepResult::Ok;
+        }
+        0x03 => {
+            let success = ctx.lr_addr.is_some_and(|r| r == pa);
+            if success {
+                if width == 2 {
+                    ctx.bus.write_word(pa, src as u32);
+                } else {
+                    ctx.bus.write_doubleword(pa, src);
+                }
+
+                ctx.regs.write(inst.rd(), 0);
+            } else {
+                ctx.regs.write(inst.rd(), 1);
+            }
+
+            *ctx.lr_addr = None;
+            ctx.regs.pc = pc.wrapping_add(4);
+
+            return StepResult::Ok;
+        }
+        _ => {}
+    }
+
+    if width == 2 {
+        let mem = ctx.bus.read_word(pa);
+        let (rd_val, new_val) = match funct5 {
+            0x01 => ext::amoswap_w(mem, src),
+            0x00 => ext::amoadd_w(mem, src),
+            0x04 => ext::amoxor_w(mem, src),
+            0x0c => ext::amoand_w(mem, src),
+            0x08 => ext::amoor_w(mem, src),
+            0x10 => ext::amomin_w(mem, src),
+            0x14 => ext::amomax_w(mem, src),
+            0x18 => ext::amominu_w(mem, src),
+            0x1c => ext::amomaxu_w(mem, src),
+            _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+        };
+
+        ctx.bus.write_word(pa, new_val);
+        ctx.regs.write(inst.rd(), rd_val);
+    } else {
+        let mem = ctx.bus.read_doubleword(pa);
+        let (rd_val, new_val) = match funct5 {
+            0x01 => ext::amoswap_d(mem, src),
+            0x00 => ext::amoadd_d(mem, src),
+            0x04 => ext::amoxor_d(mem, src),
+            0x0c => ext::amoand_d(mem, src),
+            0x08 => ext::amoor_d(mem, src),
+            0x10 => ext::amomin_d(mem, src),
+            0x14 => ext::amomax_d(mem, src),
+            0x18 => ext::amominu_d(mem, src),
+            0x1c => ext::amomaxu_d(mem, src),
+            _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+        };
+
+        ctx.bus.write_doubleword(pa, new_val);
+        ctx.regs.write(inst.rd(), rd_val);
+    }
+
+    ctx.regs.pc = ctx.regs.pc.wrapping_add(4);
+    StepResult::Ok
+}
+
+fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32) -> StepResult {
+    let pc = ctx.regs.pc;
+    match inst.funct3() {
+        0x0 => match raw >> 20 {
+            0x000 => {
+                let cause = match ctx.priv_mode {
+                    PrivMode::U => TrapCause::EcallFromUMode,
+                    PrivMode::S => TrapCause::EcallFromSMode,
+                    PrivMode::M => TrapCause::EcallFromMMode,
+                };
+                take_exception(ctx, cause.mcause_code(), 0);
+                return StepResult::Ok;
+            }
+            0x001 => {
+                take_exception(ctx, TrapCause::Breakpoint.mcause_code(), pc);
+                return StepResult::Ok;
+            }
+            0x102 => {
+                let spp = (ctx.csr.mstatus >> 8) & 1;
+                let spie = (ctx.csr.mstatus >> 5) & 1;
+
+                ctx.csr.mstatus &= !crate::csr::MSTATUS_SPP;
+                if spie != 0 {
+                    ctx.csr.mstatus |= crate::csr::MSTATUS_SIE;
+                }
+
+                ctx.csr.mstatus &= !crate::csr::MSTATUS_SPIE;
+                *ctx.priv_mode = PrivMode::from_bits(spp);
+                ctx.regs.pc = ctx.csr.sepc;
+                ctx.mmu.flush(); invalidate_fetch_cache(ctx);
+
+                return StepResult::Ok;
+            }
+            0x302 => {
+                // MRET
+                let mpp = (ctx.csr.mstatus >> 11) & 3;
+                let mpie = (ctx.csr.mstatus >> 7) & 1;
+                ctx.csr.mstatus &= !crate::csr::MSTATUS_MPP;
+
+                if mpie != 0 {
+                    ctx.csr.mstatus |= crate::csr::MSTATUS_MIE;
+                }
+
+                ctx.csr.mstatus &= !crate::csr::MSTATUS_MPIE;
+                *ctx.priv_mode = PrivMode::from_bits(mpp);
+                ctx.regs.pc = ctx.csr.mepc;
+                ctx.mmu.flush(); invalidate_fetch_cache(ctx);
+
+                return StepResult::Ok;
+            }
+            0x105 => {
+                ctx.regs.pc = pc.wrapping_add(4);
+                return StepResult::Ok;
+            }
+            other if (other >> 5) == 0x09 => {
+                // SFENCE.VMA
+                ctx.mmu.flush(); invalidate_fetch_cache(ctx);
+                ctx.regs.pc = pc.wrapping_add(4);
+
+                return StepResult::Ok;
+            }
+            _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+        },
+        funct3 => {
+            let csr_addr = raw >> 20;
+            let old = match ctx.csr.read(csr_addr, *ctx.priv_mode) {
+                Some(v) => v,
+                None => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+
+            let rs1_val = ctx.regs.read(inst.rs1());
+            let uimm = inst.rs1() as u64; // only for CSRRWI/CSRRSI/CSRRCI
+
+            let new_val = match funct3 {
+                0x1 => rs1_val,        // CSRRW
+                0x2 => old | rs1_val,  // CSRRS
+                0x3 => old & !rs1_val, // CSRRC
+                0x5 => uimm,           // CSRRWI
+                0x6 => old | uimm,     // CSRRSI
+                0x7 => old & !uimm,    // CSRRCI
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+
+            let do_write = match funct3 {
+                0x1 | 0x5 => true,
+                _ => inst.rs1() != 0,
+            };
+
+            if do_write {
+                if !ctx.csr.write(csr_addr, new_val, *ctx.priv_mode) {
+                    return StepResult::Trap(TrapCause::IllegalInstruction(raw));
+                }
+
+                if csr_addr == crate::csr::SATP {
+                    ctx.mmu.flush(); invalidate_fetch_cache(ctx);
+                }
+            }
+
+            ctx.regs.write(inst.rd(), old);
+            ctx.regs.pc = pc.wrapping_add(4);
+        }
+    }
+    StepResult::Ok
+}
+
+fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResult {
+    let effective_satp = if *ctx.priv_mode == PrivMode::M { 0 } else { ctx.csr.satp };
+    let pc = ctx.regs.pc;
+    let quad = raw & 0x3;
+    let funct = (raw >> 13) as u32;
+
+    macro_rules! rp {
+        ($bits:expr) => {
+            (($bits & 0x7) as usize) + 8
+        };
+    }
+
+    match (quad, funct) {
+        (0, 0x0) => {
+            let nzuimm = (((raw >> 6) & 1) << 2)
+                | (((raw >> 5) & 1) << 3)
+                | (((raw >> 11) & 0x3) << 4)
+                | (((raw >> 7) & 0xf) << 6);
+
+            if nzuimm == 0 {
+                return StepResult::Trap(TrapCause::IllegalInstruction(raw as u32));
+            }
+
+            let rd = rp!((raw >> 2) as usize);
+            ctx.regs
+                .write(rd, ctx.regs.read(2).wrapping_add(nzuimm as u64));
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        (0, 0x2) => {
+            let uimm =
+                (((raw >> 6) & 1) << 2) | (((raw >> 10) & 0x7) << 3) | (((raw >> 5) & 1) << 6);
+            let rs1 = rp!((raw >> 7) as usize);
+            let rd = rp!((raw >> 2) as usize);
+            let va = ctx.regs.read(rs1).wrapping_add(uimm as u64);
+            let pa = match ctx.mmu.translate_load(va, effective_satp, ctx.bus) {
+                Ok(p) => p,
+                Err(f) => return trap_from_mmu(ctx, f),
+            };
+
+            ctx.regs
+                .write(rd, ctx.bus.read_word(pa) as i32 as i64 as u64);
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        (0, 0x3) => {
+            let uimm = (((raw >> 10) & 0x7) << 3) | (((raw >> 5) & 0x3) << 6);
+            let rs1 = rp!((raw >> 7) as usize);
+            let rd = rp!((raw >> 2) as usize);
+            let va = ctx.regs.read(rs1).wrapping_add(uimm as u64);
+            let pa = match ctx.mmu.translate_load(va, effective_satp, ctx.bus) {
+                Ok(p) => p,
+                Err(f) => return trap_from_mmu(ctx, f),
+            };
+
+            ctx.regs.write(rd, ctx.bus.read_doubleword(pa));
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        (0, 0x6) => {
+            let uimm =
+                (((raw >> 6) & 1) << 2) | (((raw >> 10) & 0x7) << 3) | (((raw >> 5) & 1) << 6);
+            let rs1 = rp!((raw >> 7) as usize);
+            let rs2 = rp!((raw >> 2) as usize);
+            let va = ctx.regs.read(rs1).wrapping_add(uimm as u64);
+            let pa = match ctx.mmu.translate_store(va, effective_satp, ctx.bus) {
+                Ok(p) => p,
+                Err(f) => return trap_from_mmu(ctx, f),
+            };
+
+            ctx.bus.write_word(pa, ctx.regs.read(rs2) as u32);
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        (0, 0x7) => {
+            let uimm = (((raw >> 10) & 0x7) << 3) | (((raw >> 5) & 0x3) << 6);
+            let rs1 = rp!((raw >> 7) as usize);
+            let rs2 = rp!((raw >> 2) as usize);
+            let va = ctx.regs.read(rs1).wrapping_add(uimm as u64);
+
+            let pa = match ctx.mmu.translate_store(va, effective_satp, ctx.bus) {
+                Ok(p) => p,
+                Err(f) => return trap_from_mmu(ctx, f),
+            };
+
+            ctx.bus.write_doubleword(pa, ctx.regs.read(rs2));
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+
+        (1, 0x0) => {
+            // C.ADDI
+            let imm = sign_extend((((raw >> 12) & 1) << 5 | ((raw >> 2) & 0x1f)) as i64, 6);
+            let rd = ((raw >> 7) & 0x1f) as usize;
+
+            ctx.regs
+                .write(rd, ctx.regs.read(rd).wrapping_add(imm as u64));
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        (1, 0x1) => {
+            // C.ADDIW
+            let imm = sign_extend((((raw >> 12) & 1) << 5 | ((raw >> 2) & 0x1f)) as i64, 6);
+            let rd = ((raw >> 7) & 0x1f) as usize;
+            let val = ctx.regs.read(rd).wrapping_add(imm as u64) as i32 as i64 as u64;
+
+            ctx.regs.write(rd, val);
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        (1, 0x2) => {
+            // C.LI
+            let imm = sign_extend((((raw >> 12) & 1) << 5 | ((raw >> 2) & 0x1f)) as i64, 6);
+            let rd = ((raw >> 7) & 0x1f) as usize;
+
+            ctx.regs.write(rd, imm as u64);
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        (1, 0x3) => {
+            let rd = ((raw >> 7) & 0x1f) as usize;
+
+            if rd == 2 {
+                // C.ADDI16SP
+                let imm = sign_extend(
+                    (((raw >> 12) & 1) << 9
+                        | ((raw >> 6) & 1) << 4
+                        | ((raw >> 5) & 1) << 6
+                        | ((raw >> 3) & 3) << 7
+                        | ((raw >> 2) & 1) << 5) as i64,
+                    10,
+                );
+
+                ctx.regs.write(2, ctx.regs.read(2).wrapping_add(imm as u64));
+            } else {
+                // C.LUI
+                let r32 = raw as u32;
+                let imm = sign_extend(
+                    ((((r32 >> 12) & 1) << 17) | (((r32 >> 2) & 0x1f) << 12)) as i64,
+                    18,
+                );
+
+                ctx.regs.write(rd, imm as u64);
+            }
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        (1, 0x4) => {
+            let rd = rp!((raw >> 7) as usize);
+            let rs2 = rp!((raw >> 2) as usize);
+            let shamt = (((raw >> 12) & 1) << 5 | ((raw >> 2) & 0x1f)) as u32;
+
+            match (raw >> 10) & 0x3 {
+                0x0 => ctx.regs.write(rd, ctx.regs.read(rd) >> shamt),
+                0x1 => ctx
+                    .regs
+                    .write(rd, ((ctx.regs.read(rd) as i64) >> shamt) as u64),
+                0x2 => {
+                    let imm = sign_extend((((raw >> 12) & 1) << 5 | ((raw >> 2) & 0x1f)) as i64, 6);
+                    ctx.regs.write(rd, ctx.regs.read(rd) & imm as u64);
+                }
+                0x3 => match ((raw >> 12) & 1, (raw >> 5) & 0x3) {
+                    (0, 0x0) => ctx
+                        .regs
+                        .write(rd, ctx.regs.read(rd).wrapping_sub(ctx.regs.read(rs2))),
+                    (0, 0x1) => ctx.regs.write(rd, ctx.regs.read(rd) ^ ctx.regs.read(rs2)),
+                    (0, 0x2) => ctx.regs.write(rd, ctx.regs.read(rd) | ctx.regs.read(rs2)),
+                    (0, 0x3) => ctx.regs.write(rd, ctx.regs.read(rd) & ctx.regs.read(rs2)),
+                    (1, 0x0) => {
+                        let v = (ctx.regs.read(rd) as u32).wrapping_sub(ctx.regs.read(rs2) as u32)
+                            as i32 as i64 as u64;
+                        ctx.regs.write(rd, v);
+                    }
+                    (1, 0x1) => {
+                        let v = (ctx.regs.read(rd) as u32).wrapping_add(ctx.regs.read(rs2) as u32)
+                            as i32 as i64 as u64;
+                        ctx.regs.write(rd, v);
+                    }
+                    _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw as u32)),
+                },
+                _ => unreachable!(),
+            }
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        (1, 0x5) => {
+            // C.J
+            let imm = c_j_imm(raw);
+            let target = pc.wrapping_add(imm as u64);
+
+            ctx.regs.pc = target;
+        }
+        (1, 0x6) => {
+            // C.BEQZ
+            let rs1 = rp!((raw >> 7) as usize);
+            let imm = c_b_imm(raw);
+
+            if ctx.regs.read(rs1) == 0 {
+                ctx.regs.pc = pc.wrapping_add(imm as u64);
+            } else {
+                ctx.regs.pc = pc.wrapping_add(2);
+            }
+        }
+        (1, 0x7) => {
+            // C.BNEZ
+            let rs1 = rp!((raw >> 7) as usize);
+            let imm = c_b_imm(raw);
+
+            if ctx.regs.read(rs1) != 0 {
+                ctx.regs.pc = pc.wrapping_add(imm as u64);
+            } else {
+                ctx.regs.pc = pc.wrapping_add(2);
+            }
+        }
+        (2, 0x0) => {
+            // C.SLLI
+            let shamt = (((raw >> 12) & 1) << 5 | ((raw >> 2) & 0x1f)) as u32;
+            let rd = ((raw >> 7) & 0x1f) as usize;
+
+            ctx.regs.write(rd, ctx.regs.read(rd) << shamt);
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        (2, 0x2) => {
+            // C.LWSP
+            let uimm =
+                (((raw >> 12) & 1) << 5) | (((raw >> 4) & 0x7) << 2) | (((raw >> 2) & 0x3) << 6);
+            let rd = ((raw >> 7) & 0x1f) as usize;
+            let va = ctx.regs.read(2).wrapping_add(uimm as u64);
+            let pa = match ctx.mmu.translate_load(va, effective_satp, ctx.bus) {
+                Ok(p) => p,
+                Err(f) => return trap_from_mmu(ctx, f),
+            };
+
+            ctx.regs
+                .write(rd, ctx.bus.read_word(pa) as i32 as i64 as u64);
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        (2, 0x3) => {
+            // C.LDSP
+            let uimm =
+                (((raw >> 12) & 1) << 5) | (((raw >> 5) & 0x3) << 3) | (((raw >> 2) & 0x7) << 6);
+            let rd = ((raw >> 7) & 0x1f) as usize;
+            let va = ctx.regs.read(2).wrapping_add(uimm as u64);
+            let pa = match ctx.mmu.translate_load(va, effective_satp, ctx.bus) {
+                Ok(p) => p,
+                Err(f) => return trap_from_mmu(ctx, f),
+            };
+
+            ctx.regs.write(rd, ctx.bus.read_doubleword(pa));
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        (2, 0x4) => {
+            let rd = ((raw >> 7) & 0x1f) as usize;
+            let rs2 = ((raw >> 2) & 0x1f) as usize;
+
+            if (raw >> 12) & 1 == 0 {
+                if rs2 == 0 {
+                    // C.JR
+                    ctx.regs.pc = ctx.regs.read(rd) & !1;
+                } else {
+                    // C.MV
+                    ctx.regs.write(rd, ctx.regs.read(rs2));
+                    ctx.regs.pc = pc.wrapping_add(2);
+                }
+            } else if rd == 0 && rs2 == 0 {
+                // C.EBREAK
+                ctx.regs.pc = pc.wrapping_add(2);
+
+                return StepResult::Trap(TrapCause::Breakpoint);
+            } else if rs2 == 0 {
+                // C.JALR
+                let target = ctx.regs.read(rd) & !1;
+                ctx.regs.write(1, pc.wrapping_add(2));
+                ctx.regs.pc = target;
+            } else {
+                // C.ADD
+                ctx.regs
+                    .write(rd, ctx.regs.read(rd).wrapping_add(ctx.regs.read(rs2)));
+                ctx.regs.pc = pc.wrapping_add(2);
+            }
+        }
+        (2, 0x6) => {
+            // C.SWSP
+            let uimm = (((raw >> 9) & 0xf) << 2) | (((raw >> 7) & 0x3) << 6);
+            let rs2 = ((raw >> 2) & 0x1f) as usize;
+            let va = ctx.regs.read(2).wrapping_add(uimm as u64);
+            let pa = match ctx.mmu.translate_store(va, effective_satp, ctx.bus) {
+                Ok(p) => p,
+                Err(f) => return trap_from_mmu(ctx, f),
+            };
+
+            ctx.bus.write_word(pa, ctx.regs.read(rs2) as u32);
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        (2, 0x7) => {
+            // C.SDSP
+            let uimm = (((raw >> 10) & 0x7) << 3) | (((raw >> 7) & 0x7) << 6);
+            let rs2 = ((raw >> 2) & 0x1f) as usize;
+            let va = ctx.regs.read(2).wrapping_add(uimm as u64);
+            let pa = match ctx.mmu.translate_store(va, effective_satp, ctx.bus) {
+                Ok(p) => p,
+                Err(f) => return trap_from_mmu(ctx, f),
+            };
+
+            ctx.bus.write_doubleword(pa, ctx.regs.read(rs2));
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+
+        // C.FLD (quad=0, funct=1): load 64-bit FP from memory into f[rd']
+        (0, 0x1) => {
+            let uimm = (((raw >> 10) & 0x7) << 3) | (((raw >> 5) & 0x3) << 6);
+            let rs1 = rp!((raw >> 7) as usize);
+            let rd  = rp!((raw >> 2) as usize);
+            let va = ctx.regs.read(rs1).wrapping_add(uimm as u64);
+            let pa = match ctx.mmu.translate_load(va, effective_satp, ctx.bus) {
+                Ok(p) => p,
+                Err(f) => return trap_from_mmu(ctx, f),
+            };
+            ctx.regs.write_f(rd, ctx.bus.read_doubleword(pa));
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        // C.FSD (quad=0, funct=5): store 64-bit FP to memory from f[rs2']
+        (0, 0x5) => {
+            let uimm = (((raw >> 10) & 0x7) << 3) | (((raw >> 5) & 0x3) << 6);
+            let rs1 = rp!((raw >> 7) as usize);
+            let rs2 = rp!((raw >> 2) as usize);
+            let va = ctx.regs.read(rs1).wrapping_add(uimm as u64);
+            let pa = match ctx.mmu.translate_store(va, effective_satp, ctx.bus) {
+                Ok(p) => p,
+                Err(f) => return trap_from_mmu(ctx, f),
+            };
+            ctx.bus.write_doubleword(pa, ctx.regs.read_f(rs2));
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        // C.FLDSP (quad=2, funct=1): load 64-bit FP from sp+uimm into f[rd]
+        (2, 0x1) => {
+            let uimm = (((raw >> 12) & 1) << 5) | (((raw >> 5) & 0x3) << 3) | (((raw >> 2) & 0x7) << 6);
+            let rd = ((raw >> 7) & 0x1f) as usize;
+            let va = ctx.regs.read(2).wrapping_add(uimm as u64);
+            let pa = match ctx.mmu.translate_load(va, effective_satp, ctx.bus) {
+                Ok(p) => p,
+                Err(f) => return trap_from_mmu(ctx, f),
+            };
+            ctx.regs.write_f(rd, ctx.bus.read_doubleword(pa));
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+        // C.FSDSP (quad=2, funct=5): store 64-bit FP from f[rs2] to sp+uimm
+        (2, 0x5) => {
+            let uimm = (((raw >> 10) & 0x7) << 3) | (((raw >> 7) & 0x7) << 6);
+            let rs2 = ((raw >> 2) & 0x1f) as usize;
+            let va = ctx.regs.read(2).wrapping_add(uimm as u64);
+            let pa = match ctx.mmu.translate_store(va, effective_satp, ctx.bus) {
+                Ok(p) => p,
+                Err(f) => return trap_from_mmu(ctx, f),
+            };
+            ctx.bus.write_doubleword(pa, ctx.regs.read_f(rs2));
+            ctx.regs.pc = pc.wrapping_add(2);
+        }
+
+        _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw as u32)),
+    }
+
+    ctx.csr.instret = ctx.csr.instret.wrapping_add(1);
+    StepResult::Ok
+}
+
+fn take_interrupt<B: SystemBus>(ctx: &mut ExecContext<B>, irq_bit: u64) -> StepResult {
+    let cause = (1u64 << 63) | irq_bit;
+    let deleg = ctx.csr.mideleg & (1 << irq_bit);
+    if deleg != 0 && *ctx.priv_mode != PrivMode::M {
+        ctx.csr.scause = cause;
+        ctx.csr.sepc = ctx.regs.pc;
+        ctx.csr.stval = 0;
+
+        let spie = (ctx.csr.mstatus & crate::csr::MSTATUS_SIE) >> 1;
+        ctx.csr.mstatus &= !crate::csr::MSTATUS_SPIE;
+        ctx.csr.mstatus |= spie << 5;
+        ctx.csr.mstatus &= !crate::csr::MSTATUS_SIE;
+
+        let spp = *ctx.priv_mode as u64;
+        ctx.csr.mstatus = (ctx.csr.mstatus & !crate::csr::MSTATUS_SPP) | (spp << 8);
+        *ctx.priv_mode = PrivMode::S;
+        ctx.regs.pc = ctx.csr.stvec & !3;
+    } else {
+        ctx.csr.mcause = cause;
+        ctx.csr.mepc = ctx.regs.pc;
+        ctx.csr.mtval = 0;
+
+        let mpie = (ctx.csr.mstatus & crate::csr::MSTATUS_MIE) >> 3;
+        ctx.csr.mstatus &= !crate::csr::MSTATUS_MPIE;
+        ctx.csr.mstatus |= mpie << 7;
+        ctx.csr.mstatus &= !crate::csr::MSTATUS_MIE;
+
+        let mpp = *ctx.priv_mode as u64;
+        ctx.csr.mstatus = (ctx.csr.mstatus & !crate::csr::MSTATUS_MPP) | (mpp << 11);
+        *ctx.priv_mode = PrivMode::M;
+        ctx.regs.pc = ctx.csr.mtvec & !3;
+    }
+
+    ctx.mmu.flush(); invalidate_fetch_cache(ctx);
+    StepResult::Ok
+}
+
+pub fn take_exception<B: SystemBus>(ctx: &mut ExecContext<B>, cause: u64, tval: u64) {
+    let deleg = ctx.csr.medeleg & (1 << (cause & 63));
+
+    if deleg != 0 && *ctx.priv_mode != PrivMode::M {
+        ctx.csr.scause = cause;
+        ctx.csr.sepc = ctx.regs.pc;
+        ctx.csr.stval = tval;
+
+        let spie = (ctx.csr.mstatus & crate::csr::MSTATUS_SIE) >> 1;
+        ctx.csr.mstatus &= !crate::csr::MSTATUS_SPIE;
+        ctx.csr.mstatus |= spie << 5;
+        ctx.csr.mstatus &= !crate::csr::MSTATUS_SIE;
+
+        let spp = *ctx.priv_mode as u64;
+        ctx.csr.mstatus = (ctx.csr.mstatus & !crate::csr::MSTATUS_SPP) | (spp << 8);
+        *ctx.priv_mode = PrivMode::S;
+        ctx.regs.pc = ctx.csr.stvec & !3;
+    } else {
+        ctx.csr.mcause = cause;
+        ctx.csr.mepc = ctx.regs.pc;
+        ctx.csr.mtval = tval;
+
+        let mpie = (ctx.csr.mstatus & crate::csr::MSTATUS_MIE) >> 3;
+        ctx.csr.mstatus &= !crate::csr::MSTATUS_MPIE;
+        ctx.csr.mstatus |= mpie << 7;
+        ctx.csr.mstatus &= !crate::csr::MSTATUS_MIE;
+
+        let mpp = *ctx.priv_mode as u64;
+        ctx.csr.mstatus = (ctx.csr.mstatus & !crate::csr::MSTATUS_MPP) | (mpp << 11);
+        *ctx.priv_mode = PrivMode::M;
+        ctx.regs.pc = ctx.csr.mtvec & !3;
+    }
+
+    ctx.mmu.flush(); invalidate_fetch_cache(ctx);
+}
+
+// Zbb: orc.b
+#[inline(always)]
+fn orc_b(x: u64) -> u64 {
+    let has_zero = x.wrapping_sub(0x0101010101010101) & !x & 0x8080808080808080;
+    let zero_bytes = has_zero | (has_zero << 1) | (has_zero << 2) | (has_zero << 3)
+                   | (has_zero << 4) | (has_zero << 5) | (has_zero << 6) | (has_zero << 7);
+    let mut result = 0u64;
+    for i in 0..8 {
+        let byte = (x >> (i * 8)) & 0xFF;
+        let out = if byte != 0 { 0xFF } else { 0x00 };
+        result |= out << (i * 8);
+    }
+
+    result
+}
+
+fn trap_from_mmu<B: SystemBus>(ctx: &mut ExecContext<B>, f: MmuFault) -> StepResult {
+    take_exception(ctx, f.mcause(), f.tval());
+    StepResult::Ok
+}
+
+fn c_j_imm(raw: u16) -> i64 {
+    let r = raw as u32;
+    let val = (((r >> 12) & 1) << 11)
+        | (((r >> 11) & 1) << 4)
+        | (((r >> 9) & 3) << 8)
+        | (((r >> 8) & 1) << 10)
+        | (((r >> 7) & 1) << 6)
+        | (((r >> 6) & 1) << 7)
+        | (((r >> 3) & 7) << 1)
+        | (((r >> 2) & 1) << 5);
+
+    sign_extend(val as i64, 12)
+}
+
+fn c_b_imm(raw: u16) -> i64 {
+    let r = raw as u32;
+    let val = (((r >> 12) & 1) << 8)
+        | (((r >> 10) & 3) << 3)
+        | (((r >> 5) & 3) << 6)
+        | (((r >> 3) & 3) << 1)
+        | (((r >> 2) & 1) << 5);
+
+    sign_extend(val as i64, 9)
+}
+
+// Floating-point instructions
+
+fn check_fs<B: SystemBus>(ctx: &ExecContext<B>, raw: u32) -> Option<StepResult> {
+    let fs = (ctx.csr.mstatus >> 13) & 3;
+    if fs == 0 {
+        Some(StepResult::Trap(TrapCause::IllegalInstruction(raw)))
+    } else {
+        None
+    }
+}
+
+fn mark_fs_dirty<B: SystemBus>(ctx: &mut ExecContext<B>) {
+    ctx.csr.mstatus |= crate::csr::MSTATUS_FS; // set FS=3 (Dirty)
+}
+
+fn exec_load_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32, pc: u64) -> StepResult {
+    // vector load widths (0=e8, 5=e16, 6=e32, 7=e64) — forward to vec module
+    if matches!(inst.funct3(), 0 | 5 | 6 | 7) {
+        return crate::vec::exec_vec(ctx, raw, pc);
+    }
+    if let Some(t) = check_fs(ctx, raw) { return t; }
+    let addr = ctx.regs.read(inst.rs1()).wrapping_add(inst.imm_i() as u64);
+    let satp = if *ctx.priv_mode == PrivMode::M { 0 } else { ctx.csr.satp };
+    let pa = match ctx.mmu.translate_load(addr, satp, ctx.bus) {
+        Ok(pa) => pa,
+        Err(f) => { take_exception(ctx, f.mcause(), f.tval()); return StepResult::Ok; }
+    };
+    match inst.funct3() {
+        0x2 => { // FLW
+            let val = ctx.bus.read_word(pa);
+            ctx.regs.write_f32(inst.rd(), val);
+        }
+        0x3 => { // FLD
+            let lo = ctx.bus.read_word(pa) as u64;
+            let hi = ctx.bus.read_word(pa.wrapping_add(4)) as u64;
+            ctx.regs.write_f(inst.rd(), lo | (hi << 32));
+        }
+        _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+    }
+    mark_fs_dirty(ctx);
+    ctx.regs.pc = pc.wrapping_add(4);
+    ctx.csr.instret = ctx.csr.instret.wrapping_add(1);
+    StepResult::Ok
+}
+
+fn exec_store_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32, pc: u64) -> StepResult {
+    // vector store widths (0=e8, 5=e16, 6=e32, 7=e64) — forward to vec module
+    if matches!(inst.funct3(), 0 | 5 | 6 | 7) {
+        return crate::vec::exec_vec(ctx, raw, pc);
+    }
+    if let Some(t) = check_fs(ctx, raw) { return t; }
+    let addr = ctx.regs.read(inst.rs1()).wrapping_add(inst.imm_s() as u64);
+    let satp = if *ctx.priv_mode == PrivMode::M { 0 } else { ctx.csr.satp };
+    let pa = match ctx.mmu.translate_store(addr, satp, ctx.bus) {
+        Ok(pa) => pa,
+        Err(f) => { take_exception(ctx, f.mcause(), f.tval()); return StepResult::Ok; }
+    };
+    match inst.funct3() {
+        0x2 => { // FSW
+            let val = ctx.regs.read_f32(inst.rs2());
+            ctx.bus.write_word(pa, val);
+        }
+        0x3 => { // FSD
+            let val = ctx.regs.read_f(inst.rs2());
+            ctx.bus.write_word(pa, val as u32);
+            ctx.bus.write_word(pa.wrapping_add(4), (val >> 32) as u32);
+        }
+        _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+    }
+    ctx.regs.pc = pc.wrapping_add(4);
+    ctx.csr.instret = ctx.csr.instret.wrapping_add(1);
+    StepResult::Ok
+}
+
+fn exec_op_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32, pc: u64) -> StepResult {
+    if let Some(t) = check_fs(ctx, raw) { return t; }
+    let funct7 = inst.funct7();
+    let rs1 = inst.rs1();
+    let rs2 = inst.rs2();
+    let rd = inst.rd();
+
+    match funct7 {
+        // FMV.W.X: move integer rs1 to float rd (NaN-boxed)
+        0x78 => {
+            let val = ctx.regs.read(rs1) as u32;
+            ctx.regs.write_f32(rd, val);
+            mark_fs_dirty(ctx);
+        }
+        // FMV.X.W: move float rs1 to integer rd (sign-extended)
+        0x70 => {
+            let val = ctx.regs.read_f32(rs1);
+            ctx.regs.write(rd, val as i32 as i64 as u64);
+        }
+        // FMV.D.X: move integer rs1 to double rd
+        0x79 => {
+            let val = ctx.regs.read(rs1);
+            ctx.regs.write_f(rd, val);
+            mark_fs_dirty(ctx);
+        }
+        // FMV.X.D: move double rs1 to integer rd
+        0x71 => {
+            let val = ctx.regs.read_f(rs1);
+            ctx.regs.write(rd, val);
+        }
+        // FCVT.W.S, FCVT.WU.S, FCVT.L.S, FCVT.LU.S (0x60)
+        // FCVT.S.W, FCVT.S.WU, FCVT.S.L, FCVT.S.LU (0x68)
+        // FCVT.W.D, FCVT.WU.D, FCVT.L.D, FCVT.LU.D (0x61)
+        // FCVT.D.W, FCVT.D.WU, FCVT.D.L, FCVT.D.LU (0x69)
+        // FCVT.S.D (0x20), FCVT.D.S (0x21)
+        // FADD.S (0x00), FSUB.S (0x04), FMUL.S (0x08), FDIV.S (0x0C)
+        // FADD.D (0x01), FSUB.D (0x05), FMUL.D (0x09), FDIV.D (0x0D)
+        // FSQRT.S (0x2C), FSQRT.D (0x2D)
+        // FSGNJ/FSGNJN/FSGNJX.S (0x10), .D (0x11)
+        // FMIN/FMAX.S (0x14), .D (0x15)
+        // FEQ/FLT/FLE.S (0x50), .D (0x51)
+        // FCLASS.S (0x70 rm=1), FCLASS.D (0x71 rm=1)
+        0x00 => { // FADD.S
+            let a = f32::from_bits(ctx.regs.read_f32(rs1));
+            let b = f32::from_bits(ctx.regs.read_f32(rs2));
+            ctx.regs.write_f32(rd, (a + b).to_bits());
+            mark_fs_dirty(ctx);
+        }
+        0x04 => { // FSUB.S
+            let a = f32::from_bits(ctx.regs.read_f32(rs1));
+            let b = f32::from_bits(ctx.regs.read_f32(rs2));
+
+            ctx.regs.write_f32(rd, (a - b).to_bits());
+            mark_fs_dirty(ctx);
+        }
+        0x08 => { // FMUL.S
+            let a = f32::from_bits(ctx.regs.read_f32(rs1));
+            let b = f32::from_bits(ctx.regs.read_f32(rs2));
+
+            ctx.regs.write_f32(rd, (a * b).to_bits());
+            mark_fs_dirty(ctx);
+        }
+        0x0C => { // FDIV.S
+            let a = f32::from_bits(ctx.regs.read_f32(rs1));
+            let b = f32::from_bits(ctx.regs.read_f32(rs2));
+
+            ctx.regs.write_f32(rd, (a / b).to_bits());
+            mark_fs_dirty(ctx);
+        }
+        0x01 => { // FADD.D
+            let a = f64::from_bits(ctx.regs.read_f(rs1));
+            let b = f64::from_bits(ctx.regs.read_f(rs2));
+
+            ctx.regs.write_f(rd, (a + b).to_bits());
+            mark_fs_dirty(ctx);
+        }
+        0x05 => { // FSUB.D
+            let a = f64::from_bits(ctx.regs.read_f(rs1));
+            let b = f64::from_bits(ctx.regs.read_f(rs2));
+
+            ctx.regs.write_f(rd, (a - b).to_bits());
+            mark_fs_dirty(ctx);
+        }
+        0x09 => { // FMUL.D
+            let a = f64::from_bits(ctx.regs.read_f(rs1));
+            let b = f64::from_bits(ctx.regs.read_f(rs2));
+
+            ctx.regs.write_f(rd, (a * b).to_bits());
+            mark_fs_dirty(ctx);
+        }
+        0x0D => { // FDIV.D
+            let a = f64::from_bits(ctx.regs.read_f(rs1));
+            let b = f64::from_bits(ctx.regs.read_f(rs2));
+
+            ctx.regs.write_f(rd, (a / b).to_bits());
+            mark_fs_dirty(ctx);
+        }
+        0x2C => { // FSQRT.S
+            let a = f32::from_bits(ctx.regs.read_f32(rs1));
+            ctx.regs.write_f32(rd, a.sqrt().to_bits());
+
+            mark_fs_dirty(ctx);
+        }
+        0x2D => { // FSQRT.D
+            let a = f64::from_bits(ctx.regs.read_f(rs1));
+            ctx.regs.write_f(rd, a.sqrt().to_bits());
+
+            mark_fs_dirty(ctx);
+        }
+        0x10 => { // FSGNJ/FSGNJN/FSGNJX.S
+            let a = ctx.regs.read_f32(rs1);
+            let b = ctx.regs.read_f32(rs2);
+            let result = match inst.funct3() {
+                0x0 => (a & 0x7FFF_FFFF) | (b & 0x8000_0000), // FSGNJ
+                0x1 => (a & 0x7FFF_FFFF) | ((b ^ 0x8000_0000) & 0x8000_0000), // FSGNJN
+                0x2 => a ^ (b & 0x8000_0000), // FSGNJX
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+
+            ctx.regs.write_f32(rd, result);
+            mark_fs_dirty(ctx);
+        }
+        0x11 => { // FSGNJ/FSGNJN/FSGNJX.D
+            let a = ctx.regs.read_f(rs1);
+            let b = ctx.regs.read_f(rs2);
+            let sign_mask = 1u64 << 63;
+            let result = match inst.funct3() {
+                0x0 => (a & !sign_mask) | (b & sign_mask),
+                0x1 => (a & !sign_mask) | ((b ^ sign_mask) & sign_mask),
+                0x2 => a ^ (b & sign_mask),
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+
+            ctx.regs.write_f(rd, result);
+            mark_fs_dirty(ctx);
+        }
+        0x14 => { // FMIN/FMAX.S
+            let a = f32::from_bits(ctx.regs.read_f32(rs1));
+            let b = f32::from_bits(ctx.regs.read_f32(rs2));
+            let result = match inst.funct3() {
+                0x0 => a.min(b),
+                0x1 => a.max(b),
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+
+            ctx.regs.write_f32(rd, result.to_bits());
+            mark_fs_dirty(ctx);
+        }
+        0x15 => { // FMIN/FMAX.D
+            let a = f64::from_bits(ctx.regs.read_f(rs1));
+            let b = f64::from_bits(ctx.regs.read_f(rs2));
+            let result = match inst.funct3() {
+                0x0 => a.min(b),
+                0x1 => a.max(b),
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+
+            ctx.regs.write_f(rd, result.to_bits());
+            mark_fs_dirty(ctx);
+        }
+        0x50 => { // FEQ/FLT/FLE.S
+            let a = f32::from_bits(ctx.regs.read_f32(rs1));
+            let b = f32::from_bits(ctx.regs.read_f32(rs2));
+            let result = match inst.funct3() {
+                0x2 => a == b,
+                0x1 => a < b,
+                0x0 => a <= b,
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+
+            ctx.regs.write(rd, result as u64);
+        }
+        0x51 => { // FEQ/FLT/FLE.D
+            let a = f64::from_bits(ctx.regs.read_f(rs1));
+            let b = f64::from_bits(ctx.regs.read_f(rs2));
+            let result = match inst.funct3() {
+                0x2 => a == b,
+                0x1 => a < b,
+                0x0 => a <= b,
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+            ctx.regs.write(rd, result as u64);
+        }
+        0x60 => { // FCVT.W.S / FCVT.WU.S / FCVT.L.S / FCVT.LU.S
+            let a = f32::from_bits(ctx.regs.read_f32(rs1));
+            let result = match rs2 {
+                0 => (a as i32) as i64 as u64,   // FCVT.W.S
+                1 => (a as u32) as u64,           // FCVT.WU.S
+                2 => (a as i64) as u64,           // FCVT.L.S
+                3 => a as u64,                    // FCVT.LU.S
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+
+            ctx.regs.write(rd, result);
+        }
+        0x68 => { // FCVT.S.W / FCVT.S.WU / FCVT.S.L / FCVT.S.LU
+            let val = ctx.regs.read(rs1);
+            let result = match rs2 {
+                0 => (val as i32 as f32).to_bits(),
+                1 => (val as u32 as f32).to_bits(),
+                2 => (val as i64 as f32).to_bits(),
+                3 => (val as u64 as f32).to_bits(),
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+
+            ctx.regs.write_f32(rd, result);
+            mark_fs_dirty(ctx);
+        }
+        0x61 => { // FCVT.W.D / FCVT.WU.D / FCVT.L.D / FCVT.LU.D
+            let a = f64::from_bits(ctx.regs.read_f(rs1));
+            let result = match rs2 {
+                0 => (a as i32) as i64 as u64,
+                1 => (a as u32) as u64,
+                2 => (a as i64) as u64,
+                3 => a as u64,
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+
+            ctx.regs.write(rd, result);
+        }
+        0x69 => { // FCVT.D.W / FCVT.D.WU / FCVT.D.L / FCVT.D.LU
+            let val = ctx.regs.read(rs1);
+            let result = match rs2 {
+                0 => (val as i32 as f64).to_bits(),
+                1 => (val as u32 as f64).to_bits(),
+                2 => (val as i64 as f64).to_bits(),
+                3 => (val as u64 as f64).to_bits(),
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
+
+            ctx.regs.write_f(rd, result);
+            mark_fs_dirty(ctx);
+        }
+        0x20 => { // FCVT.S.D
+            let a = f64::from_bits(ctx.regs.read_f(rs1));
+            ctx.regs.write_f32(rd, (a as f32).to_bits());
+
+            mark_fs_dirty(ctx);
+        }
+        0x21 => { // FCVT.D.S
+            let a = f32::from_bits(ctx.regs.read_f32(rs1));
+            ctx.regs.write_f(rd, (a as f64).to_bits());
+
+            mark_fs_dirty(ctx);
+        }
+        _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+    }
+    ctx.regs.pc = pc.wrapping_add(4);
+    ctx.csr.instret = ctx.csr.instret.wrapping_add(1);
+    StepResult::Ok
+}
+
+fn exec_fma<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32, pc: u64) -> StepResult {
+    if let Some(t) = check_fs(ctx, raw) { return t; }
+    let rs1 = inst.rs1();
+    let rs2 = inst.rs2();
+    let rs3 = (raw >> 27) as usize;
+    let rd = inst.rd();
+    let fmt = (raw >> 25) & 3;
+
+    match fmt {
+        0 => { // single
+            let a = f32::from_bits(ctx.regs.read_f32(rs1));
+            let b = f32::from_bits(ctx.regs.read_f32(rs2));
+            let c = f32::from_bits(ctx.regs.read_f32(rs3));
+            let result = match inst.opcode() {
+                OP_FMADD  => a.mul_add(b, c),
+                OP_FMSUB  => a.mul_add(b, -c),
+                OP_FNMSUB => (-a).mul_add(b, c),
+                OP_FNMADD => (-a).mul_add(b, -c),
+                _ => unreachable!(),
+            };
+            ctx.regs.write_f32(rd, result.to_bits());
+        }
+        1 => { // double
+            let a = f64::from_bits(ctx.regs.read_f(rs1));
+            let b = f64::from_bits(ctx.regs.read_f(rs2));
+            let c = f64::from_bits(ctx.regs.read_f(rs3));
+            let result = match inst.opcode() {
+                OP_FMADD  => a.mul_add(b, c),
+                OP_FMSUB  => a.mul_add(b, -c),
+                OP_FNMSUB => (-a).mul_add(b, c),
+                OP_FNMADD => (-a).mul_add(b, -c),
+                _ => unreachable!(),
+            };
+            ctx.regs.write_f(rd, result.to_bits());
+        }
+        _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+    }
+
+    mark_fs_dirty(ctx);
+    ctx.regs.pc = pc.wrapping_add(4);
+    ctx.csr.instret = ctx.csr.instret.wrapping_add(1);
+
+    StepResult::Ok
+}
+
+fn exec_vec<B: SystemBus>(ctx: &mut ExecContext<B>, _inst: Instruction, raw: u32, pc: u64) -> StepResult {
+    crate::vec::exec_vec(ctx, raw, pc)
+}
