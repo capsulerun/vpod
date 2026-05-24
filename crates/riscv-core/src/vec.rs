@@ -117,6 +117,7 @@ fn exec_opcfg<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64) -> Step
                   else if rs1 == 0 { ctx.csr.vl }
                   else { ctx.regs.read(rs1) };
         (avl, zimm)
+
     } else if bit30 == 0 {
         let rs2 = ((raw >> 20) & 0x1F) as usize;
         let avl = if rs1 == 0 && rd != 0 { u64::MAX }
@@ -187,8 +188,6 @@ fn exec_vload<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64) -> Step
 
     StepResult::Ok
 }
-
-// ── unit-stride and strided store ─────────────────────────────────────────
 
 fn exec_vstore<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64) -> StepResult {
     if let Some(t) = check_vs(ctx, raw) { return t; }
@@ -286,16 +285,13 @@ fn exec_opivv_opivx_opivi<B: SystemBus>(
             0x09 => a & b,
             0x0A => a | b,
             0x0B => a ^ b,
-            // shifts (amount masked to log2(SEW))
             0x25 => a.wrapping_shl((b & (sew_bits - 1)) as u32),
             0x28 => (a & mask_bits).wrapping_shr((b & (sew_bits - 1)) as u32),
             0x29 => {
                 let sa = sign_extend_sew(a, sew_bits);
                 sa.wrapping_shr((b & (sew_bits - 1)) as u32) as u64
             }
-            // vmv.v.*: b is the source
             0x17 if vm == 1 => b,
-            // comparisons → write into mask reg (vd bit i)
             0x18 => { set_mask_bit(ctx.vregs, vd, i, a == b); continue; } // vmseq
             0x19 => { set_mask_bit(ctx.vregs, vd, i, a != b); continue; } // vmsne
             0x1A => { set_mask_bit(ctx.vregs, vd, i, a <  b); continue; } // vmsltu
@@ -482,8 +478,6 @@ fn exec_mask_logical<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64, 
     ctx.csr.instret = ctx.csr.instret.wrapping_add(1);
     StepResult::Ok
 }
-
-// ── helpers ────────────────────────────────────────────────────────────────
 
 fn set_mask_bit(vregs: &mut [[u8; VLEN_BYTES]; VREG_COUNT], reg: usize, elem: u64, val: bool) {
     let byte = (elem / 8) as usize;
