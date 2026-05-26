@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/riscv-core"]
+members = ["crates/riscv-core", "crates/machine"]
 
 [workspace.package]
 edition = "2024"
