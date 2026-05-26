@@ -1,6 +1,5 @@
 //! RVV 1.0 vector execution
 
-
 use crate::execute::{take_exception, ExecContext};
 use crate::hart::{VLEN_BYTES, VREG_COUNT};
 use crate::mmu::MmuFault;
@@ -13,6 +12,7 @@ const ELEN: u64 = 64;
 fn sew_bytes(vtype: u64) -> Option<u64> {
     let enc = vtype & 0x7;
     let bits: u64 = 8 << enc;
+
     if bits > ELEN { None } else { Some(bits / 8) }
 }
 
@@ -28,11 +28,7 @@ fn vlmax(vtype: u64) -> Option<u64> {
     };
 
     let v = VLEN / 8 * num / den / sew_b;
-    if v == 0 {
-        return None;
-    }
-
-    Some(v)
+    if v == 0 { None } else { Some(v) }
 }
 
 pub fn vsetvl_compute(avl: u64, vtype_val: u64) -> (u64, u64) {
@@ -46,6 +42,7 @@ pub fn vsetvl_compute(avl: u64, vtype_val: u64) -> (u64, u64) {
 }
 
 fn check_vs<B: SystemBus>(ctx: &ExecContext<B>, raw: u32) -> Option<StepResult> {
+
     if (ctx.csr.mstatus >> 9) & 3 == 0 {
         Some(StepResult::Trap(TrapCause::IllegalInstruction(raw)))
     } else {
@@ -81,15 +78,12 @@ fn vreg_write_elem(vregs: &mut [[u8; VLEN_BYTES]; VREG_COUNT], reg: usize, elem:
     }
 }
 
-// mask bit test
 fn mask_bit(vregs: &[[u8; VLEN_BYTES]; VREG_COUNT], elem: u64) -> bool {
     let byte = (elem / 8) as usize;
     let bit  = (elem % 8) as u32;
     (vregs[0][byte] >> bit) & 1 != 0
 }
 
-
-// translate helprs
 fn effective_satp<B: SystemBus>(ctx: &ExecContext<B>) -> u64 {
     if *ctx.priv_mode == crate::csr::PrivMode::M { 0 } else { ctx.csr.satp }
 }
@@ -104,7 +98,7 @@ fn vec_translate_store<B: SystemBus>(ctx: &mut ExecContext<B>, va: u64) -> Resul
     ctx.mmu.translate_store(va, satp, ctx.bus)
 }
 
-// vsetvl*
+// vsetvl
 fn exec_opcfg<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64) -> StepResult {
     let rd  = ((raw >> 7) & 0x1F) as usize;
     let rs1 = ((raw >> 15) & 0x1F) as usize;
@@ -124,6 +118,7 @@ fn exec_opcfg<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64) -> Step
                   else if rs1 == 0 { ctx.csr.vl }
                   else { ctx.regs.read(rs1) };
         (avl, ctx.regs.read(rs2))
+
     } else {
         let zimm = ((raw >> 20) & 0x3FF) as u64;
         (rs1 as u64, zimm)
@@ -154,7 +149,7 @@ fn exec_vload<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64) -> Step
     if nf != 0 { return StepResult::Trap(TrapCause::IllegalInstruction(raw)); }
     if mop != 0 && mop != 2 { return StepResult::Trap(TrapCause::IllegalInstruction(raw)); }
 
-    let width_enc = (raw >> 12) & 0x7;
+    let width_enc = (raw >> 12) & 0x7; // 0=8,5=16,6=32,7=64
     let sew_b: u64 = match width_enc {
         0 => 1, 5 => 2, 6 => 4, 7 => 8,
         _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
@@ -185,10 +180,10 @@ fn exec_vload<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64) -> Step
     ctx.csr.vstart = 0;
     ctx.regs.pc = pc.wrapping_add(4);
     ctx.csr.instret = ctx.csr.instret.wrapping_add(1);
-
     StepResult::Ok
 }
 
+// unit-stride and strided store
 fn exec_vstore<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64) -> StepResult {
     if let Some(t) = check_vs(ctx, raw) { return t; }
 
@@ -220,6 +215,7 @@ fn exec_vstore<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64) -> Ste
             Ok(p) => p,
             Err(f) => { take_exception(ctx, f.mcause(), f.tval()); return StepResult::Ok; }
         };
+
         match sew_b {
             1 => ctx.bus.write_byte(pa, val as u8),
             2 => ctx.bus.write_halfword(pa, val as u16),
@@ -244,15 +240,18 @@ fn src_scalar(raw: u32, vv: bool, vx: bool,
     if vv {
         let vs1 = ((raw >> 15) & 0x1F) as usize;
         vreg_read_elem(vregs, vs1, elem, sew_b)
+
     } else if vx {
         let rs1 = ((raw >> 15) & 0x1F) as usize;
         regs.read(rs1)
+
     } else {
         let imm5 = ((raw >> 15) & 0x1F) as i64;
         ((imm5 << 59) >> 59) as u64
     }
 }
 
+// opivv
 fn exec_opivv_opivx_opivi<B: SystemBus>(
     ctx: &mut ExecContext<B>, raw: u32, pc: u64,
     funct6: u32, vv: bool, vx: bool,
@@ -268,6 +267,7 @@ fn exec_opivv_opivx_opivi<B: SystemBus>(
     let Some(sew_b) = sew_bytes(vtype) else {
         return StepResult::Trap(TrapCause::IllegalInstruction(raw));
     };
+
     let sew_bits = sew_b * 8;
     let mask_bits = (1u64 << sew_bits).wrapping_sub(1);
 
@@ -281,17 +281,20 @@ fn exec_opivv_opivx_opivi<B: SystemBus>(
             // integer arithmetic
             0x00 => a.wrapping_add(b),
             0x02 => a.wrapping_sub(b),
-            0x03 => b.wrapping_sub(a),
+            0x03 => b.wrapping_sub(a),  // vrsub: rd = rs - vs2
             0x09 => a & b,
             0x0A => a | b,
             0x0B => a ^ b,
+            // shifts (amount masked to log2(SEW))
             0x25 => a.wrapping_shl((b & (sew_bits - 1)) as u32),
             0x28 => (a & mask_bits).wrapping_shr((b & (sew_bits - 1)) as u32),
             0x29 => {
                 let sa = sign_extend_sew(a, sew_bits);
                 sa.wrapping_shr((b & (sew_bits - 1)) as u32) as u64
             }
+            // vmv.v.*: b is the source
             0x17 if vm == 1 => b,
+            // comparisons → write into mask reg (vd bit i)
             0x18 => { set_mask_bit(ctx.vregs, vd, i, a == b); continue; } // vmseq
             0x19 => { set_mask_bit(ctx.vregs, vd, i, a != b); continue; } // vmsne
             0x1A => { set_mask_bit(ctx.vregs, vd, i, a <  b); continue; } // vmsltu
@@ -352,9 +355,11 @@ fn exec_opmvv_opmvx<B: SystemBus>(
             vreg_write_elem(ctx.vregs, vd, 0, sew_b, val);
             mark_vs_dirty(ctx);
         }
+
         ctx.csr.vstart = 0;
         ctx.regs.pc = pc.wrapping_add(4);
         ctx.csr.instret = ctx.csr.instret.wrapping_add(1);
+
         return StepResult::Ok;
     }
 
@@ -382,10 +387,10 @@ fn exec_opmvv_opmvx<B: SystemBus>(
                 let sa = sign_extend_sew(a, sew_bits);
                 let sb = sign_extend_sew(b, sew_bits);
                 if sb == 0 { a } else { sa.wrapping_rem(sb) as u64 }
-            }
-            0x25 => a.wrapping_mul(b),
-            0x26 => mulhu(a & mask_bits, b & mask_bits, sew_bits),
-            0x27 => mulh(sign_extend_sew(a, sew_bits), sign_extend_sew(b, sew_bits), sew_bits),
+            }  // vrem
+            0x25 => a.wrapping_mul(b), // vmul (low bits)
+            0x26 => mulhu(a & mask_bits, b & mask_bits, sew_bits), // vmulhu
+            0x27 => mulh(sign_extend_sew(a, sew_bits), sign_extend_sew(b, sew_bits), sew_bits), // vmulh
             _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
         };
 
@@ -438,9 +443,11 @@ fn exec_vredop<B: SystemBus>(
     ctx.csr.vstart = 0;
     ctx.regs.pc = pc.wrapping_add(4);
     ctx.csr.instret = ctx.csr.instret.wrapping_add(1);
+
     StepResult::Ok
 }
 
+// mask logical ops
 fn exec_mask_logical<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64, funct6: u32) -> StepResult {
     if let Some(t) = check_vs(ctx, raw) { return t; }
 
@@ -468,7 +475,6 @@ fn exec_mask_logical<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64, 
             0x6E => !(bit_vs2 ^ bit_vs1),// vmxnor
             _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
         };
-
         set_mask_bit(ctx.vregs, vd, i, res);
     }
 
@@ -476,9 +482,11 @@ fn exec_mask_logical<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64, 
     ctx.csr.vstart = 0;
     ctx.regs.pc = pc.wrapping_add(4);
     ctx.csr.instret = ctx.csr.instret.wrapping_add(1);
+
     StepResult::Ok
 }
 
+// helpers
 fn set_mask_bit(vregs: &mut [[u8; VLEN_BYTES]; VREG_COUNT], reg: usize, elem: u64, val: bool) {
     let byte = (elem / 8) as usize;
     let bit  = (elem % 8) as u32;
@@ -502,14 +510,13 @@ fn mulh(a: i64, b: i64, sew_bits: u64) -> u64 {
     ((a as i128 * b as i128 >> sew_bits) as i64) as u64
 }
 
-// dispatcher
-
+// top-level dispatcher
 pub fn exec_vec<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64) -> StepResult {
     let opcode  = raw & 0x7F;
     let funct3  = (raw >> 12) & 0x7;
     let funct6  = raw >> 26;
 
-    // LOAD_FP with vle*/vlse*
+    // LOAD_FP
     if opcode == 0x07 {
         let width = (raw >> 12) & 0x7;
         if matches!(width, 0 | 5 | 6 | 7) {
@@ -518,7 +525,7 @@ pub fn exec_vec<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64) -> St
         return StepResult::Trap(TrapCause::IllegalInstruction(raw));
     }
 
-    // STORE_FP with vse*/vsse*
+    // STORE_FP
     if opcode == 0x27 {
         let width = (raw >> 12) & 0x7;
         if matches!(width, 0 | 5 | 6 | 7) {
@@ -527,14 +534,14 @@ pub fn exec_vec<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64) -> St
         return StepResult::Trap(TrapCause::IllegalInstruction(raw));
     }
 
+    // OP_VEC
     match funct3 {
-        7 => exec_opcfg(ctx, raw, pc),   // vsetvl*
-
-        // OPIVV=0, OPIVX=4, OPIVI=3
+        7 => exec_opcfg(ctx, raw, pc), // vsetvl*
         0 => {
             match funct6 {
                 0x64 | 0x66 | 0x67 | 0x68 | 0x6A | 0x6B | 0x6C | 0x6E
                     => exec_mask_logical(ctx, raw, pc, funct6),
+
                 0x00 | 0x01 | 0x02 | 0x03 if (raw >> 25) & 1 == 1 && ((raw >> 15) & 0x1F) != 0 => {
                     exec_opivv_opivx_opivi(ctx, raw, pc, funct6, true, false)
                 }
@@ -552,7 +559,8 @@ pub fn exec_vec<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64) -> St
             }
         }
         6 => exec_opmvv_opmvx(ctx, raw, pc, funct6, false),
+
+        // OPFVV=1, OPFVF=5 not implemented yet
         _ => StepResult::Trap(TrapCause::IllegalInstruction(raw)),
-            // OPFVV=1, OPFVF=5 (float vector) : TODO TO IMPLEMZNTED
     }
 }
