@@ -1,3 +1,5 @@
+// External communication linking the hart to RAM and peripherals (disk, network).
+
 pub trait SystemBus {
     fn read_byte(&mut self, addr: u64) -> u8;
     fn read_halfword(&mut self, addr: u64) -> u16;

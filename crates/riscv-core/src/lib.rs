@@ -29,17 +29,18 @@ mod tests {
 
     fn run(program: &[u32]) -> (Hart, FlatMemory) {
         let (mut cpu, mut mem) = make_cpu_mem(program);
-        // Step exactly N-1 instructions (last is ECALL sentinel)
+
         let steps = program.len() - 1;
         for _ in 0..steps {
             cpu.step(&mut mem);
         }
+
         (cpu, mem)
     }
 
     #[test]
     fn addi() {
-        let (cpu, _) = run(&[0x02a00093, 0x00000073]); // ADDI x1, x0, 42 + ECALL
+        let (cpu, _) = run(&[0x02a00093, 0x00000073]); // ADDI x1, x0, 42   (x1 = 42) + ECALL
         assert_eq!(cpu.regs.read(1), 42);
     }
 

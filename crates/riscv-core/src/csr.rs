@@ -1,4 +1,6 @@
-// CSR addresses — M-mode
+// Manage and store the system state, the privilege level (Machine, User) and the MMU configuration.
+
+// M-mode addresses
 pub const MSTATUS: u32 = 0x300;
 pub const MISA: u32 = 0x301;
 pub const MEDELEG: u32 = 0x302;
@@ -15,7 +17,7 @@ pub const MIP: u32 = 0x344;
 pub const MENVCFG: u32 = 0x30A;
 pub const MCONFIGPTR: u32 = 0xF15;
 
-// CSR addresses — S-mode
+// S-mode addresses
 pub const SSTATUS: u32 = 0x100;
 pub const SIE: u32 = 0x104;
 pub const STVEC: u32 = 0x105;
@@ -35,22 +37,22 @@ pub const INSTRET: u32 = 0xC02;
 pub const MCYCLE: u32 = 0xB00;
 pub const MINSTRET: u32 = 0xB02;
 
-// Machine info (read-only)
+// Machine info
 pub const MVENDORID: u32 = 0xF11;
 pub const MARCHID: u32 = 0xF12;
 pub const MIMPID: u32 = 0xF13;
 pub const MHARTID: u32 = 0xF14;
 
-// Vector CSRs (RVV 1.0)
+// Vector CSRs for RVV 1.0
 pub const VSTART: u32 = 0x008;
-pub const VXSAT: u32  = 0x009;
-pub const VXRM: u32   = 0x00A;
-pub const VCSR: u32   = 0x00F;
-pub const VL: u32     = 0xC20;
-pub const VTYPE: u32  = 0xC21;
-pub const VLENB: u32  = 0xC22;
+pub const VXSAT: u32 = 0x009;
+pub const VXRM: u32 = 0x00A;
+pub const VCSR: u32 = 0x00F;
+pub const VL: u32 = 0xC20;
+pub const VTYPE: u32 = 0xC21;
+pub const VLENB: u32 = 0xC22;
 
-// mstatus field masks (RV64)
+// mstatus field masks for RV64
 pub const MSTATUS_SIE: u64 = 1 << 1;
 pub const MSTATUS_MIE: u64 = 1 << 3;
 pub const MSTATUS_SPIE: u64 = 1 << 5;
@@ -115,10 +117,17 @@ const MSTATUS_WRITE_MASK: u64 = MSTATUS_SIE
     | MSTATUS_TW
     | MSTATUS_TSR;
 
-const SSTATUS_MASK: u64 =
-    MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_UBE | MSTATUS_SPP | MSTATUS_FS | MSTATUS_XS
-    | MSTATUS_SUM | MSTATUS_MXR | MSTATUS_VS;
+const SSTATUS_MASK: u64 = MSTATUS_SIE
+    | MSTATUS_SPIE
+    | MSTATUS_UBE
+    | MSTATUS_SPP
+    | MSTATUS_FS
+    | MSTATUS_XS
+    | MSTATUS_SUM
+    | MSTATUS_MXR
+    | MSTATUS_VS;
 
+// Bits writable via SIP (S-mode software interrupt)
 const SIP_WRITABLE: u64 = MIP_SSIP;
 
 pub struct Csr {
@@ -158,13 +167,13 @@ pub struct Csr {
     // FP CSRs
     pub fcsr: u64,
 
-    // Vector CSRs (RVV 1.0)
+    // Vector CSRs
     pub vtype: u64,
     pub vl: u64,
     pub vstart: u64,
     pub vcsr: u64,
 
-    // OpenSBI probes this
+    // HPM event selectors (3..31)
     pub mhpmevent: [u64; 29],
 }
 
@@ -176,16 +185,15 @@ impl Default for Csr {
 
 impl Csr {
     pub fn new() -> Self {
-        // misa: RV64 IMAFDCSU
         let misa = (2u64 << 62)
-            | (1 << 0)   // A
-            | (1 << 2)   // C
-            | (1 << 3)   // D
-            | (1 << 5)   // F
-            | (1 << 8)   // I
-            | (1 << 12)  // M
-            | (1 << 18)  // S
-            | (1 << 20); // U
+            | (1 << 0)   // A extension
+            | (1 << 2)   // C extension
+            | (1 << 3)   // D extension
+            | (1 << 5)   // F extension
+            | (1 << 8)   // I extension
+            | (1 << 12)  // M extension
+            | (1 << 18)  // S extension
+            | (1 << 20); // U extension
 
         Self {
             misa,
@@ -275,25 +283,29 @@ impl Csr {
             TIME => self.time,
             INSTRET | MINSTRET => self.instret,
 
-            // HPM counters
+            // HPM counters 3-31
             0xB03..=0xB1F => 0,
+            // HPM counters upper 32
             0xB83..=0xB9F => 0,
+            // User HPM counters
             0xC03..=0xC1F => 0,
             0xC83..=0xC9F => 0,
+            // cycleh, timeh, instreth
+            0xC80..=0xC82 => 0,
 
             // FP CSRs
-            0x001 => self.fcsr & 0x1F,
-            0x002 => (self.fcsr >> 5) & 0x7,
-            0x003 => self.fcsr & 0xFF,
+            0x001 => self.fcsr & 0x1F,       // fflags
+            0x002 => (self.fcsr >> 5) & 0x7, // frm
+            0x003 => self.fcsr & 0xFF,       // fcsr
 
-            // Vector CSRs
+            // Vector CSRs (RVV 1.0)
             VSTART => self.vstart,
-            VXSAT  => self.vcsr & 1,
-            VXRM   => (self.vcsr >> 1) & 3,
-            VCSR   => self.vcsr & 0x7,
-            VL     => self.vl,
-            VTYPE  => self.vtype,
-            VLENB  => 16,
+            VXSAT => self.vcsr & 1,
+            VXRM => (self.vcsr >> 1) & 3,
+            VCSR => self.vcsr & 0x7,
+            VL => self.vl,
+            VTYPE => self.vtype,
+            VLENB => 16, // VLEN=128 bits → 16 bytes
 
             // mhpmevent3-31
             0x323..=0x33F => self.mhpmevent[(addr - 0x323) as usize],
@@ -379,15 +391,15 @@ impl Csr {
 
             // Vector CSRs
             VSTART => self.vstart = val,
-            VXSAT  => self.vcsr = (self.vcsr & !1) | (val & 1),
-            VXRM   => self.vcsr = (self.vcsr & !0x6) | ((val & 3) << 1),
-            VCSR   => self.vcsr = val & 0x7,
+            VXSAT => self.vcsr = (self.vcsr & !1) | (val & 1),
+            VXRM => self.vcsr = (self.vcsr & !0x6) | ((val & 3) << 1),
+            VCSR => self.vcsr = val & 0x7,
             VL | VTYPE | VLENB => {}
 
             // HPM events
             0x323..=0x33F => self.mhpmevent[(addr - 0x323) as usize] = val,
 
-            // HPM counters
+            // HPM counters (ignore writes)
             0xB03..=0xB1F | 0xB83..=0xB9F => {}
 
             // Read-only from U/S
@@ -397,7 +409,7 @@ impl Csr {
             // Read-only machine info
             MVENDORID | MARCHID | MIMPID | MHARTID | MCONFIGPTR => {}
 
-            // scountovf, mseccfg, tselect, tdata1-3: ignore writes
+            // scountovf, mseccfg, tselect, tdata1-3
             0xDA0 | 0x747 | 0x7A0..=0x7A3 => {}
 
             _ => return false,
@@ -407,6 +419,8 @@ impl Csr {
 
     fn read_mstatus(&self) -> u64 {
         let mut val = self.mstatus;
+
+        // MSTATUS_SD is set if FS, XS or VS indicate dirty state
         let fs = (val >> 13) & 3;
         let xs = (val >> 15) & 3;
         let vs = (val >> 9) & 3;
@@ -434,13 +448,13 @@ impl Csr {
         let mie_bit = (self.mstatus & MSTATUS_MIE) != 0;
         let sie_bit = (self.mstatus & MSTATUS_SIE) != 0;
 
-        // M-mode interrupts
+        // M-mode interrupts: not delegated
         let m_pending = pending & !self.mideleg;
         if m_pending != 0 && (priv_mode != PrivMode::M || mie_bit) {
             return Some(highest_bit(m_pending));
         }
 
-        // S-mode interrupts
+        // S-mode interrupts: delegated
         let s_pending = pending & self.mideleg;
         if s_pending != 0 && (priv_mode == PrivMode::U || (priv_mode == PrivMode::S && sie_bit)) {
             return Some(highest_bit(s_pending));
@@ -451,7 +465,7 @@ impl Csr {
 }
 
 fn highest_bit(val: u64) -> u64 {
-    // Priority order: MEI, MSI, MTI, SEI, SSI, STI
+    // Priority order: MEI, MSI, MTI, SEI, SSI, STI (11, 3, 7, 9, 1, 5)
     for bit in [11u64, 3, 7, 9, 1, 5] {
         if val & (1 << bit) != 0 {
             return bit;

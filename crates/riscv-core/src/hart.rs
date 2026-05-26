@@ -5,7 +5,6 @@ use crate::mmu::Mmu;
 use crate::system_bus::SystemBus;
 use crate::trap::StepResult;
 
-// 32 vector registers × VLEN=128 bits = 32 × 16 bytes
 pub const VLEN_BYTES: usize = 16;
 pub const VREG_COUNT: usize = 32;
 
@@ -19,8 +18,10 @@ pub struct Hart {
     pub fetch_vpage: u64,
     pub fetch_ppage: u64,
     pub fetch_satp: u64,
+
     #[cfg(not(target_arch = "wasm32"))]
     pub icache_tags: Box<[u64; ICACHE_SIZE]>,
+
     #[cfg(not(target_arch = "wasm32"))]
     pub icache_data: Box<[u32; ICACHE_SIZE]>,
 }

@@ -1,3 +1,5 @@
+// Fast working memory for the execution unit.
+
 pub struct Gpr {
     x: [u64; 32],
     pub pc: u64,
@@ -15,11 +17,7 @@ impl Gpr {
 
     #[inline(always)]
     pub fn read(&self, reg: usize) -> u64 {
-        if reg == 0 {
-            0
-        } else {
-            self.x[reg]
-        }
+        if reg == 0 { 0 } else { self.x[reg] }
     }
 
     #[inline(always)]
@@ -33,7 +31,6 @@ impl Gpr {
             self.x[reg] = val;
         }
     }
-
 
     #[inline(always)]
     pub fn write_f(&mut self, reg: usize, val: u64) {
@@ -52,7 +49,7 @@ impl Gpr {
         if bits & 0xFFFF_FFFF_0000_0000 == 0xFFFF_FFFF_0000_0000 {
             bits as u32
         } else {
-            0x7FC0_0000 // NaN
+            0x7FC0_0000 // equal to NaN
         }
     }
 }

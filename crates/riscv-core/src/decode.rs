@@ -1,3 +1,5 @@
+// Reads the binary instruction and determines what actions the processor should take.
+
 pub struct Instruction(pub u32);
 
 impl Instruction {
@@ -31,22 +33,21 @@ impl Instruction {
         self.0 >> 25
     }
 
-    // I immediate
+    // I-type immediate
     #[inline(always)]
     pub fn imm_i(&self) -> i64 {
         ((self.0 as i32) >> 20) as i64
     }
 
-    // S immediate
+    // S-type immediate
     #[inline(always)]
     pub fn imm_s(&self) -> i64 {
         let hi = (self.0 as i32) >> 25;
         let lo = ((self.0 >> 7) & 0x1F) as i32;
-
         ((hi << 5) | lo) as i64
     }
 
-    // B immediate
+    // B-type immediate
     #[inline(always)]
     pub fn imm_b(&self) -> i64 {
         let raw = self.0;
@@ -59,13 +60,13 @@ impl Instruction {
         sign_extend(val as i64, 13)
     }
 
-    // U immediate
+    // U-type immediate
     #[inline(always)]
     pub fn imm_u(&self) -> i64 {
         ((self.0 & 0xFFFFF000) as i32) as i64
     }
 
-    // J immediate
+    // J-type immediate
     #[inline(always)]
     pub fn imm_j(&self) -> i64 {
         let raw = self.0;
@@ -74,6 +75,7 @@ impl Instruction {
         let bit11 = (raw >> 20) & 1;
         let bits19_12 = (raw >> 12) & 0xFF;
         let val = (bit20 << 20) | (bits19_12 << 12) | (bit11 << 11) | (bits10_1 << 1);
+
         sign_extend(val as i64, 21)
     }
 
@@ -83,23 +85,26 @@ impl Instruction {
         self.0 >> 20
     }
 
+    // For AMO
     #[inline(always)]
     pub fn funct5(&self) -> u32 {
         self.0 >> 27
     }
 
+    // AMO acquire
     #[inline(always)]
     pub fn aq(&self) -> bool {
         (self.0 >> 26) & 1 != 0
     }
 
+    // AMO release
     #[inline(always)]
     pub fn rl(&self) -> bool {
         (self.0 >> 25) & 1 != 0
     }
 }
 
-// 16-bit compressed instruction wrapper.
+// 16-bit compressed instruction wrapper
 pub struct CompressedInstruction(pub u16);
 
 impl CompressedInstruction {
@@ -125,13 +130,13 @@ impl CompressedInstruction {
         ((self.0 >> 7) & 0x7) as usize + 8
     }
 
-    // CR/CI formats
+    // Full rd/rs1 field for CR/CI formats
     #[inline(always)]
     pub fn rd(&self) -> usize {
         ((self.0 >> 7) & 0x1F) as usize
     }
 
-    // CR/CSS formats
+    // Full rs2 field for CR/CSS formats
     #[inline(always)]
     pub fn rs2(&self) -> usize {
         ((self.0 >> 2) & 0x1F) as usize

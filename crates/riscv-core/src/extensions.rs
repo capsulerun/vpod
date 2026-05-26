@@ -1,3 +1,5 @@
+// For addition of logic blocks (Multiplication, Floating Points) to the decoder and execution.
+
 macro_rules! amo_w {
     ($name:ident, $op:expr) => {
         pub fn $name(mem_val: u32, src: u64) -> (u64, u32) {
@@ -50,7 +52,6 @@ amo_d!(amomaxu_d, |mem_val: u64, src: u64| mem_val.max(src));
 
 macro_rules! word_signed_op {
     ($name:ident, div_zero_is_lhs: false, $overflow_ret:expr, $op:ident) => {
-
         #[inline(always)]
         pub fn $name(lhs: u64, rhs: u64) -> u64 {
             let lhs = lhs as i32;
@@ -67,7 +68,6 @@ macro_rules! word_signed_op {
         }
     };
     ($name:ident, div_zero_is_lhs: true, $overflow_ret:expr, $op:ident) => {
-
         #[inline(always)]
         pub fn $name(lhs: u64, rhs: u64) -> u64 {
             let lhs = lhs as i32;
@@ -176,11 +176,7 @@ pub fn rem(lhs: u64, rhs: u64) -> u64 {
 
 #[inline(always)]
 pub fn remu(lhs: u64, rhs: u64) -> u64 {
-    if rhs == 0 {
-        lhs
-    } else {
-        lhs % rhs
-    }
+    if rhs == 0 { lhs } else { lhs % rhs }
 }
 
 #[inline(always)]
