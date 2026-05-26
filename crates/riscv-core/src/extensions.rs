@@ -1,3 +1,5 @@
+// For addition of logic blocks (Multiplication, Floating Points) to the decoder and execution.
+
 macro_rules! amo_w {
     ($name:ident, $op:expr) => {
         pub fn $name(mem_val: u32, src: u64) -> (u64, u32) {

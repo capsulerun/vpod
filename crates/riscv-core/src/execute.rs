@@ -1,3 +1,5 @@
+// Performs the mathematical and logical calculations requested by the instruction.
+
 use crate::csr::{Csr, PrivMode};
 use crate::decode::{Instruction, sign_extend};
 use crate::extensions as ext;
