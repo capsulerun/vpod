@@ -80,7 +80,11 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
     }
 
     let pc = ctx.regs.pc;
-    let effective_satp = if *ctx.priv_mode == PrivMode::M { 0 } else { ctx.csr.satp };
+    let effective_satp = if *ctx.priv_mode == PrivMode::M {
+        0
+    } else {
+        ctx.csr.satp
+    };
 
     let vpage = pc >> 12;
     let fetch_pa = if vpage == *ctx.fetch_vpage && effective_satp == *ctx.fetch_satp {
@@ -117,7 +121,9 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
         }
     } else {
         #[cfg(target_arch = "wasm32")]
-        { ctx.bus.read_word(fetch_pa) }
+        {
+            ctx.bus.read_word(fetch_pa)
+        }
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -158,8 +164,17 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
     }
 }
 
-fn exec_full<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32, pc: u64) -> StepResult {
-    let effective_satp = if *ctx.priv_mode == PrivMode::M { 0 } else { ctx.csr.satp };
+fn exec_full<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    inst: Instruction,
+    raw: u32,
+    pc: u64,
+) -> StepResult {
+    let effective_satp = if *ctx.priv_mode == PrivMode::M {
+        0
+    } else {
+        ctx.csr.satp
+    };
 
     match inst.opcode() {
         OP_LUI => {
@@ -220,10 +235,15 @@ fn exec_full<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32
 
         OP_LOAD => {
             let va = ctx.regs.read(inst.rs1()).wrapping_add(inst.imm_i() as u64);
-            let size: u64 = match inst.funct3() { 0x0 | 0x4 => 1, 0x1 | 0x5 => 2, 0x2 | 0x6 => 4, 0x3 => 8, _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)) };
+            let size: u64 = match inst.funct3() {
+                0x0 | 0x4 => 1,
+                0x1 | 0x5 => 2,
+                0x2 | 0x6 => 4,
+                0x3 => 8,
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
             let page_off = va & 0xFFF;
             let val: u64 = if page_off + size > 0x1000 {
-
                 let mut buf = [0u8; 8];
                 for i in 0..size {
                     let bva = va.wrapping_add(i);
@@ -236,7 +256,9 @@ fn exec_full<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32
 
                 match inst.funct3() {
                     0x1 => u16::from_le_bytes([buf[0], buf[1]]) as i16 as i64 as u64,
-                    0x2 => u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as i32 as i64 as u64,
+                    0x2 => {
+                        u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as i32 as i64 as u64
+                    }
                     0x3 => u64::from_le_bytes(buf),
                     0x5 => u16::from_le_bytes([buf[0], buf[1]]) as u64,
                     0x6 => u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as u64,
@@ -266,10 +288,15 @@ fn exec_full<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32
         OP_STORE => {
             let va = ctx.regs.read(inst.rs1()).wrapping_add(inst.imm_s() as u64);
             let src = ctx.regs.read(inst.rs2());
-            let size: u64 = match inst.funct3() { 0x0 => 1, 0x1 => 2, 0x2 => 4, 0x3 => 8, _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)) };
+            let size: u64 = match inst.funct3() {
+                0x0 => 1,
+                0x1 => 2,
+                0x2 => 4,
+                0x3 => 8,
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            };
             let page_off = va & 0xFFF;
             if page_off + size > 0x1000 {
-
                 let bytes = src.to_le_bytes();
                 for i in 0..size {
                     let bva = va.wrapping_add(i);
@@ -306,15 +333,15 @@ fn exec_full<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32
                     0x00 => rs1 << shamt,
                     // Zbb: clz/ctz/cpop
                     0x18 => match shamt {
-                        0 => rs1.leading_zeros() as u64,           // clz
-                        1 => rs1.trailing_zeros() as u64,          // ctz
-                        2 => rs1.count_ones() as u64,              // cpop
+                        0 => rs1.leading_zeros() as u64,  // clz
+                        1 => rs1.trailing_zeros() as u64, // ctz
+                        2 => rs1.count_ones() as u64,     // cpop
                         _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
                     },
                     // Zbb: sext.b/sext.h
                     0x1a => match shamt {
-                        2 => rs1 as i8 as i64 as u64,             // sext.b
-                        4 => rs1 as i16 as i64 as u64,            // sext.h
+                        2 => rs1 as i8 as i64 as u64,  // sext.b
+                        4 => rs1 as i16 as i64 as u64, // sext.h
                         _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
                     },
                     _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
@@ -323,12 +350,12 @@ fn exec_full<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32
                 0x3 => (rs1 < imm as u64) as u64,
                 0x4 => rs1 ^ imm as u64,
                 0x5 => match funct7 >> 1 {
-                    0x00 => rs1 >> shamt,// srli
-                    0x10 => ((rs1 as i64) >> shamt) as u64, // srai
-                    0x14 if shamt == 7  => orc_b(rs1), // Zbb: orc.b
+                    0x00 => rs1 >> shamt,                    // srli
+                    0x10 => ((rs1 as i64) >> shamt) as u64,  // srai
+                    0x14 if shamt == 7 => orc_b(rs1),        // Zbb: orc.b
                     0x35 if shamt == 24 => rs1.swap_bytes(), // Zbb: rev8
-                    0x35 if shamt == 8  => rs1.swap_bytes(), // RV32 form
-                    0x18 => rs1.rotate_right(shamt), // Zbb: rori
+                    0x35 if shamt == 8 => rs1.swap_bytes(),  // RV32 form
+                    0x18 => rs1.rotate_right(shamt),         // Zbb: rori
                     _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
                 },
                 0x6 => rs1 | imm as u64,
@@ -347,19 +374,20 @@ fn exec_full<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32
             let val: i32 = match inst.funct3() {
                 0x0 => rs1.wrapping_add(imm as u32) as i32,
                 0x1 => match funct7 {
-                    0x00 => (rs1 << shamt) as i32,           // slliw
-                    0x30 => match shamt {                    // Zbb: clzw/ctzw/cpopw
-                        0 => rs1.leading_zeros() as i32,     // clzw
-                        1 => rs1.trailing_zeros() as i32,    // ctzw
-                        2 => rs1.count_ones() as i32,        // cpopw
+                    0x00 => (rs1 << shamt) as i32, // slliw
+                    0x30 => match shamt {
+                        // Zbb: clzw/ctzw/cpopw
+                        0 => rs1.leading_zeros() as i32,  // clzw
+                        1 => rs1.trailing_zeros() as i32, // ctzw
+                        2 => rs1.count_ones() as i32,     // cpopw
                         _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
                     },
                     _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
                 },
                 0x5 => match funct7 {
-                    0x00 => (rs1 >> shamt) as i32,           // srliw
-                    0x20 => (rs1 as i32) >> shamt,           // sraiw
-                    0x30 => rs1.rotate_right(shamt) as i32,  // roriw (Zbb)
+                    0x00 => (rs1 >> shamt) as i32,          // srliw
+                    0x20 => (rs1 as i32) >> shamt,          // sraiw
+                    0x30 => rs1.rotate_right(shamt) as i32, // roriw (Zbb)
                     _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
                 },
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
@@ -394,19 +422,31 @@ fn exec_full<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32
                 (0x6, 0x01) => ext::rem(rs1, rs2),
                 (0x7, 0x01) => ext::remu(rs1, rs2),
                 // Zbb: bitwise with complement
-                (0x4, 0x20) => rs1 ^ !rs2,           // xnor
-                (0x6, 0x20) => rs1 | !rs2,            // orn
-                (0x7, 0x20) => rs1 & !rs2,            // andn
+                (0x4, 0x20) => rs1 ^ !rs2, // xnor
+                (0x6, 0x20) => rs1 | !rs2, // orn
+                (0x7, 0x20) => rs1 & !rs2, // andn
                 // Zbb: rotate
-                (0x1, 0x30) => rs1.rotate_left(shamt),   // rol
-                (0x5, 0x30) => rs1.rotate_right(shamt),  // ror
+                (0x1, 0x30) => rs1.rotate_left(shamt),  // rol
+                (0x5, 0x30) => rs1.rotate_right(shamt), // ror
                 // Zbb: min/max
-                (0x4, 0x05) => if (rs1 as i64) < (rs2 as i64) { rs1 } else { rs2 }, // min
-                (0x5, 0x05) => if (rs1 as i64) > (rs2 as i64) { rs1 } else { rs2 }, // max
-                (0x6, 0x05) => rs1.min(rs2),          // minu
-                (0x7, 0x05) => rs1.max(rs2),          // maxu
+                (0x4, 0x05) => {
+                    if (rs1 as i64) < (rs2 as i64) {
+                        rs1
+                    } else {
+                        rs2
+                    }
+                } // min
+                (0x5, 0x05) => {
+                    if (rs1 as i64) > (rs2 as i64) {
+                        rs1
+                    } else {
+                        rs2
+                    }
+                } // max
+                (0x6, 0x05) => rs1.min(rs2), // minu
+                (0x7, 0x05) => rs1.max(rs2), // maxu
                 // Zbb: zext.h (pack rs2=x0, funct7=0x04)
-                (0x4, 0x04) => rs1 as u16 as u64,     // zext.h
+                (0x4, 0x04) => rs1 as u16 as u64, // zext.h
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
 
@@ -430,7 +470,9 @@ fn exec_full<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32
                 (0x7, 0x01) => ext::remuw(rs1, rs2),
                 // Zbb: rolw/rorw
                 (0x1, 0x30) => ((rs1 as u32).rotate_left((rs2 & 0x1f) as u32)) as i32 as i64 as u64,
-                (0x5, 0x30) => ((rs1 as u32).rotate_right((rs2 & 0x1f) as u32)) as i32 as i64 as u64,
+                (0x5, 0x30) => {
+                    ((rs1 as u32).rotate_right((rs2 & 0x1f) as u32)) as i32 as i64 as u64
+                }
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
 
@@ -460,7 +502,11 @@ fn exec_full<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32
 }
 
 fn exec_amo<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32) -> StepResult {
-    let effective_satp = if *ctx.priv_mode == PrivMode::M { 0 } else { ctx.csr.satp };
+    let effective_satp = if *ctx.priv_mode == PrivMode::M {
+        0
+    } else {
+        ctx.csr.satp
+    };
     let funct5 = inst.funct7() >> 2;
     let width = inst.funct3();
     let va = ctx.regs.read(inst.rs1());
@@ -575,7 +621,8 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                 ctx.csr.mstatus &= !crate::csr::MSTATUS_SPIE;
                 *ctx.priv_mode = PrivMode::from_bits(spp);
                 ctx.regs.pc = ctx.csr.sepc;
-                ctx.mmu.flush(); invalidate_fetch_cache(ctx);
+                ctx.mmu.flush();
+                invalidate_fetch_cache(ctx);
 
                 return StepResult::Ok;
             }
@@ -590,7 +637,8 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                 ctx.csr.mstatus &= !crate::csr::MSTATUS_MPIE;
                 *ctx.priv_mode = PrivMode::from_bits(mpp);
                 ctx.regs.pc = ctx.csr.mepc;
-                ctx.mmu.flush(); invalidate_fetch_cache(ctx);
+                ctx.mmu.flush();
+                invalidate_fetch_cache(ctx);
                 return StepResult::Ok;
             }
             0x105 => {
@@ -600,7 +648,8 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
             }
             other if (other >> 5) == 0x09 => {
                 // SFENCE.VMA
-                ctx.mmu.flush(); invalidate_fetch_cache(ctx);
+                ctx.mmu.flush();
+                invalidate_fetch_cache(ctx);
                 ctx.regs.pc = pc.wrapping_add(4);
 
                 return StepResult::Ok;
@@ -637,7 +686,8 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                 }
 
                 if csr_addr == crate::csr::SATP {
-                    ctx.mmu.flush(); invalidate_fetch_cache(ctx);
+                    ctx.mmu.flush();
+                    invalidate_fetch_cache(ctx);
                 }
             }
 
@@ -674,7 +724,11 @@ fn cross_page_load_dw<B: SystemBus>(va: u64, satp: u64, ctx: &mut ExecContext<B>
 }
 
 #[inline(always)]
-fn cross_page_load_dw_result<B: SystemBus>(va: u64, satp: u64, ctx: &mut ExecContext<B>) -> Result<u64, MmuFault> {
+fn cross_page_load_dw_result<B: SystemBus>(
+    va: u64,
+    satp: u64,
+    ctx: &mut ExecContext<B>,
+) -> Result<u64, MmuFault> {
     if va & 0xFFF <= 0xFF8 {
         let pa = ctx.mmu.translate_load(va, satp, ctx.bus)?;
         Ok(ctx.bus.read_doubleword(pa))
@@ -695,10 +749,18 @@ enum DwStoreResult {
 }
 
 #[inline(always)]
-fn cross_page_store_dw<B: SystemBus>(va: u64, val: u64, satp: u64, ctx: &mut ExecContext<B>) -> DwStoreResult {
+fn cross_page_store_dw<B: SystemBus>(
+    va: u64,
+    val: u64,
+    satp: u64,
+    ctx: &mut ExecContext<B>,
+) -> DwStoreResult {
     if va & 0xFFF <= 0xFF8 {
         match ctx.mmu.translate_store(va, satp, ctx.bus) {
-            Ok(pa) => { ctx.bus.write_doubleword(pa, val); DwStoreResult::Ok }
+            Ok(pa) => {
+                ctx.bus.write_doubleword(pa, val);
+                DwStoreResult::Ok
+            }
             Err(f) => DwStoreResult::Fault(trap_from_mmu(ctx, f)),
         }
     } else {
@@ -717,7 +779,12 @@ fn cross_page_store_dw<B: SystemBus>(va: u64, val: u64, satp: u64, ctx: &mut Exe
 }
 
 #[inline(always)]
-fn cross_page_store_dw_result<B: SystemBus>(va: u64, val: u64, satp: u64, ctx: &mut ExecContext<B>) -> Result<(), MmuFault> {
+fn cross_page_store_dw_result<B: SystemBus>(
+    va: u64,
+    val: u64,
+    satp: u64,
+    ctx: &mut ExecContext<B>,
+) -> Result<(), MmuFault> {
     if va & 0xFFF <= 0xFF8 {
         let pa = ctx.mmu.translate_store(va, satp, ctx.bus)?;
         ctx.bus.write_doubleword(pa, val);
@@ -734,7 +801,11 @@ fn cross_page_store_dw_result<B: SystemBus>(va: u64, val: u64, satp: u64, ctx: &
 }
 
 fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResult {
-    let effective_satp = if *ctx.priv_mode == PrivMode::M { 0 } else { ctx.csr.satp };
+    let effective_satp = if *ctx.priv_mode == PrivMode::M {
+        0
+    } else {
+        ctx.csr.satp
+    };
     let pc = ctx.regs.pc;
     let quad = raw & 0x3;
     let funct = (raw >> 13) as u32;
@@ -781,7 +852,10 @@ fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResu
             let rs1 = rp!((raw >> 7) as usize);
             let rd = rp!((raw >> 2) as usize);
             let va = ctx.regs.read(rs1).wrapping_add(uimm as u64);
-            let val = match cross_page_load_dw(va, effective_satp, ctx) { DwResult::Ok(v) => v, DwResult::Fault(t) => return t };
+            let val = match cross_page_load_dw(va, effective_satp, ctx) {
+                DwResult::Ok(v) => v,
+                DwResult::Fault(t) => return t,
+            };
             ctx.regs.write(rd, val);
             ctx.regs.pc = pc.wrapping_add(2);
         }
@@ -805,7 +879,11 @@ fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResu
             let rs2 = rp!((raw >> 2) as usize);
             let va = ctx.regs.read(rs1).wrapping_add(uimm as u64);
 
-            if let DwStoreResult::Fault(t) = cross_page_store_dw(va, ctx.regs.read(rs2), effective_satp, ctx) { return t; }
+            if let DwStoreResult::Fault(t) =
+                cross_page_store_dw(va, ctx.regs.read(rs2), effective_satp, ctx)
+            {
+                return t;
+            }
             ctx.regs.pc = pc.wrapping_add(2);
         }
 
@@ -956,7 +1034,10 @@ fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResu
                 (((raw >> 12) & 1) << 5) | (((raw >> 5) & 0x3) << 3) | (((raw >> 2) & 0x7) << 6);
             let rd = ((raw >> 7) & 0x1f) as usize;
             let va = ctx.regs.read(2).wrapping_add(uimm as u64);
-            let val = match cross_page_load_dw(va, effective_satp, ctx) { DwResult::Ok(v) => v, DwResult::Fault(t) => return t };
+            let val = match cross_page_load_dw(va, effective_satp, ctx) {
+                DwResult::Ok(v) => v,
+                DwResult::Fault(t) => return t,
+            };
 
             ctx.regs.write(rd, val);
             ctx.regs.pc = pc.wrapping_add(2);
@@ -1008,7 +1089,11 @@ fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResu
             let uimm = (((raw >> 10) & 0x7) << 3) | (((raw >> 7) & 0x7) << 6);
             let rs2 = ((raw >> 2) & 0x1f) as usize;
             let va = ctx.regs.read(2).wrapping_add(uimm as u64);
-            if let DwStoreResult::Fault(t) = cross_page_store_dw(va, ctx.regs.read(rs2), effective_satp, ctx) { return t; }
+            if let DwStoreResult::Fault(t) =
+                cross_page_store_dw(va, ctx.regs.read(rs2), effective_satp, ctx)
+            {
+                return t;
+            }
             ctx.regs.pc = pc.wrapping_add(2);
         }
 
@@ -1016,9 +1101,12 @@ fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResu
         (0, 0x1) => {
             let uimm = (((raw >> 10) & 0x7) << 3) | (((raw >> 5) & 0x3) << 6);
             let rs1 = rp!((raw >> 7) as usize);
-            let rd  = rp!((raw >> 2) as usize);
+            let rd = rp!((raw >> 2) as usize);
             let va = ctx.regs.read(rs1).wrapping_add(uimm as u64);
-            let val = match cross_page_load_dw(va, effective_satp, ctx) { DwResult::Ok(v) => v, DwResult::Fault(t) => return t };
+            let val = match cross_page_load_dw(va, effective_satp, ctx) {
+                DwResult::Ok(v) => v,
+                DwResult::Fault(t) => return t,
+            };
             ctx.regs.write_f(rd, val);
             ctx.regs.pc = pc.wrapping_add(2);
         }
@@ -1028,15 +1116,23 @@ fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResu
             let rs1 = rp!((raw >> 7) as usize);
             let rs2 = rp!((raw >> 2) as usize);
             let va = ctx.regs.read(rs1).wrapping_add(uimm as u64);
-            if let DwStoreResult::Fault(t) = cross_page_store_dw(va, ctx.regs.read_f(rs2), effective_satp, ctx) { return t; }
+            if let DwStoreResult::Fault(t) =
+                cross_page_store_dw(va, ctx.regs.read_f(rs2), effective_satp, ctx)
+            {
+                return t;
+            }
             ctx.regs.pc = pc.wrapping_add(2);
         }
         // C.FLDSP
         (2, 0x1) => {
-            let uimm = (((raw >> 12) & 1) << 5) | (((raw >> 5) & 0x3) << 3) | (((raw >> 2) & 0x7) << 6);
+            let uimm =
+                (((raw >> 12) & 1) << 5) | (((raw >> 5) & 0x3) << 3) | (((raw >> 2) & 0x7) << 6);
             let rd = ((raw >> 7) & 0x1f) as usize;
             let va = ctx.regs.read(2).wrapping_add(uimm as u64);
-            let val = match cross_page_load_dw(va, effective_satp, ctx) { DwResult::Ok(v) => v, DwResult::Fault(t) => return t };
+            let val = match cross_page_load_dw(va, effective_satp, ctx) {
+                DwResult::Ok(v) => v,
+                DwResult::Fault(t) => return t,
+            };
             ctx.regs.write_f(rd, val);
             ctx.regs.pc = pc.wrapping_add(2);
         }
@@ -1045,7 +1141,11 @@ fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResu
             let uimm = (((raw >> 10) & 0x7) << 3) | (((raw >> 7) & 0x7) << 6);
             let rs2 = ((raw >> 2) & 0x1f) as usize;
             let va = ctx.regs.read(2).wrapping_add(uimm as u64);
-            if let DwStoreResult::Fault(t) = cross_page_store_dw(va, ctx.regs.read_f(rs2), effective_satp, ctx) { return t; }
+            if let DwStoreResult::Fault(t) =
+                cross_page_store_dw(va, ctx.regs.read_f(rs2), effective_satp, ctx)
+            {
+                return t;
+            }
             ctx.regs.pc = pc.wrapping_add(2);
         }
 
@@ -1089,7 +1189,8 @@ fn take_interrupt<B: SystemBus>(ctx: &mut ExecContext<B>, irq_bit: u64) -> StepR
         ctx.regs.pc = ctx.csr.mtvec & !3;
     }
 
-    ctx.mmu.flush(); invalidate_fetch_cache(ctx);
+    ctx.mmu.flush();
+    invalidate_fetch_cache(ctx);
     StepResult::Ok
 }
 
@@ -1126,7 +1227,8 @@ pub fn take_exception<B: SystemBus>(ctx: &mut ExecContext<B>, cause: u64, tval: 
         ctx.regs.pc = ctx.csr.mtvec & !3;
     }
 
-    ctx.mmu.flush(); invalidate_fetch_cache(ctx);
+    ctx.mmu.flush();
+    invalidate_fetch_cache(ctx);
 }
 
 // Zbb: orc.b
@@ -1134,8 +1236,14 @@ pub fn take_exception<B: SystemBus>(ctx: &mut ExecContext<B>, cause: u64, tval: 
 fn orc_b(x: u64) -> u64 {
     let has_zero = x.wrapping_sub(0x0101010101010101) & !x & 0x8080808080808080;
 
-    let zero_bytes = has_zero | (has_zero << 1) | (has_zero << 2) | (has_zero << 3)
-                   | (has_zero << 4) | (has_zero << 5) | (has_zero << 6) | (has_zero << 7);
+    let zero_bytes = has_zero
+        | (has_zero << 1)
+        | (has_zero << 2)
+        | (has_zero << 3)
+        | (has_zero << 4)
+        | (has_zero << 5)
+        | (has_zero << 6)
+        | (has_zero << 7);
     let mut result = 0u64;
 
     for i in 0..8 {
@@ -1191,28 +1299,47 @@ fn mark_fs_dirty<B: SystemBus>(ctx: &mut ExecContext<B>) {
     ctx.csr.mstatus |= crate::csr::MSTATUS_FS;
 }
 
-fn exec_load_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32, pc: u64) -> StepResult {
+fn exec_load_fp<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    inst: Instruction,
+    raw: u32,
+    pc: u64,
+) -> StepResult {
     if matches!(inst.funct3(), 0 | 5 | 6 | 7) {
         return crate::vec::exec_vec(ctx, raw, pc);
     }
 
-    if let Some(t) = check_fs(ctx, raw) { return t; }
+    if let Some(t) = check_fs(ctx, raw) {
+        return t;
+    }
 
     let va = ctx.regs.read(inst.rs1()).wrapping_add(inst.imm_i() as u64);
-    let satp = if *ctx.priv_mode == PrivMode::M { 0 } else { ctx.csr.satp };
+    let satp = if *ctx.priv_mode == PrivMode::M {
+        0
+    } else {
+        ctx.csr.satp
+    };
     match inst.funct3() {
-        0x2 => { // FLW
+        0x2 => {
+            // FLW
             let pa = match ctx.mmu.translate_load(va, satp, ctx.bus) {
                 Ok(pa) => pa,
-                Err(f) => { take_exception(ctx, f.mcause(), f.tval()); return StepResult::Ok; }
+                Err(f) => {
+                    take_exception(ctx, f.mcause(), f.tval());
+                    return StepResult::Ok;
+                }
             };
             let val = ctx.bus.read_word(pa);
             ctx.regs.write_f32(inst.rd(), val);
         }
-        0x3 => { // FLD
+        0x3 => {
+            // FLD
             let val = match cross_page_load_dw_result(va, satp, ctx) {
                 Ok(v) => v,
-                Err(f) => { take_exception(ctx, f.mcause(), f.tval()); return StepResult::Ok; }
+                Err(f) => {
+                    take_exception(ctx, f.mcause(), f.tval());
+                    return StepResult::Ok;
+                }
             };
             ctx.regs.write_f(inst.rd(), val);
         }
@@ -1225,28 +1352,47 @@ fn exec_load_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: 
     StepResult::Ok
 }
 
-fn exec_store_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32, pc: u64) -> StepResult {
+fn exec_store_fp<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    inst: Instruction,
+    raw: u32,
+    pc: u64,
+) -> StepResult {
     if matches!(inst.funct3(), 0 | 5 | 6 | 7) {
         return crate::vec::exec_vec(ctx, raw, pc);
     }
-    if let Some(t) = check_fs(ctx, raw) { return t; }
+    if let Some(t) = check_fs(ctx, raw) {
+        return t;
+    }
     let va = ctx.regs.read(inst.rs1()).wrapping_add(inst.imm_s() as u64);
-    let satp = if *ctx.priv_mode == PrivMode::M { 0 } else { ctx.csr.satp };
+    let satp = if *ctx.priv_mode == PrivMode::M {
+        0
+    } else {
+        ctx.csr.satp
+    };
 
     match inst.funct3() {
-        0x2 => { // FSW
+        0x2 => {
+            // FSW
             let pa = match ctx.mmu.translate_store(va, satp, ctx.bus) {
                 Ok(pa) => pa,
-                Err(f) => { take_exception(ctx, f.mcause(), f.tval()); return StepResult::Ok; }
+                Err(f) => {
+                    take_exception(ctx, f.mcause(), f.tval());
+                    return StepResult::Ok;
+                }
             };
             let val = ctx.regs.read_f32(inst.rs2());
             ctx.bus.write_word(pa, val);
         }
-        0x3 => { // FSD
+        0x3 => {
+            // FSD
             let val = ctx.regs.read_f(inst.rs2());
             match cross_page_store_dw_result(va, val, satp, ctx) {
                 Ok(()) => {}
-                Err(f) => { take_exception(ctx, f.mcause(), f.tval()); return StepResult::Ok; }
+                Err(f) => {
+                    take_exception(ctx, f.mcause(), f.tval());
+                    return StepResult::Ok;
+                }
             }
         }
         _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
@@ -1257,8 +1403,15 @@ fn exec_store_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw:
     StepResult::Ok
 }
 
-fn exec_op_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32, pc: u64) -> StepResult {
-    if let Some(t) = check_fs(ctx, raw) { return t; }
+fn exec_op_fp<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    inst: Instruction,
+    raw: u32,
+    pc: u64,
+) -> StepResult {
+    if let Some(t) = check_fs(ctx, raw) {
+        return t;
+    }
     let funct7 = inst.funct7();
     let rs1 = inst.rs1();
     let rs2 = inst.rs2();
@@ -1287,79 +1440,91 @@ fn exec_op_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u3
             let val = ctx.regs.read_f(rs1);
             ctx.regs.write(rd, val);
         }
-        0x00 => { // FADD.S
+        0x00 => {
+            // FADD.S
             let a = f32::from_bits(ctx.regs.read_f32(rs1));
             let b = f32::from_bits(ctx.regs.read_f32(rs2));
             ctx.regs.write_f32(rd, (a + b).to_bits());
             mark_fs_dirty(ctx);
         }
-        0x04 => { // FSUB.S
+        0x04 => {
+            // FSUB.S
             let a = f32::from_bits(ctx.regs.read_f32(rs1));
             let b = f32::from_bits(ctx.regs.read_f32(rs2));
             ctx.regs.write_f32(rd, (a - b).to_bits());
             mark_fs_dirty(ctx);
         }
-        0x08 => { // FMUL.S
+        0x08 => {
+            // FMUL.S
             let a = f32::from_bits(ctx.regs.read_f32(rs1));
             let b = f32::from_bits(ctx.regs.read_f32(rs2));
             ctx.regs.write_f32(rd, (a * b).to_bits());
             mark_fs_dirty(ctx);
         }
-        0x0C => { // FDIV.S
+        0x0C => {
+            // FDIV.S
             let a = f32::from_bits(ctx.regs.read_f32(rs1));
             let b = f32::from_bits(ctx.regs.read_f32(rs2));
             ctx.regs.write_f32(rd, (a / b).to_bits());
             mark_fs_dirty(ctx);
         }
-        0x01 => { // FADD.D
+        0x01 => {
+            // FADD.D
             let a = f64::from_bits(ctx.regs.read_f(rs1));
             let b = f64::from_bits(ctx.regs.read_f(rs2));
             ctx.regs.write_f(rd, (a + b).to_bits());
             mark_fs_dirty(ctx);
         }
-        0x05 => { // FSUB.D
+        0x05 => {
+            // FSUB.D
             let a = f64::from_bits(ctx.regs.read_f(rs1));
             let b = f64::from_bits(ctx.regs.read_f(rs2));
             ctx.regs.write_f(rd, (a - b).to_bits());
             mark_fs_dirty(ctx);
         }
-        0x09 => { // FMUL.D
+        0x09 => {
+            // FMUL.D
             let a = f64::from_bits(ctx.regs.read_f(rs1));
             let b = f64::from_bits(ctx.regs.read_f(rs2));
             ctx.regs.write_f(rd, (a * b).to_bits());
             mark_fs_dirty(ctx);
         }
-        0x0D => { // FDIV.D
+        0x0D => {
+            // FDIV.D
             let a = f64::from_bits(ctx.regs.read_f(rs1));
             let b = f64::from_bits(ctx.regs.read_f(rs2));
             ctx.regs.write_f(rd, (a / b).to_bits());
             mark_fs_dirty(ctx);
         }
-        0x2C => { // FSQRT.S
+        0x2C => {
+            // FSQRT.S
             let a = f32::from_bits(ctx.regs.read_f32(rs1));
             ctx.regs.write_f32(rd, a.sqrt().to_bits());
             mark_fs_dirty(ctx);
         }
-        0x2D => { // FSQRT.D
+        0x2D => {
+            // FSQRT.D
             let a = f64::from_bits(ctx.regs.read_f(rs1));
 
             ctx.regs.write_f(rd, a.sqrt().to_bits());
             mark_fs_dirty(ctx);
         }
-        0x10 => { // FSGNJ/FSGNJN/FSGNJX.S
+        0x10 => {
+            // FSGNJ/FSGNJN/FSGNJX.S
             let a = ctx.regs.read_f32(rs1);
             let b = ctx.regs.read_f32(rs2);
             let result = match inst.funct3() {
                 0x0 => (a & 0x7FFF_FFFF) | (b & 0x8000_0000), // FSGNJ
                 0x1 => (a & 0x7FFF_FFFF) | ((b ^ 0x8000_0000) & 0x8000_0000), // FSGNJN
-                0x2 => a ^ (b & 0x8000_0000), // FSGNJX
+                0x2 => a ^ (b & 0x8000_0000),                 // FSGNJX
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
 
             ctx.regs.write_f32(rd, result);
             mark_fs_dirty(ctx);
         }
-        0x11 => { // FSGNJ/FSGNJN/FSGNJX.D
+        0x11 => {
+            // FSGNJ/FSGNJN/FSGNJX.D
             let a = ctx.regs.read_f(rs1);
             let b = ctx.regs.read_f(rs2);
             let sign_mask = 1u64 << 63;
@@ -1373,7 +1538,8 @@ fn exec_op_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u3
             ctx.regs.write_f(rd, result);
             mark_fs_dirty(ctx);
         }
-        0x14 => { // FMIN/FMAX.S
+        0x14 => {
+            // FMIN/FMAX.S
             let a = f32::from_bits(ctx.regs.read_f32(rs1));
             let b = f32::from_bits(ctx.regs.read_f32(rs2));
             let result = match inst.funct3() {
@@ -1385,7 +1551,8 @@ fn exec_op_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u3
             ctx.regs.write_f32(rd, result.to_bits());
             mark_fs_dirty(ctx);
         }
-        0x15 => { // FMIN/FMAX.D
+        0x15 => {
+            // FMIN/FMAX.D
             let a = f64::from_bits(ctx.regs.read_f(rs1));
             let b = f64::from_bits(ctx.regs.read_f(rs2));
             let result = match inst.funct3() {
@@ -1397,7 +1564,8 @@ fn exec_op_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u3
             ctx.regs.write_f(rd, result.to_bits());
             mark_fs_dirty(ctx);
         }
-        0x50 => { // FEQ/FLT/FLE.S
+        0x50 => {
+            // FEQ/FLT/FLE.S
             let a = f32::from_bits(ctx.regs.read_f32(rs1));
             let b = f32::from_bits(ctx.regs.read_f32(rs2));
             let result = match inst.funct3() {
@@ -1409,7 +1577,8 @@ fn exec_op_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u3
 
             ctx.regs.write(rd, result as u64);
         }
-        0x51 => { // FEQ/FLT/FLE.D
+        0x51 => {
+            // FEQ/FLT/FLE.D
             let a = f64::from_bits(ctx.regs.read_f(rs1));
             let b = f64::from_bits(ctx.regs.read_f(rs2));
             let result = match inst.funct3() {
@@ -1420,19 +1589,21 @@ fn exec_op_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u3
             };
             ctx.regs.write(rd, result as u64);
         }
-        0x60 => { // FCVT.W.S / FCVT.WU.S / FCVT.L.S / FCVT.LU.S
+        0x60 => {
+            // FCVT.W.S / FCVT.WU.S / FCVT.L.S / FCVT.LU.S
             let a = f32::from_bits(ctx.regs.read_f32(rs1));
             let result = match rs2 {
-                0 => (a as i32) as i64 as u64,   // FCVT.W.S
-                1 => (a as u32) as u64,           // FCVT.WU.S
-                2 => (a as i64) as u64,           // FCVT.L.S
-                3 => a as u64,                    // FCVT.LU.S
+                0 => (a as i32) as i64 as u64, // FCVT.W.S
+                1 => (a as u32) as u64,        // FCVT.WU.S
+                2 => (a as i64) as u64,        // FCVT.L.S
+                3 => a as u64,                 // FCVT.LU.S
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
 
             ctx.regs.write(rd, result);
         }
-        0x68 => { // FCVT.S.W / FCVT.S.WU / FCVT.S.L / FCVT.S.LU
+        0x68 => {
+            // FCVT.S.W / FCVT.S.WU / FCVT.S.L / FCVT.S.LU
             let val = ctx.regs.read(rs1);
             let result = match rs2 {
                 0 => (val as i32 as f32).to_bits(),
@@ -1445,7 +1616,8 @@ fn exec_op_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u3
             ctx.regs.write_f32(rd, result);
             mark_fs_dirty(ctx);
         }
-        0x61 => { // FCVT.W.D / FCVT.WU.D / FCVT.L.D / FCVT.LU.D
+        0x61 => {
+            // FCVT.W.D / FCVT.WU.D / FCVT.L.D / FCVT.LU.D
             let a = f64::from_bits(ctx.regs.read_f(rs1));
             let result = match rs2 {
                 0 => (a as i32) as i64 as u64,
@@ -1457,7 +1629,8 @@ fn exec_op_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u3
 
             ctx.regs.write(rd, result);
         }
-        0x69 => { // FCVT.D.W / FCVT.D.WU / FCVT.D.L / FCVT.D.LU
+        0x69 => {
+            // FCVT.D.W / FCVT.D.WU / FCVT.D.L / FCVT.D.LU
             let val = ctx.regs.read(rs1);
             let result = match rs2 {
                 0 => (val as i32 as f64).to_bits(),
@@ -1470,12 +1643,14 @@ fn exec_op_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u3
             ctx.regs.write_f(rd, result);
             mark_fs_dirty(ctx);
         }
-        0x20 => { // FCVT.S.D
+        0x20 => {
+            // FCVT.S.D
             let a = f64::from_bits(ctx.regs.read_f(rs1));
             ctx.regs.write_f32(rd, (a as f32).to_bits());
             mark_fs_dirty(ctx);
         }
-        0x21 => { // FCVT.D.S
+        0x21 => {
+            // FCVT.D.S
             let a = f32::from_bits(ctx.regs.read_f32(rs1));
             ctx.regs.write_f(rd, (a as f64).to_bits());
             mark_fs_dirty(ctx);
@@ -1487,8 +1662,15 @@ fn exec_op_fp<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u3
     StepResult::Ok
 }
 
-fn exec_fma<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32, pc: u64) -> StepResult {
-    if let Some(t) = check_fs(ctx, raw) { return t; }
+fn exec_fma<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    inst: Instruction,
+    raw: u32,
+    pc: u64,
+) -> StepResult {
+    if let Some(t) = check_fs(ctx, raw) {
+        return t;
+    }
     let rs1 = inst.rs1();
     let rs2 = inst.rs2();
     let rs3 = (raw >> 27) as usize;
@@ -1496,26 +1678,28 @@ fn exec_fma<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32,
     let fmt = (raw >> 25) & 3;
 
     match fmt {
-        0 => { // single
+        0 => {
+            // single
             let a = f32::from_bits(ctx.regs.read_f32(rs1));
             let b = f32::from_bits(ctx.regs.read_f32(rs2));
             let c = f32::from_bits(ctx.regs.read_f32(rs3));
             let result = match inst.opcode() {
-                OP_FMADD  => a.mul_add(b, c),
-                OP_FMSUB  => a.mul_add(b, -c),
+                OP_FMADD => a.mul_add(b, c),
+                OP_FMSUB => a.mul_add(b, -c),
                 OP_FNMSUB => (-a).mul_add(b, c),
                 OP_FNMADD => (-a).mul_add(b, -c),
                 _ => unreachable!(),
             };
             ctx.regs.write_f32(rd, result.to_bits());
         }
-        1 => { // double
+        1 => {
+            // double
             let a = f64::from_bits(ctx.regs.read_f(rs1));
             let b = f64::from_bits(ctx.regs.read_f(rs2));
             let c = f64::from_bits(ctx.regs.read_f(rs3));
             let result = match inst.opcode() {
-                OP_FMADD  => a.mul_add(b, c),
-                OP_FMSUB  => a.mul_add(b, -c),
+                OP_FMADD => a.mul_add(b, c),
+                OP_FMSUB => a.mul_add(b, -c),
                 OP_FNMSUB => (-a).mul_add(b, c),
                 OP_FNMADD => (-a).mul_add(b, -c),
                 _ => unreachable!(),
@@ -1531,6 +1715,11 @@ fn exec_fma<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32,
     StepResult::Ok
 }
 
-fn exec_vec<B: SystemBus>(ctx: &mut ExecContext<B>, _inst: Instruction, raw: u32, pc: u64) -> StepResult {
+fn exec_vec<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    _inst: Instruction,
+    raw: u32,
+    pc: u64,
+) -> StepResult {
     crate::vec::exec_vec(ctx, raw, pc)
 }

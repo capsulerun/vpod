@@ -45,12 +45,12 @@ pub const MHARTID: u32 = 0xF14;
 
 // Vector CSRs for RVV 1.0
 pub const VSTART: u32 = 0x008;
-pub const VXSAT: u32  = 0x009;
-pub const VXRM: u32   = 0x00A;
-pub const VCSR: u32   = 0x00F;
-pub const VL: u32     = 0xC20;
-pub const VTYPE: u32  = 0xC21;
-pub const VLENB: u32  = 0xC22;
+pub const VXSAT: u32 = 0x009;
+pub const VXRM: u32 = 0x00A;
+pub const VCSR: u32 = 0x00F;
+pub const VL: u32 = 0xC20;
+pub const VTYPE: u32 = 0xC21;
+pub const VLENB: u32 = 0xC22;
 
 // mstatus field masks for RV64
 pub const MSTATUS_SIE: u64 = 1 << 1;
@@ -117,9 +117,15 @@ const MSTATUS_WRITE_MASK: u64 = MSTATUS_SIE
     | MSTATUS_TW
     | MSTATUS_TSR;
 
-const SSTATUS_MASK: u64 =
-    MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_UBE | MSTATUS_SPP | MSTATUS_FS | MSTATUS_XS
-    | MSTATUS_SUM | MSTATUS_MXR | MSTATUS_VS;
+const SSTATUS_MASK: u64 = MSTATUS_SIE
+    | MSTATUS_SPIE
+    | MSTATUS_UBE
+    | MSTATUS_SPP
+    | MSTATUS_FS
+    | MSTATUS_XS
+    | MSTATUS_SUM
+    | MSTATUS_MXR
+    | MSTATUS_VS;
 
 // Bits writable via SIP (S-mode software interrupt)
 const SIP_WRITABLE: u64 = MIP_SSIP;
@@ -288,18 +294,18 @@ impl Csr {
             0xC80..=0xC82 => 0,
 
             // FP CSRs
-            0x001 => self.fcsr & 0x1F,        // fflags
-            0x002 => (self.fcsr >> 5) & 0x7,  // frm
-            0x003 => self.fcsr & 0xFF,        // fcsr
+            0x001 => self.fcsr & 0x1F,       // fflags
+            0x002 => (self.fcsr >> 5) & 0x7, // frm
+            0x003 => self.fcsr & 0xFF,       // fcsr
 
             // Vector CSRs (RVV 1.0)
             VSTART => self.vstart,
-            VXSAT  => self.vcsr & 1,
-            VXRM   => (self.vcsr >> 1) & 3,
-            VCSR   => self.vcsr & 0x7,
-            VL     => self.vl,
-            VTYPE  => self.vtype,
-            VLENB  => 16, // VLEN=128 bits → 16 bytes
+            VXSAT => self.vcsr & 1,
+            VXRM => (self.vcsr >> 1) & 3,
+            VCSR => self.vcsr & 0x7,
+            VL => self.vl,
+            VTYPE => self.vtype,
+            VLENB => 16, // VLEN=128 bits → 16 bytes
 
             // mhpmevent3-31
             0x323..=0x33F => self.mhpmevent[(addr - 0x323) as usize],
@@ -385,9 +391,9 @@ impl Csr {
 
             // Vector CSRs
             VSTART => self.vstart = val,
-            VXSAT  => self.vcsr = (self.vcsr & !1) | (val & 1),
-            VXRM   => self.vcsr = (self.vcsr & !0x6) | ((val & 3) << 1),
-            VCSR   => self.vcsr = val & 0x7,
+            VXSAT => self.vcsr = (self.vcsr & !1) | (val & 1),
+            VXRM => self.vcsr = (self.vcsr & !0x6) | ((val & 3) << 1),
+            VCSR => self.vcsr = val & 0x7,
             VL | VTYPE | VLENB => {}
 
             // HPM events

@@ -17,11 +17,7 @@ impl Gpr {
 
     #[inline(always)]
     pub fn read(&self, reg: usize) -> u64 {
-        if reg == 0 {
-            0
-        } else {
-            self.x[reg]
-        }
+        if reg == 0 { 0 } else { self.x[reg] }
     }
 
     #[inline(always)]
@@ -35,7 +31,6 @@ impl Gpr {
             self.x[reg] = val;
         }
     }
-
 
     #[inline(always)]
     pub fn write_f(&mut self, reg: usize, val: u64) {
