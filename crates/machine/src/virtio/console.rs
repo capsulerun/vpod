@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use super::{RamView, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
 
 const DEVICE_ID: u32 = 3;
@@ -92,7 +94,6 @@ impl VirtioConsole {
     }
 
     pub fn flush_tx_to_stdout(&mut self) {
-        use std::io::Write;
         if !self.tx_buf.is_empty() {
             let _ = std::io::stdout().write_all(&self.tx_buf);
             let _ = std::io::stdout().flush();
