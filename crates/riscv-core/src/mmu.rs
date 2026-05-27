@@ -137,10 +137,10 @@ impl Mmu {
 
         let vpn = virt_addr >> 12;
 
-        if let Some((ppn, flags)) = self.lookup(vpn) {
-            if flags & PTE_X != 0 {
-                return Ok((ppn << 12) | (virt_addr & 0xfff));
-            }
+        if let Some((ppn, flags)) = self.lookup(vpn)
+            && flags & PTE_X != 0
+        {
+            return Ok((ppn << 12) | (virt_addr & 0xfff));
         }
 
         self.walk(virt_addr, satp, false, true, bus)
@@ -159,10 +159,10 @@ impl Mmu {
 
         let vpn = virt_addr >> 12;
 
-        if let Some((ppn, flags)) = self.lookup(vpn) {
-            if flags & PTE_R != 0 {
-                return Ok((ppn << 12) | (virt_addr & 0xfff));
-            }
+        if let Some((ppn, flags)) = self.lookup(vpn)
+            && flags & PTE_R != 0
+        {
+            return Ok((ppn << 12) | (virt_addr & 0xfff));
         }
 
         self.walk(virt_addr, satp, false, false, bus)
@@ -180,10 +180,10 @@ impl Mmu {
         }
         let vpn = virt_addr >> 12;
 
-        if let Some((ppn, flags)) = self.lookup(vpn) {
-            if flags & (PTE_W | PTE_D) == (PTE_W | PTE_D) {
-                return Ok((ppn << 12) | (virt_addr & 0xfff));
-            }
+        if let Some((ppn, flags)) = self.lookup(vpn)
+            && flags & (PTE_W | PTE_D) == (PTE_W | PTE_D)
+        {
+            return Ok((ppn << 12) | (virt_addr & 0xfff));
         }
 
         self.walk(virt_addr, satp, true, false, bus)

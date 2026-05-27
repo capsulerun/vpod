@@ -1236,7 +1236,7 @@ pub fn take_exception<B: SystemBus>(ctx: &mut ExecContext<B>, cause: u64, tval: 
 fn orc_b(x: u64) -> u64 {
     let has_zero = x.wrapping_sub(0x0101010101010101) & !x & 0x8080808080808080;
 
-    let zero_bytes = has_zero
+    let _zero_bytes = has_zero
         | (has_zero << 1)
         | (has_zero << 2)
         | (has_zero << 3)
@@ -1609,7 +1609,7 @@ fn exec_op_fp<B: SystemBus>(
                 0 => (val as i32 as f32).to_bits(),
                 1 => (val as u32 as f32).to_bits(),
                 2 => (val as i64 as f32).to_bits(),
-                3 => (val as u64 as f32).to_bits(),
+                3 => (val as f32).to_bits(),
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
 
@@ -1636,7 +1636,7 @@ fn exec_op_fp<B: SystemBus>(
                 0 => (val as i32 as f64).to_bits(),
                 1 => (val as u32 as f64).to_bits(),
                 2 => (val as i64 as f64).to_bits(),
-                3 => (val as u64 as f64).to_bits(),
+                3 => (val as f64).to_bits(),
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
 

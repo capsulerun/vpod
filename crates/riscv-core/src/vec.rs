@@ -23,7 +23,7 @@ fn vlmax(vtype: u64) -> Option<u64> {
         5 => (1, 8),
         6 => (1, 4),
         7 => (1, 2),
-        1 | 2 | 3 => return None,
+        1..=3 => return None,
         _ => return None,
     };
     let v = VLEN / 8 * num / den / sew_b;
@@ -638,7 +638,7 @@ fn set_mask_bit(vregs: &mut [[u8; VLEN_BYTES]; VREG_COUNT], reg: usize, elem: u6
     let byte = (elem / 8) as usize;
     let bit = (elem % 8) as u32;
     if val {
-        vregs[reg][byte] |= (1 << bit);
+        vregs[reg][byte] |= 1 << bit;
     } else {
         vregs[reg][byte] &= !(1 << bit);
     }
@@ -654,7 +654,7 @@ fn mulhu(a: u64, b: u64, sew_bits: u64) -> u64 {
 }
 
 fn mulh(a: i64, b: i64, sew_bits: u64) -> u64 {
-    ((a as i128 * b as i128 >> sew_bits) as i64) as u64
+    (((a as i128 * b as i128) >> sew_bits) as i64) as u64
 }
 
 // top-level dispatcher
@@ -696,7 +696,7 @@ pub fn exec_vec<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u32, pc: u64) -> St
 
         // OPMVV=2, OPMVX=6
         2 => match funct6 {
-            0x00 | 0x01 | 0x02 | 0x03 => exec_vredop(ctx, raw, pc, funct6),
+            0x00..=0x03 => exec_vredop(ctx, raw, pc, funct6),
             _ => exec_opmvv_opmvx(ctx, raw, pc, funct6, true),
         },
         6 => exec_opmvv_opmvx(ctx, raw, pc, funct6, false),
