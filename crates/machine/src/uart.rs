@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::io::Write;
 
 const RBR_THR: u8 = 0;
 const IER: u8 = 1;
@@ -164,7 +165,6 @@ impl Uart {
                     buf.push(val);
                     self.tx_buf.set(buf);
                 } else {
-                    use std::io::Write;
                     let _ = std::io::stdout().write_all(&[val]);
                     let _ = std::io::stdout().flush();
                 }
