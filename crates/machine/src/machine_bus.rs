@@ -15,7 +15,6 @@ use crate::{
 
 use riscv_core::csr::{MIP_MEIP, MIP_MSIP, MIP_MTIP, MIP_SEIP};
 use riscv_core::{Hart, SystemBus};
-
 pub struct MachineBus {
     pub ram: Vec<u8>,
     ram_mask: u64,
@@ -110,7 +109,7 @@ impl MachineBus {
     }
 
     pub fn net_rx_pending(&self) -> bool {
-        self.net.as_ref().is_some_and(|n| n.rx_pending())
+        self.net.as_ref().map_or(false, |n| n.rx_pending())
     }
 
     pub fn drain_console_tx(&mut self) -> Vec<u8> {
@@ -260,7 +259,6 @@ impl SystemBus for MachineBus {
             unsafe {
                 *(self.ram.as_mut_ptr().add(i) as *mut [u8; 4]) = val.to_le_bytes();
             }
-
             return;
         }
 
@@ -317,7 +315,6 @@ impl SystemBus for MachineBus {
             unsafe {
                 *(self.ram.as_mut_ptr().add(i) as *mut [u8; 8]) = val.to_le_bytes();
             }
-
             return;
         }
 
@@ -368,9 +365,9 @@ pub fn boot_with_bios(
     let _kernel_end = kernel_load_offset + ((kernel.len() as u64 + 0xfff) & !0xfff);
 
     let (initrd_start, initrd_end) = if let Some(rd) = initrd {
-        let after_kernel = (_kernel_end + 0xff_ffff) & !0xff_ffff;
+        let after_kernel = (_kernel_end + 0xFF_ffff) & !0xf_ffff;
         let start_offset = if bios.is_some() {
-            after_kernel.max(0x4000000)
+            after_kernel.max(0x4000000) // to be past DTB at 0x2200000
         } else {
             after_kernel
         };
@@ -381,7 +378,6 @@ pub fn boot_with_bios(
             (start_offset + rd.len() as u64) / (1024 * 1024),
             ram_size / (1024 * 1024),
         );
-
         bus.load_ram(start_offset, rd);
         let end_offset = start_offset + rd.len() as u64;
 
@@ -449,7 +445,7 @@ pub fn boot_with_bios(
         if dtb_magic.swap_bytes() == 0xd00dfeed {
             "OK"
         } else {
-            "NOPE"
+            "NOPE!"
         },
         dtb_data.len()
     );

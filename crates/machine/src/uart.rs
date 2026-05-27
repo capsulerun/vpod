@@ -165,7 +165,6 @@ impl Uart {
                     buf.push(val);
                     self.tx_buf.set(buf);
                 } else {
-
                     let _ = std::io::stdout().write_all(&[val]);
                     let _ = std::io::stdout().flush();
                 }
