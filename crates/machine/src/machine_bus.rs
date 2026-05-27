@@ -1,4 +1,5 @@
 use crate::clint::{CLINT_BASE, CLINT_SIZE, Clint, RTC_FREQ};
+use crate::dtb;
 use crate::plic::{PLIC_BASE, PLIC_SIZE, Plic};
 use crate::uart::Uart;
 use crate::virtio::RamView;
@@ -6,22 +7,10 @@ use crate::virtio::blk::VirtioBlk;
 use crate::virtio::console::VirtioConsole;
 use crate::virtio::net::VirtioNet;
 use crate::virtio::slirp::SlirpBackend;
-use crate::dtb;
 
 use crate::{
-    RAM_BASE,
-    UART_BASE,
-    UART_SIZE,
-    UART_IRQ,
-    VIRTIO_BASE,
-    VIRTIO_SIZE,
-    VIRTIO_BLK_IRQ,
-    VIRTIO_CONSOLE_IRQ,
-    VIRTIO_NET_IRQ,
-    GUEST_MAC,
-    KERNEL_OFFSET,
-    LOW_RAM_BASE,
-    LOW_RAM_SIZE,
+    GUEST_MAC, KERNEL_OFFSET, LOW_RAM_BASE, LOW_RAM_SIZE, RAM_BASE, UART_BASE, UART_IRQ, UART_SIZE,
+    VIRTIO_BASE, VIRTIO_BLK_IRQ, VIRTIO_CONSOLE_IRQ, VIRTIO_NET_IRQ, VIRTIO_SIZE,
 };
 
 use riscv_core::csr::{MIP_MEIP, MIP_MSIP, MIP_MTIP, MIP_SEIP};
@@ -41,7 +30,10 @@ pub struct MachineBus {
 
 impl MachineBus {
     pub fn new(ram_size: u64) -> Self {
-        assert!(ram_size.is_power_of_two(), "ram_size must be a power of two");
+        assert!(
+            ram_size.is_power_of_two(),
+            "ram_size must be a power of two"
+        );
         Self {
             ram: vec![0u8; ram_size as usize + 8],
             ram_mask: ram_size - 1,
@@ -100,7 +92,8 @@ impl MachineBus {
         if let Some(blk) = &self.blk {
             self.plic.set_irq(VIRTIO_BLK_IRQ, blk.mmio.int_status != 0);
         }
-        self.plic.set_irq(VIRTIO_CONSOLE_IRQ, self.console.mmio.int_status != 0);
+        self.plic
+            .set_irq(VIRTIO_CONSOLE_IRQ, self.console.mmio.int_status != 0);
 
         if let Some(net) = &mut self.net {
             let mask = self.ram_mask;
@@ -117,7 +110,7 @@ impl MachineBus {
     }
 
     pub fn net_rx_pending(&self) -> bool {
-        self.net.as_ref().map_or(false, |n| n.rx_pending())
+        self.net.as_ref().is_some_and(|n| n.rx_pending())
     }
 
     pub fn drain_console_tx(&mut self) -> Vec<u8> {
@@ -146,9 +139,7 @@ impl MachineBus {
     #[inline(always)]
     fn ram_read_u8(&self, pa: u64) -> u8 {
         let idx = self.ram_idx(pa);
-        unsafe {
-            *self.ram.get_unchecked(idx)
-        }
+        unsafe { *self.ram.get_unchecked(idx) }
     }
 
     fn virtio_slot(addr: u64) -> Option<usize> {
@@ -201,9 +192,7 @@ impl SystemBus for MachineBus {
     fn read_word(&mut self, addr: u64) -> u32 {
         if addr >= RAM_BASE && addr + 3 < RAM_BASE + self.ram.len() as u64 {
             let i = (addr - RAM_BASE) as usize;
-            return unsafe {
-                u32::from_le_bytes(*(self.ram.as_ptr().add(i) as *const [u8; 4]))
-            };
+            return unsafe { u32::from_le_bytes(*(self.ram.as_ptr().add(i) as *const [u8; 4])) };
         }
 
         if (CLINT_BASE..CLINT_BASE + CLINT_SIZE - 3).contains(&addr) {
@@ -235,9 +224,7 @@ impl SystemBus for MachineBus {
     fn read_doubleword(&mut self, addr: u64) -> u64 {
         if addr >= RAM_BASE && addr + 7 < RAM_BASE + self.ram.len() as u64 {
             let i = (addr - RAM_BASE) as usize;
-            return unsafe {
-                u64::from_le_bytes(*(self.ram.as_ptr().add(i) as *const [u8; 8]))
-            };
+            return unsafe { u64::from_le_bytes(*(self.ram.as_ptr().add(i) as *const [u8; 8])) };
         }
 
         (self.read_word(addr) as u64) | ((self.read_word(addr + 4) as u64) << 32)
@@ -381,7 +368,7 @@ pub fn boot_with_bios(
     let _kernel_end = kernel_load_offset + ((kernel.len() as u64 + 0xfff) & !0xfff);
 
     let (initrd_start, initrd_end) = if let Some(rd) = initrd {
-        let after_kernel = (_kernel_end + 0xFF_ffff) & !0xf_ffff;
+        let after_kernel = (_kernel_end + 0xff_ffff) & !0xff_ffff;
         let start_offset = if bios.is_some() {
             after_kernel.max(0x4000000)
         } else {
@@ -444,18 +431,28 @@ pub fn boot_with_bios(
     bus.load_ram(dtb_offset, &dtb_data);
 
     let _ = std::fs::write("/tmp/capsulev.dtb", &dtb_data);
-    let dtb_magic = u32::from_le_bytes(bus.ram[dtb_offset as usize..dtb_offset as usize+4].try_into().unwrap());
+    let dtb_magic = u32::from_le_bytes(
+        bus.ram[dtb_offset as usize..dtb_offset as usize + 4]
+            .try_into()
+            .unwrap(),
+    );
 
-    eprintln!("[boot] entry={:#x} kernel={:#x}+{:#x} initrd={:#x}..{:#x} dtb={:#x} dtb_magic={:#010x}({}) dtb_size={}",
-        entry, RAM_BASE + kernel_load_offset, kernel.len(),
-        initrd_start, initrd_end, dtb_phys,
+    eprintln!(
+        "[boot] entry={:#x} kernel={:#x}+{:#x} initrd={:#x}..{:#x} dtb={:#x} dtb_magic={:#010x}({}) dtb_size={}",
+        entry,
+        RAM_BASE + kernel_load_offset,
+        kernel.len(),
+        initrd_start,
+        initrd_end,
+        dtb_phys,
         dtb_magic.swap_bytes(),
         if dtb_magic.swap_bytes() == 0xd00dfeed {
             "OK"
         } else {
             "NOPE"
         },
-        dtb_data.len());
+        dtb_data.len()
+    );
 
     hart.regs.pc = entry;
     hart.regs.write(10, 0);

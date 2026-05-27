@@ -1,4 +1,4 @@
-use super::{RamView, VirtioMmio, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE};
+use super::{RamView, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
 
 const DEVICE_ID: u32 = 3;
 const VIRTIO_F_VERSION_1: u64 = 1u64 << 32;
@@ -21,7 +21,7 @@ impl VirtioConsole {
         Self {
             mmio,
             rx_pending: std::collections::VecDeque::new(),
-            tx_buf: Vec::new()
+            tx_buf: Vec::new(),
         }
     }
 
@@ -42,10 +42,7 @@ impl VirtioConsole {
             return;
         }
 
-        loop {
-            let Some(head) = self.mmio.queues[QUEUE_RX].pop_avail(ram) else {
-                break;
-            };
+        while let Some(head) = self.mmio.queues[QUEUE_RX].pop_avail(ram) {
             let mut desc = self.mmio.queues[QUEUE_RX].read_desc(ram, head);
             let mut total = 0u32;
 
@@ -74,10 +71,7 @@ impl VirtioConsole {
     }
 
     fn drain_tx(&mut self, ram: &mut RamView) {
-        loop {
-            let Some(head) = self.mmio.queues[QUEUE_TX].pop_avail(ram) else {
-                break;
-            };
+        while let Some(head) = self.mmio.queues[QUEUE_TX].pop_avail(ram) {
             let mut desc = self.mmio.queues[QUEUE_TX].read_desc(ram, head);
 
             loop {

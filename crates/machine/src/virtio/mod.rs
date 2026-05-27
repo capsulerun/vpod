@@ -155,11 +155,15 @@ impl VirtQueue {
 }
 
 macro_rules! lo {
-    ($field:expr) => { $field as u32 };
+    ($field:expr) => {
+        $field as u32
+    };
 }
 
 macro_rules! hi {
-    ($field:expr) => { ($field >> 32) as u32 };
+    ($field:expr) => {
+        ($field >> 32) as u32
+    };
 }
 
 macro_rules! set_lo {
@@ -262,7 +266,8 @@ impl VirtioMmio {
                 if self.driver_features_sel == 0 {
                     self.driver_features = (self.driver_features & !0xffff_ffff) | val as u64;
                 } else {
-                    self.driver_features = (self.driver_features & 0xffff_ffff) | (val as u64) << 32;
+                    self.driver_features =
+                        (self.driver_features & 0xffff_ffff) | (val as u64) << 32;
                 }
             }
             MMIO_DRIVER_FEATURES_SEL => self.driver_features_sel = val,
@@ -277,12 +282,12 @@ impl VirtioMmio {
                     self.reset();
                 }
             }
-            MMIO_QUEUE_DESC_LOW  => set_lo!(self.queues[sel].desc_addr,  val),
-            MMIO_QUEUE_DESC_HIGH => set_hi!(self.queues[sel].desc_addr,  val),
+            MMIO_QUEUE_DESC_LOW => set_lo!(self.queues[sel].desc_addr, val),
+            MMIO_QUEUE_DESC_HIGH => set_hi!(self.queues[sel].desc_addr, val),
             MMIO_QUEUE_AVAIL_LOW => set_lo!(self.queues[sel].avail_addr, val),
             MMIO_QUEUE_AVAIL_HIGH => set_hi!(self.queues[sel].avail_addr, val),
-            MMIO_QUEUE_USED_LOW  => set_lo!(self.queues[sel].used_addr,  val),
-            MMIO_QUEUE_USED_HIGH => set_hi!(self.queues[sel].used_addr,  val),
+            MMIO_QUEUE_USED_LOW => set_lo!(self.queues[sel].used_addr, val),
+            MMIO_QUEUE_USED_HIGH => set_hi!(self.queues[sel].used_addr, val),
             _ => {}
         }
         None

@@ -55,8 +55,14 @@ impl Uart {
     }
 
     pub fn save(&self, w: &mut impl std::io::Write) -> std::io::Result<()> {
-        w.write_all(&[self.ier.get(), self.lcr.get(), self.mcr.get(), self.scr.get(),
-                      self.dll.get(), self.dlh.get()])?;
+        w.write_all(&[
+            self.ier.get(),
+            self.lcr.get(),
+            self.mcr.get(),
+            self.scr.get(),
+            self.dll.get(),
+            self.dlh.get(),
+        ])?;
 
         let buf = self.rx_buf.take();
         w.write_all(&(buf.len() as u64).to_le_bytes())?;
@@ -121,7 +127,9 @@ impl Uart {
     pub fn read(&self, offset: u8) -> u8 {
         match offset {
             RBR_THR => {
-                if self.dlab() { return self.dll.get(); }
+                if self.dlab() {
+                    return self.dll.get();
+                }
                 let mut buf = self.rx_buf.take();
                 let val = buf.pop_front().unwrap_or(0);
 
@@ -130,7 +138,9 @@ impl Uart {
                 val
             }
             IER => {
-                if self.dlab() { return self.dlh.get(); }
+                if self.dlab() {
+                    return self.dlh.get();
+                }
                 self.ier.get()
             }
             IIR_FCR => self.iir(),
@@ -145,7 +155,10 @@ impl Uart {
     pub fn write(&self, offset: u8, val: u8) {
         match offset {
             RBR_THR => {
-                if self.dlab() { self.dll.set(val); return; }
+                if self.dlab() {
+                    self.dll.set(val);
+                    return;
+                }
                 if self.capture_tx.get() {
                     let mut buf = self.tx_buf.take();
                     buf.push(val);
@@ -158,7 +171,10 @@ impl Uart {
                 self.update_irq();
             }
             IER => {
-                if self.dlab() { self.dlh.set(val); return; }
+                if self.dlab() {
+                    self.dlh.set(val);
+                    return;
+                }
                 self.ier.set(val);
                 self.update_irq();
             }

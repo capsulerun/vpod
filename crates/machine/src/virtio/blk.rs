@@ -1,6 +1,6 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use super::{RamView, VirtioMmio, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE};
+use super::{RamView, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
 
 const DEVICE_ID: u32 = 2;
 const VIRTIO_F_VERSION_1: u64 = 1u64 << 32;
@@ -43,10 +43,7 @@ impl VirtioBlk {
     }
 
     pub fn notify(&mut self, ram: &mut RamView) {
-        loop {
-            let Some(head) = self.mmio.queues[0].pop_avail(ram) else {
-                break;
-            };
+        while let Some(head) = self.mmio.queues[0].pop_avail(ram) {
             let used_len = self.process_request(ram, head);
 
             self.mmio.queues[0].push_used(ram, head, used_len);
@@ -102,7 +99,11 @@ impl VirtioBlk {
         ram.write_u8(status_addr, status);
 
         let data_written: u32 = if req_type == BLK_T_IN {
-            write_bufs.iter().take(write_bufs.len().saturating_sub(1)).map(|(_, l)| l).sum()
+            write_bufs
+                .iter()
+                .take(write_bufs.len().saturating_sub(1))
+                .map(|(_, l)| l)
+                .sum()
         } else {
             0
         };
@@ -134,7 +135,13 @@ impl VirtioBlk {
         BLK_S_OK
     }
 
-    fn read_sectors(&mut self, ram: &mut RamView, dest: u64, len: u32, sector: u64) -> std::io::Result<()> {
+    fn read_sectors(
+        &mut self,
+        ram: &mut RamView,
+        dest: u64,
+        len: u32,
+        sector: u64,
+    ) -> std::io::Result<()> {
         let end_sector = sector + len as u64 / SECTOR_SIZE;
         if end_sector > self.sector_count {
             return Err(std::io::Error::other("sector out of range"));
@@ -146,7 +153,13 @@ impl VirtioBlk {
         Ok(())
     }
 
-    fn write_sectors(&mut self, ram: &mut RamView, src: u64, len: u32, sector: u64) -> std::io::Result<()> {
+    fn write_sectors(
+        &mut self,
+        ram: &mut RamView,
+        src: u64,
+        len: u32,
+        sector: u64,
+    ) -> std::io::Result<()> {
         let end_sector = sector + len as u64 / SECTOR_SIZE;
         if end_sector > self.sector_count {
             return Err(std::io::Error::other("sector out of range"));

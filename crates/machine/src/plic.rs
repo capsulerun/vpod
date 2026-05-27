@@ -31,8 +31,10 @@ impl Plic {
 
     pub fn restore(&mut self, r: &mut impl std::io::Read) -> std::io::Result<()> {
         let mut b = [0u8; 8];
-        r.read_exact(&mut b)?; self.pending = u64::from_le_bytes(b) as u32;
-        r.read_exact(&mut b)?; self.served = u64::from_le_bytes(b) as u32;
+        r.read_exact(&mut b)?;
+        self.pending = u64::from_le_bytes(b) as u32;
+        r.read_exact(&mut b)?;
+        self.served = u64::from_le_bytes(b) as u32;
 
         Ok(())
     }
@@ -70,10 +72,8 @@ impl Plic {
     pub fn write(&mut self, offset: u64, val: u32) {
         match offset {
             o if o == PLIC_HART_BASE => {}
-            o if o == PLIC_HART_BASE + 4 => {
-                if (1..=31).contains(&val) {
-                    self.served &= !(1 << val);
-                }
+            o if o == PLIC_HART_BASE + 4 && (1..=31).contains(&val) => {
+                self.served &= !(1 << val);
             }
             _ => {}
         }

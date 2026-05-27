@@ -64,10 +64,14 @@ impl Clint {
 
     pub fn restore(&mut self, r: &mut impl std::io::Read) -> std::io::Result<()> {
         let mut b = [0u8; 8];
-        r.read_exact(&mut b)?; self.mtimecmp = u64::from_le_bytes(b);
-        r.read_exact(&mut b)?; self.msip = u64::from_le_bytes(b) as u32;
-        r.read_exact(&mut b)?; self.mtime = u64::from_le_bytes(b);
-        r.read_exact(&mut b)?; self.insn_counter = u64::from_le_bytes(b);
+        r.read_exact(&mut b)?;
+        self.mtimecmp = u64::from_le_bytes(b);
+        r.read_exact(&mut b)?;
+        self.msip = u64::from_le_bytes(b) as u32;
+        r.read_exact(&mut b)?;
+        self.mtime = u64::from_le_bytes(b);
+        r.read_exact(&mut b)?;
+        self.insn_counter = u64::from_le_bytes(b);
 
         Ok(())
     }

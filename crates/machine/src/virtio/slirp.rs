@@ -1,44 +1,56 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream, UdpSocket};
-use std::collections::VecDeque;
 use std::time::Duration;
 
 use super::net::NetworkBackend;
 
-const GW_IP:    [u8; 4] = [10, 0, 2, 2];
+const GW_IP: [u8; 4] = [10, 0, 2, 2];
 const GUEST_IP: [u8; 4] = [10, 0, 2, 15];
-const SUBNET:   [u8; 4] = [255, 255, 255, 0];
+const SUBNET: [u8; 4] = [255, 255, 255, 0];
 const BCAST_IP: [u8; 4] = [10, 0, 2, 255];
 
-const HOST_MAC:  [u8; 6] = [0x52, 0x54, 0x00, 0x00, 0x00, 0x01];
+const HOST_MAC: [u8; 6] = [0x52, 0x54, 0x00, 0x00, 0x00, 0x01];
 const BCAST_MAC: [u8; 6] = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
 
 const MSS: usize = 1460;
 
 static IP_ID_COUNTER: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(1);
 
+fn eth_src(f: &[u8]) -> &[u8] {
+    &f[6..12]
+}
+fn eth_type(f: &[u8]) -> u16 {
+    u16::from_be_bytes([f[12], f[13]])
+}
 
-
-fn eth_src(f: &[u8]) -> &[u8] { &f[6..12] }
-fn eth_type(f: &[u8]) -> u16  { u16::from_be_bytes([f[12], f[13]]) }
-
-const ETHERTYPE_IP:  u16 = 0x0800;
+const ETHERTYPE_IP: u16 = 0x0800;
 const ETHERTYPE_ARP: u16 = 0x0806;
 
-fn ip_proto(f: &[u8]) -> u8 { f[14 + 9] }
-fn ip_src(f: &[u8])   -> [u8; 4] { f[14+12..14+16].try_into().unwrap() }
-fn ip_dst(f: &[u8])   -> [u8; 4] { f[14+16..14+20].try_into().unwrap() }
-fn ip_hlen(f: &[u8])  -> usize   { ((f[14] & 0x0f) as usize) * 4 }
+fn ip_proto(f: &[u8]) -> u8 {
+    f[14 + 9]
+}
+fn ip_src(f: &[u8]) -> [u8; 4] {
+    f[14 + 12..14 + 16].try_into().unwrap()
+}
+fn ip_dst(f: &[u8]) -> [u8; 4] {
+    f[14 + 16..14 + 20].try_into().unwrap()
+}
+fn ip_hlen(f: &[u8]) -> usize {
+    ((f[14] & 0x0f) as usize) * 4
+}
 
-fn ip_payload(f: &[u8]) -> &[u8] { &f[14 + ip_hlen(f)..] }
+fn ip_payload(f: &[u8]) -> &[u8] {
+    &f[14 + ip_hlen(f)..]
+}
 
 const IP_PROTO_ICMP: u8 = 1;
-const IP_PROTO_TCP:  u8 = 6;
-const IP_PROTO_UDP:  u8 = 17;
+const IP_PROTO_TCP: u8 = 6;
+const IP_PROTO_UDP: u8 = 17;
 
 fn u16be(buf: &[u8], off: usize) -> u16 {
-    u16::from_be_bytes([buf[off], buf[off+1]])
+    u16::from_be_bytes([buf[off], buf[off + 1]])
 }
 
 const SYN: u8 = 0x02;
@@ -55,53 +67,53 @@ enum TcpState {
 }
 
 struct TcpConn {
-    state:      TcpState,
-    stream:     TcpStream,
-    guest_mac:  [u8; 6],
-    src_ip:     [u8; 4],
-    dst_ip:     [u8; 4],
-    src_port:   u16,
-    dst_port:   u16,
+    state: TcpState,
+    stream: TcpStream,
+    guest_mac: [u8; 6],
+    src_ip: [u8; 4],
+    dst_ip: [u8; 4],
+    src_port: u16,
+    dst_port: u16,
 
-    snd_buf:    VecDeque<u8>,
-    snd_una:    u32,
-    snd_nxt:    u32,
+    snd_buf: VecDeque<u8>,
+    snd_una: u32,
+    snd_nxt: u32,
 
-    write_buf:  VecDeque<u8>,
+    write_buf: VecDeque<u8>,
 
-    rcv_nxt:    u32,
-    rcv_wnd:    u32,
-    wnd_shift:  u8,
+    rcv_nxt: u32,
+    rcv_wnd: u32,
+    wnd_shift: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct TcpKey {
     src_port: u16,
-    dst_ip:   [u8; 4],
+    dst_ip: [u8; 4],
     dst_port: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct UdpKey {
     src_port: u16,
-    dst_ip:   [u8; 4],
+    dst_ip: [u8; 4],
     dst_port: u16,
 }
 
 struct UdpConn {
-    sock:      UdpSocket,
+    sock: UdpSocket,
     guest_mac: [u8; 6],
-    src_ip:    [u8; 4],
+    src_ip: [u8; 4],
     #[allow(dead_code)]
-    src_port:  u16,
+    src_port: u16,
 }
 
 pub struct SlirpBackend {
-    guest_mac:  [u8; 6],
+    guest_mac: [u8; 6],
     rx_pending: VecDeque<Vec<u8>>,
-    tcp_conns:  HashMap<TcpKey, TcpConn>,
-    udp_conns:  HashMap<UdpKey, UdpConn>,
-    dhcp_xid:   u32,
+    tcp_conns: HashMap<TcpKey, TcpConn>,
+    udp_conns: HashMap<UdpKey, UdpConn>,
+    dhcp_xid: u32,
 }
 
 impl SlirpBackend {
@@ -109,9 +121,9 @@ impl SlirpBackend {
         Self {
             guest_mac,
             rx_pending: VecDeque::new(),
-            tcp_conns:  HashMap::new(),
-            udp_conns:  HashMap::new(),
-            dhcp_xid:   0,
+            tcp_conns: HashMap::new(),
+            udp_conns: HashMap::new(),
+            dhcp_xid: 0,
         }
     }
 
@@ -128,13 +140,20 @@ impl SlirpBackend {
                             let (a, b) = conn.write_buf.as_slices();
                             let slice = if !a.is_empty() { a } else { b };
                             match conn.stream.write(slice) {
-                                Ok(n) => { conn.write_buf.drain(..n); }
+                                Ok(n) => {
+                                    conn.write_buf.drain(..n);
+                                }
                                 Err(e) if would_block(&e) => break,
-                                Err(_) => { remove = true; break; }
+                                Err(_) => {
+                                    remove = true;
+                                    break;
+                                }
                             }
                         }
 
-                        if remove { conn.state = TcpState::Closed; }
+                        if remove {
+                            conn.state = TcpState::Closed;
+                        }
 
                         let mut buf = [0u8; MSS];
                         loop {
@@ -142,9 +161,15 @@ impl SlirpBackend {
                                 Ok(0) => {
                                     if conn.snd_buf.is_empty() {
                                         frames.push(make_tcp_frame(
-                                            &conn.guest_mac, &conn.dst_ip, &conn.src_ip,
-                                            conn.dst_port, conn.src_port,
-                                            conn.snd_nxt, conn.rcv_nxt, FIN | ACK, &[],
+                                            &conn.guest_mac,
+                                            &conn.dst_ip,
+                                            &conn.src_ip,
+                                            conn.dst_port,
+                                            conn.src_port,
+                                            conn.snd_nxt,
+                                            conn.rcv_nxt,
+                                            FIN | ACK,
+                                            &[],
                                         ));
                                         conn.snd_nxt = conn.snd_nxt.wrapping_add(1);
                                         conn.state = TcpState::FinWait;
@@ -162,9 +187,15 @@ impl SlirpBackend {
                                 Err(e) if would_block(&e) => break,
                                 Err(_) => {
                                     frames.push(make_tcp_frame(
-                                        &conn.guest_mac, &conn.dst_ip, &conn.src_ip,
-                                        conn.dst_port, conn.src_port,
-                                        conn.snd_nxt, conn.rcv_nxt, RST | ACK, &[],
+                                        &conn.guest_mac,
+                                        &conn.dst_ip,
+                                        &conn.src_ip,
+                                        conn.dst_port,
+                                        conn.src_port,
+                                        conn.snd_nxt,
+                                        conn.rcv_nxt,
+                                        RST | ACK,
+                                        &[],
                                     ));
                                     remove = true;
                                     break;
@@ -178,9 +209,15 @@ impl SlirpBackend {
                         if send_len > 0 {
                             let chunk: Vec<u8> = conn.snd_buf.drain(..send_len).collect();
                             frames.push(make_tcp_frame(
-                                &conn.guest_mac, &conn.dst_ip, &conn.src_ip,
-                                conn.dst_port, conn.src_port,
-                                conn.snd_nxt, conn.rcv_nxt, PSH | ACK, &chunk,
+                                &conn.guest_mac,
+                                &conn.dst_ip,
+                                &conn.src_ip,
+                                conn.dst_port,
+                                conn.src_port,
+                                conn.snd_nxt,
+                                conn.rcv_nxt,
+                                PSH | ACK,
+                                &chunk,
                             ));
                             conn.snd_nxt = conn.snd_nxt.wrapping_add(send_len as u32);
                         }
@@ -194,43 +231,65 @@ impl SlirpBackend {
                         if send_len > 0 {
                             let chunk: Vec<u8> = conn.snd_buf.drain(..send_len).collect();
                             frames.push(make_tcp_frame(
-                                &conn.guest_mac, &conn.dst_ip, &conn.src_ip,
-                                conn.dst_port, conn.src_port,
-                                conn.snd_nxt, conn.rcv_nxt, PSH | ACK, &chunk,
+                                &conn.guest_mac,
+                                &conn.dst_ip,
+                                &conn.src_ip,
+                                conn.dst_port,
+                                conn.src_port,
+                                conn.snd_nxt,
+                                conn.rcv_nxt,
+                                PSH | ACK,
+                                &chunk,
                             ));
                             conn.snd_nxt = conn.snd_nxt.wrapping_add(send_len as u32);
-
                         } else if conn.snd_buf.is_empty() && conn.snd_nxt == conn.snd_una {
                             frames.push(make_tcp_frame(
-                                &conn.guest_mac, &conn.dst_ip, &conn.src_ip,
-                                conn.dst_port, conn.src_port,
-                                conn.snd_nxt, conn.rcv_nxt, FIN | ACK, &[],
+                                &conn.guest_mac,
+                                &conn.dst_ip,
+                                &conn.src_ip,
+                                conn.dst_port,
+                                conn.src_port,
+                                conn.snd_nxt,
+                                conn.rcv_nxt,
+                                FIN | ACK,
+                                &[],
                             ));
                             conn.snd_nxt = conn.snd_nxt.wrapping_add(1);
-
                         } else if conn.snd_una == conn.snd_nxt {
                             remove = true;
                         }
                     }
 
-                    TcpState::Closed => { remove = true; }
+                    TcpState::Closed => {
+                        remove = true;
+                    }
                 }
             }
 
-            for f in frames { self.rx_pending.push_back(f); }
-            if remove { self.tcp_conns.remove(&key); }
+            for f in frames {
+                self.rx_pending.push_back(f);
+            }
+            if remove {
+                self.tcp_conns.remove(&key);
+            }
         }
     }
 
     fn handle_arp(&mut self, frame: &[u8]) {
-        if frame.len() < 14 + 28 { return; }
+        if frame.len() < 14 + 28 {
+            return;
+        }
         let arp = &frame[14..];
-        if u16be(arp, 6) != 1 { return; }
+        if u16be(arp, 6) != 1 {
+            return;
+        }
         let target_ip: [u8; 4] = arp[24..28].try_into().unwrap();
-        if target_ip != GW_IP { return; }
+        if target_ip != GW_IP {
+            return;
+        }
 
         let sender_mac: [u8; 6] = arp[8..14].try_into().unwrap();
-        let sender_ip:  [u8; 4] = arp[14..18].try_into().unwrap();
+        let sender_ip: [u8; 4] = arp[14..18].try_into().unwrap();
 
         let mut reply = vec![0u8; 14 + 28];
         reply[0..6].copy_from_slice(&sender_mac);
@@ -240,7 +299,8 @@ impl SlirpBackend {
         let a = &mut reply[14..];
         a[0..2].copy_from_slice(&1u16.to_be_bytes());
         a[2..4].copy_from_slice(&0x0800u16.to_be_bytes());
-        a[4] = 6; a[5] = 4;
+        a[4] = 6;
+        a[5] = 4;
         a[6..8].copy_from_slice(&2u16.to_be_bytes());
         a[8..14].copy_from_slice(&HOST_MAC);
         a[14..18].copy_from_slice(&GW_IP);
@@ -251,19 +311,25 @@ impl SlirpBackend {
     }
 
     fn handle_ip(&mut self, frame: &[u8]) {
-        if frame.len() < 14 + 20 { return; }
+        if frame.len() < 14 + 20 {
+            return;
+        }
         match ip_proto(frame) {
             IP_PROTO_ICMP => self.handle_icmp(frame),
-            IP_PROTO_TCP  => self.handle_tcp(frame),
-            IP_PROTO_UDP  => self.handle_udp(frame),
+            IP_PROTO_TCP => self.handle_tcp(frame),
+            IP_PROTO_UDP => self.handle_udp(frame),
             _ => {}
         }
     }
 
     fn handle_icmp(&mut self, frame: &[u8]) {
-        if ip_dst(frame) != GW_IP { return; }
+        if ip_dst(frame) != GW_IP {
+            return;
+        }
         let payload = ip_payload(frame);
-        if payload.len() < 8 || payload[0] != 8 { return; }
+        if payload.len() < 8 || payload[0] != 8 {
+            return;
+        }
 
         let src_mac: [u8; 6] = eth_src(frame).try_into().unwrap();
         let src_ip = ip_src(frame);
@@ -275,7 +341,13 @@ impl SlirpBackend {
 
         let csum = checksum(&icmp);
         icmp[2..4].copy_from_slice(&csum.to_be_bytes());
-        self.rx_pending.push_back(make_ip_frame(&src_mac, &GW_IP, &src_ip, IP_PROTO_ICMP, &icmp));
+        self.rx_pending.push_back(make_ip_frame(
+            &src_mac,
+            &GW_IP,
+            &src_ip,
+            IP_PROTO_ICMP,
+            &icmp,
+        ));
     }
 
     fn handle_udp(&mut self, frame: &[u8]) {
@@ -286,10 +358,10 @@ impl SlirpBackend {
 
         let src_port = u16be(payload, 0);
         let dst_port = u16be(payload, 2);
-        let udp_len  = u16be(payload, 4) as usize;
-        let dst_ip   = ip_dst(frame);
-        let src_ip   = ip_src(frame);
-        let data     = &payload[8..udp_len.min(payload.len())];
+        let udp_len = u16be(payload, 4) as usize;
+        let dst_ip = ip_dst(frame);
+        let src_ip = ip_src(frame);
+        let data = &payload[8..udp_len.min(payload.len())];
 
         if dst_port == 67 && src_port == 68 {
             self.handle_dhcp(frame, data);
@@ -299,42 +371,57 @@ impl SlirpBackend {
         if dst_ip == GW_IP && dst_port == 53 {
             let guest_mac: [u8; 6] = eth_src(frame).try_into().unwrap();
             if let Ok(sock) = UdpSocket::bind("0.0.0.0:0") {
-                sock.set_read_timeout(Some(Duration::from_millis(3000))).ok();
+                sock.set_read_timeout(Some(Duration::from_millis(3000)))
+                    .ok();
                 let dst = SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 53);
                 if sock.send_to(data, dst).is_ok() {
                     let mut buf = vec![0u8; 2048];
                     if let Ok((n, _)) = sock.recv_from(&mut buf) {
                         let udp_reply = make_udp_payload(53, src_port, &buf[..n]);
-                        self.rx_pending.push_back(
-                            make_ip_frame(&guest_mac, &GW_IP, &src_ip, IP_PROTO_UDP, &udp_reply)
-                        );
+                        self.rx_pending.push_back(make_ip_frame(
+                            &guest_mac,
+                            &GW_IP,
+                            &src_ip,
+                            IP_PROTO_UDP,
+                            &udp_reply,
+                        ));
                     }
                 }
             }
             return;
         }
 
-        let key = UdpKey { src_port, dst_ip, dst_port };
+        let key = UdpKey {
+            src_port,
+            dst_ip,
+            dst_port,
+        };
         let src_mac: [u8; 6] = eth_src(frame).try_into().unwrap();
         let conn = self.udp_conns.entry(key.clone()).or_insert_with(|| {
             let sock = UdpSocket::bind("0.0.0.0:0").expect("udp bind");
             sock.set_nonblocking(true).ok();
-            UdpConn { sock, guest_mac: src_mac, src_ip, src_port }
+            UdpConn {
+                sock,
+                guest_mac: src_mac,
+                src_ip,
+                src_port,
+            }
         });
 
         let dst = SocketAddrV4::new(Ipv4Addr::from(dst_ip), dst_port);
         let _ = conn.sock.send_to(data, dst);
         let mut buf = vec![0u8; 2048];
 
-        loop {
-            match conn.sock.recv_from(&mut buf) {
-                Ok((n, _)) => {
-                    let udp_reply = make_udp_payload(dst_port, src_port, &buf[..n]);
-                    let pkt = make_ip_frame(&conn.guest_mac, &GW_IP, &conn.src_ip, IP_PROTO_UDP, &udp_reply);
-                    self.rx_pending.push_back(pkt);
-                }
-                Err(_) => break,
-            }
+        while let Ok((n, _)) = conn.sock.recv_from(&mut buf) {
+            let udp_reply = make_udp_payload(dst_port, src_port, &buf[..n]);
+            let pkt = make_ip_frame(
+                &conn.guest_mac,
+                &GW_IP,
+                &conn.src_ip,
+                IP_PROTO_UDP,
+                &udp_reply,
+            );
+            self.rx_pending.push_back(pkt);
         }
     }
 
@@ -366,9 +453,9 @@ impl SlirpBackend {
                 break;
             }
 
-            let len = dhcp[i+1] as usize;
+            let len = dhcp[i + 1] as usize;
             if opt == 53 && len >= 1 {
-                msg_type = dhcp[i+2];
+                msg_type = dhcp[i + 2];
             }
             i += 2 + len;
         }
@@ -391,20 +478,30 @@ impl SlirpBackend {
 
     fn handle_tcp(&mut self, frame: &[u8]) {
         let payload = ip_payload(frame);
-        if payload.len() < 20 { return; }
+        if payload.len() < 20 {
+            return;
+        }
 
-        let src_port  = u16be(payload, 0);
-        let dst_port  = u16be(payload, 2);
+        let src_port = u16be(payload, 0);
+        let dst_port = u16be(payload, 2);
         let seq_guest = u32::from_be_bytes(payload[4..8].try_into().unwrap());
         let ack_guest = u32::from_be_bytes(payload[8..12].try_into().unwrap());
-        let flags     = payload[13];
-        let window    = u16be(payload, 14);
-        let dst_ip    = ip_dst(frame);
-        let src_ip    = ip_src(frame);
-        let tcp_hlen  = ((payload[12] >> 4) as usize) * 4;
-        let data      = if tcp_hlen <= payload.len() { &payload[tcp_hlen..] } else { &[] };
+        let flags = payload[13];
+        let window = u16be(payload, 14);
+        let dst_ip = ip_dst(frame);
+        let src_ip = ip_src(frame);
+        let tcp_hlen = ((payload[12] >> 4) as usize) * 4;
+        let data = if tcp_hlen <= payload.len() {
+            &payload[tcp_hlen..]
+        } else {
+            &[]
+        };
         let src_mac: [u8; 6] = eth_src(frame).try_into().unwrap();
-        let key = TcpKey { src_port, dst_ip, dst_port };
+        let key = TcpKey {
+            src_port,
+            dst_ip,
+            dst_port,
+        };
 
         if flags & RST != 0 {
             self.tcp_conns.remove(&key);
@@ -412,19 +509,29 @@ impl SlirpBackend {
         }
 
         if flags & SYN != 0 && flags & ACK == 0 {
-            if self.tcp_conns.contains_key(&key) { return; }
+            if self.tcp_conns.contains_key(&key) {
+                return;
+            }
 
             let wnd_shift = parse_wnd_scale(payload, tcp_hlen);
 
             let addr = SocketAddrV4::new(Ipv4Addr::from(dst_ip), dst_port);
             let stream = match TcpStream::connect_timeout(
-                &addr.into(), std::time::Duration::from_millis(100)
+                &addr.into(),
+                std::time::Duration::from_millis(100),
             ) {
                 Ok(s) => s,
                 Err(_) => {
                     self.rx_pending.push_back(make_tcp_frame(
-                        &src_mac, &dst_ip, &src_ip, dst_port, src_port,
-                        0, seq_guest.wrapping_add(1), RST | ACK, &[],
+                        &src_mac,
+                        &dst_ip,
+                        &src_ip,
+                        dst_port,
+                        src_port,
+                        0,
+                        seq_guest.wrapping_add(1),
+                        RST | ACK,
+                        &[],
                     ));
                     return;
                 }
@@ -435,26 +542,36 @@ impl SlirpBackend {
             let isn_host: u32 = generate_isn(&src_ip, src_port, &dst_ip, dst_port);
 
             self.rx_pending.push_back(make_tcp_frame(
-                &src_mac, &dst_ip, &src_ip, dst_port, src_port,
-                isn_host, seq_guest.wrapping_add(1), SYN | ACK, &[],
+                &src_mac,
+                &dst_ip,
+                &src_ip,
+                dst_port,
+                src_port,
+                isn_host,
+                seq_guest.wrapping_add(1),
+                SYN | ACK,
+                &[],
             ));
 
-            self.tcp_conns.insert(key, TcpConn {
-                state:     TcpState::Established,
-                stream,
-                guest_mac: src_mac,
-                src_ip,
-                dst_ip,
-                src_port,
-                dst_port,
-                snd_buf:   VecDeque::new(),
-                snd_una:   isn_host,
-                snd_nxt:   isn_host.wrapping_add(1),
-                write_buf: VecDeque::new(),
-                rcv_nxt:   seq_guest.wrapping_add(1),
-                rcv_wnd:   (window as u32) << wnd_shift,
-                wnd_shift,
-            });
+            self.tcp_conns.insert(
+                key,
+                TcpConn {
+                    state: TcpState::Established,
+                    stream,
+                    guest_mac: src_mac,
+                    src_ip,
+                    dst_ip,
+                    src_port,
+                    dst_port,
+                    snd_buf: VecDeque::new(),
+                    snd_una: isn_host,
+                    snd_nxt: isn_host.wrapping_add(1),
+                    write_buf: VecDeque::new(),
+                    rcv_nxt: seq_guest.wrapping_add(1),
+                    rcv_wnd: (window as u32) << wnd_shift,
+                    wnd_shift,
+                },
+            );
             return;
         }
 
@@ -479,25 +596,44 @@ impl SlirpBackend {
                     conn.rcv_nxt = end_seq;
                 }
                 self.rx_pending.push_back(make_tcp_frame(
-                    &conn.guest_mac, &conn.dst_ip, &conn.src_ip,
-                    conn.dst_port, conn.src_port,
-                    conn.snd_nxt, conn.rcv_nxt, ACK, &[],
+                    &conn.guest_mac,
+                    &conn.dst_ip,
+                    &conn.src_ip,
+                    conn.dst_port,
+                    conn.src_port,
+                    conn.snd_nxt,
+                    conn.rcv_nxt,
+                    ACK,
+                    &[],
                 ));
             }
 
             if flags & FIN != 0 {
                 conn.rcv_nxt = conn.rcv_nxt.wrapping_add(1);
                 self.rx_pending.push_back(make_tcp_frame(
-                    &conn.guest_mac, &conn.dst_ip, &conn.src_ip,
-                    conn.dst_port, conn.src_port,
-                    conn.snd_nxt, conn.rcv_nxt, ACK, &[],
+                    &conn.guest_mac,
+                    &conn.dst_ip,
+                    &conn.src_ip,
+                    conn.dst_port,
+                    conn.src_port,
+                    conn.snd_nxt,
+                    conn.rcv_nxt,
+                    ACK,
+                    &[],
                 ));
                 conn.state = TcpState::Closed;
             }
         } else {
             self.rx_pending.push_back(make_tcp_frame(
-                &src_mac, &dst_ip, &src_ip, dst_port, src_port,
-                ack_guest, 0, RST, &[],
+                &src_mac,
+                &dst_ip,
+                &src_ip,
+                dst_port,
+                src_port,
+                ack_guest,
+                0,
+                RST,
+                &[],
             ));
         }
     }
@@ -505,10 +641,12 @@ impl SlirpBackend {
 
 impl NetworkBackend for SlirpBackend {
     fn send(&mut self, frame: &[u8]) {
-        if frame.len() < 14 { return; }
+        if frame.len() < 14 {
+            return;
+        }
         match eth_type(frame) {
             ETHERTYPE_ARP => self.handle_arp(frame),
-            ETHERTYPE_IP  => self.handle_ip(frame),
+            ETHERTYPE_IP => self.handle_ip(frame),
             _ => {}
         }
     }
@@ -525,8 +663,11 @@ impl NetworkBackend for SlirpBackend {
 
         for conn in self.tcp_conns.values() {
             match conn.state {
-                TcpState::Established | TcpState::FinWait =>
-                    if !conn.snd_buf.is_empty() { return true; },
+                TcpState::Established | TcpState::FinWait => {
+                    if !conn.snd_buf.is_empty() {
+                        return true;
+                    }
+                }
                 TcpState::Closed => return true,
             }
         }
@@ -537,8 +678,7 @@ impl NetworkBackend for SlirpBackend {
 // Helpers
 
 fn would_block(e: &std::io::Error) -> bool {
-    e.kind() == std::io::ErrorKind::WouldBlock
-    || e.kind() == std::io::ErrorKind::TimedOut
+    e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut
 }
 
 fn parse_wnd_scale(tcp_hdr: &[u8], tcp_hlen: usize) -> u8 {
@@ -549,9 +689,13 @@ fn parse_wnd_scale(tcp_hdr: &[u8], tcp_hlen: usize) -> u8 {
             1 => i += 1,
             3 if i + 2 < tcp_hdr.len() && tcp_hdr[i + 1] == 3 => return tcp_hdr[i + 2].min(14),
             _ => {
-                if i + 1 >= tcp_hdr.len() { break; }
+                if i + 1 >= tcp_hdr.len() {
+                    break;
+                }
                 let len = tcp_hdr[i + 1] as usize;
-                if len < 2 { break; }
+                if len < 2 {
+                    break;
+                }
                 i += len;
                 continue;
             }
@@ -563,15 +707,23 @@ fn parse_wnd_scale(tcp_hdr: &[u8], tcp_hlen: usize) -> u8 {
 fn generate_isn(src_ip: &[u8; 4], src_port: u16, dst_ip: &[u8; 4], dst_port: u16) -> u32 {
     let mut h: u32 = 0x811c_9dc5;
     for &b in src_ip.iter().chain(dst_ip.iter()) {
-        h ^= b as u32; h = h.wrapping_mul(0x0100_0193);
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
     }
-    h ^= src_port as u32; h = h.wrapping_mul(0x0100_0193);
-    h ^= dst_port as u32; h = h.wrapping_mul(0x0100_0193);
+    h ^= src_port as u32;
+    h = h.wrapping_mul(0x0100_0193);
+    h ^= dst_port as u32;
+    h = h.wrapping_mul(0x0100_0193);
     h
 }
 
-
-fn make_ip_frame(dst_mac: &[u8; 6], src_ip: &[u8; 4], dst_ip: &[u8; 4], proto: u8, payload: &[u8]) -> Vec<u8> {
+fn make_ip_frame(
+    dst_mac: &[u8; 6],
+    src_ip: &[u8; 4],
+    dst_ip: &[u8; 4],
+    proto: u8,
+    payload: &[u8],
+) -> Vec<u8> {
     let total_len = (20 + payload.len()) as u16;
     let ip_id = IP_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -580,7 +732,8 @@ fn make_ip_frame(dst_mac: &[u8; 6], src_ip: &[u8; 4], dst_ip: &[u8; 4], proto: u
     ip[2..4].copy_from_slice(&total_len.to_be_bytes());
     ip[4..6].copy_from_slice(&ip_id.to_be_bytes());
     ip[6..8].copy_from_slice(&0x4000u16.to_be_bytes());
-    ip[8] = 64; ip[9] = proto;
+    ip[8] = 64;
+    ip[9] = proto;
     ip[12..16].copy_from_slice(src_ip);
     ip[16..20].copy_from_slice(dst_ip);
 
@@ -608,22 +761,27 @@ fn make_udp_payload(src_port: u16, dst_port: u16, data: &[u8]) -> Vec<u8> {
     udp
 }
 
+#[allow(clippy::too_many_arguments)]
 fn make_tcp_frame(
-    dst_mac:  &[u8; 6],
-    src_ip:   &[u8; 4],
-    dst_ip:   &[u8; 4],
+    dst_mac: &[u8; 6],
+    src_ip: &[u8; 4],
+    dst_ip: &[u8; 4],
     src_port: u16,
     dst_port: u16,
-    seq:      u32,
-    ack:      u32,
-    flags:    u8,
-    data:     &[u8],
+    seq: u32,
+    ack: u32,
+    flags: u8,
+    data: &[u8],
 ) -> Vec<u8> {
-    let opts: &[u8] = if flags & SYN != 0 { &[0x02, 0x04, 0x05, 0xb4] } else { &[] };
+    let opts: &[u8] = if flags & SYN != 0 {
+        &[0x02, 0x04, 0x05, 0xb4]
+    } else {
+        &[]
+    };
     let tcp_hlen = 20 + opts.len();
-    let tcp_len  = tcp_hlen + data.len();
+    let tcp_len = tcp_hlen + data.len();
 
-    let mut tcp  = vec![0u8; tcp_len];
+    let mut tcp = vec![0u8; tcp_len];
     tcp[0..2].copy_from_slice(&src_port.to_be_bytes());
     tcp[2..4].copy_from_slice(&dst_port.to_be_bytes());
     tcp[4..8].copy_from_slice(&seq.to_be_bytes());
@@ -648,19 +806,39 @@ fn make_tcp_frame(
 
 fn build_dhcp_reply(xid: u32, client_mac: &[u8; 6], msg_type: u8) -> Vec<u8> {
     let mut p = vec![0u8; 300];
-    p[0] = 2; p[1] = 1; p[2] = 6;
+    p[0] = 2;
+    p[1] = 1;
+    p[2] = 6;
     p[4..8].copy_from_slice(&xid.to_be_bytes());
     p[16..20].copy_from_slice(&GUEST_IP);
     p[20..24].copy_from_slice(&GW_IP);
     p[28..34].copy_from_slice(client_mac);
     p[236..240].copy_from_slice(&0x63825363u32.to_be_bytes());
     let mut i = 240usize;
-    p[i] = 53; p[i+1] = 1; p[i+2] = msg_type; i += 3;
-    p[i] = 54; p[i+1] = 4; p[i+2..i+6].copy_from_slice(&GW_IP); i += 6;
-    p[i] = 51; p[i+1] = 4; p[i+2..i+6].copy_from_slice(&86400u32.to_be_bytes()); i += 6;
-    p[i] = 1;  p[i+1] = 4; p[i+2..i+6].copy_from_slice(&SUBNET); i += 6;
-    p[i] = 3;  p[i+1] = 4; p[i+2..i+6].copy_from_slice(&GW_IP); i += 6;
-    p[i] = 6;  p[i+1] = 4; p[i+2..i+6].copy_from_slice(&GW_IP); i += 6;
+    p[i] = 53;
+    p[i + 1] = 1;
+    p[i + 2] = msg_type;
+    i += 3;
+    p[i] = 54;
+    p[i + 1] = 4;
+    p[i + 2..i + 6].copy_from_slice(&GW_IP);
+    i += 6;
+    p[i] = 51;
+    p[i + 1] = 4;
+    p[i + 2..i + 6].copy_from_slice(&86400u32.to_be_bytes());
+    i += 6;
+    p[i] = 1;
+    p[i + 1] = 4;
+    p[i + 2..i + 6].copy_from_slice(&SUBNET);
+    i += 6;
+    p[i] = 3;
+    p[i + 1] = 4;
+    p[i + 2..i + 6].copy_from_slice(&GW_IP);
+    i += 6;
+    p[i] = 6;
+    p[i + 1] = 4;
+    p[i + 2..i + 6].copy_from_slice(&GW_IP);
+    i += 6;
     p[i] = 255;
     p
 }
@@ -669,7 +847,7 @@ fn checksum(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     let mut i = 0;
     while i + 1 < data.len() {
-        sum += u16::from_be_bytes([data[i], data[i+1]]) as u32;
+        sum += u16::from_be_bytes([data[i], data[i + 1]]) as u32;
         i += 2;
     }
 

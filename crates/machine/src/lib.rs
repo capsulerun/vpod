@@ -1,10 +1,10 @@
 pub mod clint;
 pub mod dtb;
+pub mod machine_bus;
 pub mod plic;
 pub mod snapshot;
 pub mod uart;
 pub mod virtio;
-pub mod machine_bus;
 
 pub const RAM_BASE: u64 = 0x8000_0000;
 pub const UART_BASE: u64 = 0x1000_0000;

@@ -171,7 +171,8 @@ impl DtbBuilder {
         let mut i = 0;
         while i < self.strings.len() {
             let end = i + needle.len();
-            if end < self.strings.len() && &self.strings[i..end] == needle && self.strings[end] == 0 {
+            if end < self.strings.len() && &self.strings[i..end] == needle && self.strings[end] == 0
+            {
                 return i as u32;
             }
 
@@ -246,9 +247,10 @@ pub fn build(
     b.prop_str("status", "okay");
     b.prop_str("compatible", "riscv");
     b.prop_str("riscv,isa", "rv64imafdcsu_zicsr_zifencei");
-    b.prop_strlist("riscv,isa-extensions", &[
-        "i", "m", "a", "f", "d", "c", "s", "u", "zicsr", "zifencei",
-    ]);
+    b.prop_strlist(
+        "riscv,isa-extensions",
+        &["i", "m", "a", "f", "d", "c", "s", "u", "zicsr", "zifencei"],
+    );
     b.prop_str("mmu-type", "riscv,sv39");
     b.prop_phandle(1);
 
@@ -299,8 +301,12 @@ pub fn build(
 
     let virtio_names = ["virtio-blk", "virtio-console", "virtio-net"];
     for (i, (&irq, name)) in virtio_irqs.iter().zip(virtio_names.iter()).enumerate() {
-        if i == 0 && !has_blk { continue; }
-        if i == 2 && !has_net { continue; }
+        if i == 0 && !has_blk {
+            continue;
+        }
+        if i == 2 && !has_net {
+            continue;
+        }
         let base = virtio_base + i as u64 * virtio_size;
         b.begin_node(&format!("virtio_mmio@{:x}", base));
         b.prop_str("compatible", "virtio,mmio");

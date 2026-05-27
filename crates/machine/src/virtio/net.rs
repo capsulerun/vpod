@@ -1,5 +1,5 @@
+use super::{RamView, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
 use std::collections::VecDeque;
-use super::{RamView, VirtioMmio, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE};
 
 const DEVICE_ID: u32 = 1;
 const VIRTIO_F_VERSION_1: u64 = 1u64 << 32;
@@ -17,9 +17,9 @@ pub trait NetworkBackend {
 }
 
 pub struct VirtioNet<B: NetworkBackend> {
-    pub mmio:     VirtioMmio,
-    backend:      B,
-    rx_hold:      VecDeque<Vec<u8>>,
+    pub mmio: VirtioMmio,
+    backend: B,
+    rx_hold: VecDeque<Vec<u8>>,
 }
 
 impl<B: NetworkBackend> VirtioNet<B> {
@@ -29,7 +29,11 @@ impl<B: NetworkBackend> VirtioNet<B> {
         mmio.config[0..6].copy_from_slice(&mac);
         mmio.config[6..8].copy_from_slice(&1u16.to_le_bytes());
 
-        Self { mmio, backend, rx_hold: VecDeque::new() }
+        Self {
+            mmio,
+            backend,
+            rx_hold: VecDeque::new(),
+        }
     }
 
     pub fn rx_pending(&self) -> bool {
@@ -83,7 +87,10 @@ impl<B: NetworkBackend> VirtioNet<B> {
                     let frame_off = written - VNET_HDR_LEN;
                     let n = (cap - buf_off).min(frame.len().saturating_sub(frame_off));
                     if n > 0 {
-                        ram.write_bytes(desc.addr + buf_off as u64, &frame[frame_off..frame_off + n]);
+                        ram.write_bytes(
+                            desc.addr + buf_off as u64,
+                            &frame[frame_off..frame_off + n],
+                        );
                         written += n;
                     }
                 }
@@ -102,10 +109,7 @@ impl<B: NetworkBackend> VirtioNet<B> {
     }
 
     fn drain_tx(&mut self, ram: &mut RamView) {
-        loop {
-            let Some(head) = self.mmio.queues[QUEUE_TX].pop_avail(ram) else {
-                break;
-            };
+        while let Some(head) = self.mmio.queues[QUEUE_TX].pop_avail(ram) {
             let mut frame: Vec<u8> = Vec::new();
             let mut desc = self.mmio.queues[QUEUE_TX].read_desc(ram, head);
             let mut hdr_skipped = 0usize;
