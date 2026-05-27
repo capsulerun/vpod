@@ -2,15 +2,15 @@ mod run_interactive;
 mod run_setup;
 mod terminal;
 
-use std::path::PathBuf;
 use std::fs::File;
+use std::path::PathBuf;
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
 use machine::machine_bus::{MachineBus, boot, boot_with_bios};
-use riscv_core::Hart;
 use machine::snapshot;
+use riscv_core::Hart;
 
 fn usage() -> ! {
     eprintln!(
@@ -63,7 +63,10 @@ fn main() {
     if first.starts_with("--") {
         match first.as_str() {
             "--snapshot-load" => snap_load = Some(args.next().unwrap_or_else(|| usage()).into()),
-            _ => { eprintln!("unknown argument: {first}"); usage(); }
+            _ => {
+                eprintln!("unknown argument: {first}");
+                usage();
+            }
         }
     } else {
         kernel_path = Some(first.into());
@@ -71,14 +74,14 @@ fn main() {
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--bios"          => bios_path = Some(args.next().unwrap_or_else(|| usage()).into()),
-            "--initrd"        => initrd_path = Some(args.next().unwrap_or_else(|| usage()).into()),
-            "--disk"          => disk_path = Some(args.next().unwrap_or_else(|| usage()).into()),
-            "--net"           => enable_net  = true,
+            "--bios" => bios_path = Some(args.next().unwrap_or_else(|| usage()).into()),
+            "--initrd" => initrd_path = Some(args.next().unwrap_or_else(|| usage()).into()),
+            "--disk" => disk_path = Some(args.next().unwrap_or_else(|| usage()).into()),
+            "--net" => enable_net = true,
             "--setup" => {
                 setup_cmds.push(args.next().unwrap_or_else(|| usage()));
             }
-            "--bootargs"      => bootargs = args.next().unwrap_or_else(|| usage()),
+            "--bootargs" => bootargs = args.next().unwrap_or_else(|| usage()),
             "--snapshot-save" => snap_save = Some(args.next().unwrap_or_else(|| usage()).into()),
             "--snapshot-load" => snap_load = Some(args.next().unwrap_or_else(|| usage()).into()),
             "--ram" => {
@@ -88,12 +91,12 @@ fn main() {
                     .unwrap_or_else(|| usage());
             }
             "--trace" => {
-                trace_insns = args
-                    .next()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(64);
+                trace_insns = args.next().and_then(|s| s.parse().ok()).unwrap_or(64);
             }
-            _ => { eprintln!("unknown argument: {arg}"); usage(); }
+            _ => {
+                eprintln!("unknown argument: {arg}");
+                usage();
+            }
         }
     }
 
@@ -126,28 +129,47 @@ fn main() {
             eprintln!("failed to open snapshot {:?}: {e}", snap);
             std::process::exit(1);
         });
-        snapshot::restore(&mut bus, &mut hart, &mut flate2::bufread::GzDecoder::new(BufReader::new(f)))
-            .unwrap_or_else(|e| {
-                eprintln!("failed to restore snapshot: {e}");
-                std::process::exit(1);
-            });
-        eprintln!("[capsule] restored from snapshot {:?} | disk {:?}", snap, disk_path);
+        snapshot::restore(
+            &mut bus,
+            &mut hart,
+            &mut flate2::bufread::GzDecoder::new(BufReader::new(f)),
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("failed to restore snapshot: {e}");
+            std::process::exit(1);
+        });
+        eprintln!(
+            "[capsule] restored from snapshot {:?} | disk {:?}",
+            snap, disk_path
+        );
     } else {
         let kpath = kernel_path.as_ref().unwrap_or_else(|| {
             eprintln!("kernel path required (or use --snapshot-load)");
             usage();
         });
         let kernel = read_file(kpath);
-        let bios   = bios_path.as_ref().map(read_file);
+        let bios = bios_path.as_ref().map(read_file);
         let initrd = initrd_path.as_ref().map(read_file);
 
         if bios.is_some() {
-            boot_with_bios(&mut bus, &mut hart, bios.as_deref(), &kernel, initrd.as_deref(), &bootargs);
-            eprintln!("[capsule] booting {:?} | bios {:?} | initrd {:?} | RAM {}MB | disk {:?}",
-                kpath, bios_path, initrd_path, ram_mb, disk_path);
+            boot_with_bios(
+                &mut bus,
+                &mut hart,
+                bios.as_deref(),
+                &kernel,
+                initrd.as_deref(),
+                &bootargs,
+            );
+            eprintln!(
+                "[capsule] booting {:?} | bios {:?} | initrd {:?} | RAM {}MB | disk {:?}",
+                kpath, bios_path, initrd_path, ram_mb, disk_path
+            );
         } else {
             boot(&mut bus, &mut hart, &kernel, &bootargs);
-            eprintln!("[capsule] booting {:?} | RAM {}MB | disk {:?}", kpath, ram_mb, disk_path);
+            eprintln!(
+                "[capsule] booting {:?} | RAM {}MB | disk {:?}",
+                kpath, ram_mb, disk_path
+            );
         }
     }
 

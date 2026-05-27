@@ -1,10 +1,9 @@
 use std::io::Read;
-use std::path::PathBuf;
 use std::os::unix::io::AsRawFd;
+use std::path::PathBuf;
 
 use machine::machine_bus::MachineBus;
 use riscv_core::Hart;
-
 
 pub struct RawTerminal {
     saved: libc::termios,
@@ -15,7 +14,6 @@ impl RawTerminal {
         if unsafe { libc::isatty(libc::STDIN_FILENO) } == 0 {
             return None;
         }
-
 
         // see if better option
         unsafe {
@@ -43,7 +41,6 @@ impl Drop for RawTerminal {
 }
 
 pub fn set_nonblocking() {
-
     let fd = std::io::stdin().as_raw_fd();
     unsafe {
         let flags = libc::fcntl(fd, libc::F_GETFL, 0);
@@ -55,7 +52,6 @@ pub fn poll_stdin(bus: &mut MachineBus, snap_path: Option<&PathBuf>, hart: &Hart
     let mut buf = [0u8; 64];
     match std::io::stdin().read(&mut buf) {
         Ok(n) if n > 0 => {
-
             for &b in &buf[..n] {
                 match b {
                     0x1d | 0x03 => {

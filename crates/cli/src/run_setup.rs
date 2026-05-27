@@ -14,7 +14,11 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, cmds: &[String], snap_save: Op
     const POLL_INTERVAL: u64 = 32768;
 
     loop {
-        let interval = if bus.net_rx_pending() { 4096 } else { POLL_INTERVAL };
+        let interval = if bus.net_rx_pending() {
+            4096
+        } else {
+            POLL_INTERVAL
+        };
         bus.clint.advance(interval);
         bus.poll(hart);
         match hart.run(bus, interval) {
@@ -33,8 +37,10 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, cmds: &[String], snap_save: Op
         }
 
         let tail = &output[output.len().saturating_sub(128)..];
-        let has_prompt = tail.contains("\n~ # ") || tail.contains("\n/ # ")
-            || tail.starts_with("~ # ") || tail.starts_with("/ # ");
+        let has_prompt = tail.contains("\n~ # ")
+            || tail.contains("\n/ # ")
+            || tail.starts_with("~ # ")
+            || tail.starts_with("/ # ");
 
         if has_prompt {
             if !sent {
@@ -49,7 +55,9 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, cmds: &[String], snap_save: Op
                 if cmd_idx < cmds.len() {
                     let cmd = &cmds[cmd_idx];
                     eprintln!("\n[capsule-setup] running: {}", cmd);
-                    for b in cmd.bytes() { bus.uart.push_rx(b); }
+                    for b in cmd.bytes() {
+                        bus.uart.push_rx(b);
+                    }
                     bus.uart.push_rx(b'\n');
                     sent = true;
                     output.clear();
@@ -64,7 +72,9 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, cmds: &[String], snap_save: Op
                     let cmd = &cmds[cmd_idx];
                     eprintln!("\n[capsule-setup] running: {}", cmd);
                     bus.uart.drain_rx();
-                    for b in cmd.bytes() { bus.uart.push_rx(b); }
+                    for b in cmd.bytes() {
+                        bus.uart.push_rx(b);
+                    }
                     bus.uart.push_rx(b'\n');
                 } else {
                     break;
