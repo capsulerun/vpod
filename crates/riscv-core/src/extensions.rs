@@ -155,7 +155,7 @@ pub fn div(lhs: u64, rhs: u64) -> u64 {
 
 #[inline(always)]
 pub fn divu(lhs: u64, rhs: u64) -> u64 {
-    if rhs == 0 { u64::MAX } else { lhs / rhs }
+    lhs.checked_div(rhs).unwrap_or(u64::MAX)
 }
 
 #[inline(always)]
