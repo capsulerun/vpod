@@ -3,7 +3,8 @@ use std::io::{self, Read, Write};
 use riscv_core::csr::PrivMode;
 use riscv_core::Hart;
 
-use crate::{MachineBus, LOW_RAM_SIZE};
+use crate::machine_bus::MachineBus;
+use crate::LOW_RAM_SIZE;
 
 const MAGIC: &[u8; 4] = b"TEMU";
 const VERSION: u8 = 2;
