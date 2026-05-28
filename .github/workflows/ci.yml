@@ -43,7 +43,7 @@ jobs:
         run: cargo test --all --verbose
 
   build-snapshot:
-    name: Build Snapshot
+    name: Build Default Snapshot
     runs-on: ubuntu-latest
 
     steps:
@@ -56,7 +56,7 @@ jobs:
       - name: Install bsdtar
         run: sudo apt-get update && sudo apt-get install -y libarchive-tools
 
-      - name: Build Snapshot
+      - name: Build Default Snapshot
         run: ./scripts/build-default-snapshot.sh
 
 
