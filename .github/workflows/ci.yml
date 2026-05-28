@@ -41,3 +41,22 @@ jobs:
 
       - name: Run cargo test
         run: cargo test --all --verbose
+
+  build-snapshot:
+    name: Build Default Snapshot
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install bsdtar
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
+
+      - name: Build Default Snapshot
+        run: ./scripts/build-default-snapshot.sh
+
+
