@@ -109,7 +109,7 @@ impl MachineBus {
     }
 
     pub fn net_rx_pending(&self) -> bool {
-        self.net.as_ref().map_or(false, |n| n.rx_pending())
+        self.net.as_ref().is_some_and(|n| n.rx_pending())
     }
 
     pub fn drain_console_tx(&mut self) -> Vec<u8> {
@@ -365,7 +365,7 @@ pub fn boot_with_bios(
     let _kernel_end = kernel_load_offset + ((kernel.len() as u64 + 0xfff) & !0xfff);
 
     let (initrd_start, initrd_end) = if let Some(rd) = initrd {
-        let after_kernel = (_kernel_end + 0xFF_ffff) & !0xf_ffff;
+        let after_kernel = (_kernel_end + 0xff_ffff) & !0xf_ffff;
         let start_offset = if bios.is_some() {
             after_kernel.max(0x4000000) // to be past DTB at 0x2200000
         } else {

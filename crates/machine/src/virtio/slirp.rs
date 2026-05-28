@@ -263,6 +263,7 @@ impl SlirpBackend {
             if can_send == 0 || conn.snd_buf.is_empty() {
                 break;
             }
+
             let send_len = can_send.min(conn.snd_buf.len()).min(MSS);
             let chunk: Vec<u8> = conn.snd_buf.drain(..send_len).collect();
 
@@ -285,22 +286,36 @@ impl SlirpBackend {
         let mut ready = Vec::new();
         for (i, req) in self.dns_pending.iter().enumerate() {
             let mut buf = [0u8; 2048];
-            match req.sock.recv_from(&mut buf) {
-                Ok((n, _)) => {
-                    let udp_reply = make_udp_payload(53, req.src_port, &buf[..n]);
-                    self.rx_pending.push_back(make_ip_frame(
-                        &req.guest_mac,
-                        &GW_IP,
-                        &req.src_ip,
-                        IP_PROTO_UDP,
-                        &udp_reply,
-                    ));
 
-                    ready.push(i);
-                }
-                Err(_) => {}
+            if let Ok((n, _)) = req.sock.recv_from(&mut buf) {
+                let udp_reply = make_udp_payload(53, req.src_port, &buf[..n]);
+                self.rx_pending.push_back(make_ip_frame(
+                    &req.guest_mac,
+                    &GW_IP,
+                    &req.src_ip,
+                    IP_PROTO_UDP,
+                    &udp_reply,
+                ));
+                ready.push(i);
             }
+
+            // match req.sock.recv_from(&mut buf) {
+            //     Ok((n, _)) => {
+            //         let udp_reply = make_udp_payload(53, req.src_port, &buf[..n]);
+            //         self.rx_pending.push_back(make_ip_frame(
+            //             &req.guest_mac,
+            //             &GW_IP,
+            //             &req.src_ip,
+            //             IP_PROTO_UDP,
+            //             &udp_reply,
+            //         ));
+
+            //         ready.push(i);
+            //     }
+            //     Err(_) => {}
+            // }
         }
+
         for i in ready.into_iter().rev() {
             self.dns_pending.swap_remove(i);
         }
@@ -310,6 +325,7 @@ impl SlirpBackend {
         if frame.len() < 14 + 28 {
             return;
         }
+
         let arp = &frame[14..];
         if u16be(arp, 6) != 1 {
             return;
@@ -437,21 +453,17 @@ impl SlirpBackend {
         let dst = SocketAddrV4::new(Ipv4Addr::from(dst_ip), dst_port);
         let _ = conn.sock.send_to(data, dst);
         let mut buf = vec![0u8; 2048];
-        loop {
-            match conn.sock.recv_from(&mut buf) {
-                Ok((n, _)) => {
-                    let udp_reply = make_udp_payload(dst_port, src_port, &buf[..n]);
-                    let pkt = make_ip_frame(
-                        &conn.guest_mac,
-                        &GW_IP,
-                        &conn.src_ip,
-                        IP_PROTO_UDP,
-                        &udp_reply,
-                    );
-                    self.rx_pending.push_back(pkt);
-                }
-                Err(_) => break,
-            }
+
+        while let Ok((n, _)) = conn.sock.recv_from(&mut buf) {
+            let udp_reply = make_udp_payload(dst_port, src_port, &buf[..n]);
+            let pkt = make_ip_frame(
+                &conn.guest_mac,
+                &GW_IP,
+                &conn.src_ip,
+                IP_PROTO_UDP,
+                &udp_reply,
+            );
+            self.rx_pending.push_back(pkt);
         }
     }
 
@@ -709,8 +721,6 @@ impl NetworkBackend for SlirpBackend {
     }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
 fn would_block(e: &std::io::Error) -> bool {
     e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut
 }
@@ -725,16 +735,19 @@ fn parse_wnd_scale(tcp_hdr: &[u8], tcp_hlen: usize) -> u8 {
                 if i + 2 < tcp_hdr.len() && tcp_hdr[i + 1] == 3 {
                     return tcp_hdr[i + 2].min(14);
                 }
+
                 break;
             }
             _ => {
                 if i + 1 >= tcp_hdr.len() {
                     break;
                 }
+
                 let len = tcp_hdr[i + 1] as usize;
                 if len < 2 {
                     break;
                 }
+
                 i += len;
                 continue;
             }
@@ -745,10 +758,12 @@ fn parse_wnd_scale(tcp_hdr: &[u8], tcp_hlen: usize) -> u8 {
 
 fn generate_isn(src_ip: &[u8; 4], src_port: u16, dst_ip: &[u8; 4], dst_port: u16) -> u32 {
     let mut h: u32 = 0x811c_9dc5;
+
     for &b in src_ip.iter().chain(dst_ip.iter()) {
         h ^= b as u32;
         h = h.wrapping_mul(0x0100_0193);
     }
+
     h ^= src_port as u32;
     h = h.wrapping_mul(0x0100_0193);
     h ^= dst_port as u32;
@@ -756,7 +771,6 @@ fn generate_isn(src_ip: &[u8; 4], src_port: u16, dst_ip: &[u8; 4], dst_port: u16
     h
 }
 
-// ── Frame builders ────────────────────────────────────────────────────────────
 
 static IP_ID_COUNTER: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(1);
 
@@ -794,6 +808,7 @@ fn make_ip_frame(
 
 fn make_udp_payload(src_port: u16, dst_port: u16, data: &[u8]) -> Vec<u8> {
     let len = (8 + data.len()) as u16;
+
     let mut udp = vec![0u8; 8 + data.len()];
     udp[0..2].copy_from_slice(&src_port.to_be_bytes());
     udp[2..4].copy_from_slice(&dst_port.to_be_bytes());
@@ -802,6 +817,8 @@ fn make_udp_payload(src_port: u16, dst_port: u16, data: &[u8]) -> Vec<u8> {
     udp
 }
 
+// to refacto the function to avoid to many argument
+#[allow(clippy::too_many_arguments)]
 fn make_tcp_frame(
     dst_mac: &[u8; 6],
     src_ip: &[u8; 4],
@@ -860,26 +877,32 @@ fn build_dhcp_reply(xid: u32, client_mac: &[u8; 6], msg_type: u8) -> Vec<u8> {
     p[i] = 53;
     p[i + 1] = 1;
     p[i + 2] = msg_type;
+
     i += 3;
     p[i] = 54;
     p[i + 1] = 4;
     p[i + 2..i + 6].copy_from_slice(&GW_IP);
+
     i += 6;
     p[i] = 51;
     p[i + 1] = 4;
     p[i + 2..i + 6].copy_from_slice(&86400u32.to_be_bytes());
+
     i += 6;
     p[i] = 1;
     p[i + 1] = 4;
     p[i + 2..i + 6].copy_from_slice(&SUBNET);
+
     i += 6;
     p[i] = 3;
     p[i + 1] = 4;
     p[i + 2..i + 6].copy_from_slice(&GW_IP);
+
     i += 6;
     p[i] = 6;
     p[i + 1] = 4;
     p[i + 2..i + 6].copy_from_slice(&GW_IP);
+
     i += 6;
     p[i] = 255;
     p
@@ -888,10 +911,12 @@ fn build_dhcp_reply(xid: u32, client_mac: &[u8; 6], msg_type: u8) -> Vec<u8> {
 fn checksum(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     let mut i = 0;
+
     while i + 1 < data.len() {
         sum += u16::from_be_bytes([data[i], data[i + 1]]) as u32;
         i += 2;
     }
+
     if i < data.len() {
         sum += (data[i] as u32) << 8;
     }
@@ -899,5 +924,6 @@ fn checksum(data: &[u8]) -> u16 {
     while sum >> 16 != 0 {
         sum = (sum & 0xffff) + (sum >> 16);
     }
+
     !(sum as u16)
 }
