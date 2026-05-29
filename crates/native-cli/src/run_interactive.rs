@@ -1,3 +1,6 @@
+// Recommend to directly use the wasm component instead.
+// This is mostly made for debug purposes.
+
 use std::path::PathBuf;
 
 use machine::machine_bus::MachineBus;

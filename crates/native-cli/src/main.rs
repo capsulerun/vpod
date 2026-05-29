@@ -14,7 +14,7 @@ use riscv_core::Hart;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: capsule <kernel> [--bios <fw>] [--initrd <rd>] [--disk <img>] [--net] [--agent] \
+        "usage: capsulev <kernel> [--bios <fw>] [--initrd <rd>] [--disk <img>] [--net] [--agent] \
          [--setup <cmds...>] [--ram <mb>] [--bootargs <args>] \
          [--snapshot-save <file>] [--snapshot-load <file>]"
     );
@@ -53,7 +53,7 @@ fn main() {
     let mut setup_cmds: Vec<String> = Vec::new();
     let mut snap_save: Option<PathBuf> = None;
     let mut snap_load: Option<PathBuf> = None;
-    let mut ram_mb: u64 = 512;
+    let mut ram_mb: u64 = 256;
     let mut bootargs = "root=/dev/ram0 rw console=ttyS0 earlycon".to_string();
     let mut trace_insns: u64 = 0;
 
