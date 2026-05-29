@@ -74,7 +74,6 @@ fn poll_stdin(bus: &mut MachineBus, stdin: &InputStream, esc_state: &mut u8) {
 }
 
 fn flush_console_filtered(bus: &mut MachineBus, esc_state: &mut u8) {
-    use std::io::Write;
     let bytes = bus.uart.drain_tx();
     if bytes.is_empty() {
         return;
