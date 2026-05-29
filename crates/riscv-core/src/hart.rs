@@ -1,5 +1,9 @@
 use crate::csr::{Csr, PrivMode};
-use crate::execute::{self, ExecContext, ICACHE_SIZE};
+use crate::execute::{self, ExecContext};
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::execute::ICACHE_SIZE;
+
 use crate::gpr::Gpr;
 use crate::mmu::Mmu;
 use crate::system_bus::SystemBus;

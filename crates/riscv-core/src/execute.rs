@@ -8,7 +8,10 @@ use crate::mmu::{Mmu, MmuFault};
 use crate::system_bus::SystemBus;
 use crate::trap::{StepResult, TrapCause};
 
+#[cfg(not(target_arch = "wasm32"))]
 pub const ICACHE_SIZE: usize = 4096;
+
+#[cfg(not(target_arch = "wasm32"))]
 const ICACHE_TAG_SHIFT: u32 = 1 + ICACHE_SIZE.trailing_zeros();
 
 const OP_LUI: u32 = 0x37;
