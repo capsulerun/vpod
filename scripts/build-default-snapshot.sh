@@ -12,7 +12,7 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 ALPINE_VERSION="3.23.0"
 OUT="$ROOT/dist/rootfs.cpio.gz"
-RAM_MB=512
+RAM_MB=256
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -36,7 +36,7 @@ OPENSBI_FW="$ROOT/dist/fw_jump.bin"
 OPENSBI_URL="https://github.com/riscv-software-src/opensbi/releases/download/v${OPENSBI_VERSION}/opensbi-${OPENSBI_VERSION}-rv-bin.tar.xz"
 OPENSBI_TAR="$ROOT/dist/opensbi-${OPENSBI_VERSION}-rv-bin.tar.xz"
 OVERLAY="$ROOT/dist/agent-overlay"
-CAPSULEV="$ROOT/target/release/capsulev"
+CAPSULEV="$ROOT/target/release/capsulev-native"
 
 echo "=== Capsulev snapshot builder ==="
 echo "Alpine : ${ALPINE_VERSION}"
@@ -63,7 +63,7 @@ mkdir -p "$ROOT/dist" "$ALPINE_DIR"
 
 if [ ! -f "$CAPSULEV" ]; then
     echo "── Building capsulev..."
-    (cd "$ROOT" && cargo build --release --bin capsulev)
+    (cd "$ROOT" && cargo build --release --bin capsulev-native)
 else
     echo "── capsulev already built, skipping."
 fi
