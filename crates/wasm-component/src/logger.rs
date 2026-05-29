@@ -1,7 +1,6 @@
 pub struct WasiLogger;
 
 impl log::Log for WasiLogger {
-
     fn enabled(&self, metadata: &log::Metadata) -> bool {
         metadata.level() <= log::LevelFilter::Warn
     }

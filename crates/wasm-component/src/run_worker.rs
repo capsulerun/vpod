@@ -1,7 +1,7 @@
 use machine::machine_bus::MachineBus;
 use riscv_core::{Hart, StepResult};
-use wasi::io::streams::StreamError;
 use wasi::cli::stdin;
+use wasi::io::streams::StreamError;
 
 pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
     let stdin = stdin::get_stdin();
@@ -33,7 +33,10 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
         match hart.run(bus, POLL_INTERVAL) {
             StepResult::Ok => {}
             StepResult::Trap(cause) => {
-                eprintln!("[capsulev-wasi-worker] trap {:?} at pc={:#x}", cause, hart.regs.pc);
+                eprintln!(
+                    "[capsulev-wasi-worker] trap {:?} at pc={:#x}",
+                    cause, hart.regs.pc
+                );
                 std::process::exit(1);
             }
             StepResult::Halt => break,

@@ -1,13 +1,13 @@
 mod logger;
-mod run_worker;
 mod run_interactive;
+mod run_worker;
 
 use machine::machine_bus::MachineBus;
 use machine::snapshot;
 
 use riscv_core::Hart;
-use std::path::PathBuf;
 use std::io::BufReader;
+use std::path::PathBuf;
 
 use flate2::read::GzDecoder;
 
@@ -29,9 +29,12 @@ fn main() {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--snapshot-load" => snap_load = Some(args.next().unwrap_or_else(|| usage()).into()),
-            "--disk"          => disk_path = Some(args.next().unwrap_or_else(|| usage()).into()),
-            "--agent"         => agent_mode = true,
-            _ => { eprintln!("unknown argument: {arg}"); usage(); }
+            "--disk" => disk_path = Some(args.next().unwrap_or_else(|| usage()).into()),
+            "--agent" => agent_mode = true,
+            _ => {
+                eprintln!("unknown argument: {arg}");
+                usage();
+            }
         }
     }
 
