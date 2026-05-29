@@ -1,5 +1,8 @@
 use crate::csr::{Csr, PrivMode};
-use crate::execute::{self, ExecContext, ICACHE_SIZE};
+use crate::execute::{self, ExecContext};
+
+use crate::execute::ICACHE_SIZE;
+
 use crate::gpr::Gpr;
 use crate::mmu::Mmu;
 use crate::system_bus::SystemBus;
@@ -19,10 +22,7 @@ pub struct Hart {
     pub fetch_ppage: u64,
     pub fetch_satp: u64,
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub icache_tags: Box<[u64; ICACHE_SIZE]>,
-
-    #[cfg(not(target_arch = "wasm32"))]
     pub icache_data: Box<[u32; ICACHE_SIZE]>,
 }
 
@@ -39,16 +39,12 @@ impl Hart {
             fetch_ppage: 0,
             fetch_satp: u64::MAX,
 
-            #[cfg(not(target_arch = "wasm32"))]
             icache_tags: Box::new([u64::MAX; ICACHE_SIZE]),
-
-            #[cfg(not(target_arch = "wasm32"))]
             icache_data: Box::new([0u32; ICACHE_SIZE]),
         }
     }
 
     pub fn invalidate_icache(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
         self.icache_tags.fill(u64::MAX);
     }
 
@@ -65,10 +61,7 @@ impl Hart {
             fetch_satp: &mut self.fetch_satp,
             vregs: &mut self.vregs,
 
-            #[cfg(not(target_arch = "wasm32"))]
             icache_tags: &mut self.icache_tags,
-
-            #[cfg(not(target_arch = "wasm32"))]
             icache_data: &mut self.icache_data,
         };
 
@@ -87,11 +80,7 @@ impl Hart {
             fetch_ppage: &mut self.fetch_ppage,
             fetch_satp: &mut self.fetch_satp,
             vregs: &mut self.vregs,
-
-            #[cfg(not(target_arch = "wasm32"))]
             icache_tags: &mut self.icache_tags,
-
-            #[cfg(not(target_arch = "wasm32"))]
             icache_data: &mut self.icache_data,
         };
 
