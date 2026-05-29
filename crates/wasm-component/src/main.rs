@@ -43,7 +43,7 @@ fn main() {
         usage();
     });
 
-    let mut bus = MachineBus::new(512 * 1024 * 1024);
+    let mut bus = MachineBus::new(256 * 1024 * 1024); // 256mb ram
     let mut hart = Hart::new(0x1000);
 
     if let Some(path) = &disk_path {
