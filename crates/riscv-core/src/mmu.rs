@@ -213,9 +213,15 @@ fn walk_inner(
         return Err(());
     }
 
-    if exec && pte & PTE_X == 0 { return Err(()); }
-    if !exec && !write && pte & PTE_R == 0 { return Err(()); }
-    if write && pte & PTE_W == 0 { return Err(()); }
+    if exec && pte & PTE_X == 0 {
+        return Err(());
+    }
+    if !exec && !write && pte & PTE_R == 0 {
+        return Err(());
+    }
+    if write && pte & PTE_W == 0 {
+        return Err(());
+    }
 
     let leaf_ppn = (pte >> 10) & 0x0fff_ffff_ffff;
     let page_offset_bits = 12 + 9 * level as u32;
