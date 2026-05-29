@@ -1,3 +1,5 @@
+// DEPRECATED
+
 use machine::machine_bus::MachineBus;
 use riscv_core::{Hart, StepResult};
 use wasi::clocks::monotonic_clock;
@@ -5,10 +7,9 @@ use wasi::io::poll;
 use wasi::io::streams::{InputStream, StreamError};
 
 pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
-    eprintln!("[capsulev-wasi] Press Ctrl-C to exit.");
-
     let stdin = wasi::cli::stdin::get_stdin();
-    let mut esc_state: u8 = 0;
+    let mut esc_state_in: u8 = 0;
+    let mut esc_state_out: u8 = 0;
 
     const POLL_INTERVAL: u64 = 8192;
     let mut steps: u64 = 0;
@@ -16,7 +17,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
     loop {
         bus.clint.advance(POLL_INTERVAL);
         bus.poll(hart);
-        poll_stdin(bus, &stdin, &mut esc_state);
+        poll_stdin(bus, &stdin, &mut esc_state_in);
 
         match hart.run(bus, POLL_INTERVAL) {
             StepResult::Ok => {}
@@ -32,6 +33,8 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
                 break;
             }
         }
+
+        flush_console_filtered(bus, &mut esc_state_out);
         steps += POLL_INTERVAL;
     }
 }
@@ -68,4 +71,38 @@ fn poll_stdin(bus: &mut MachineBus, stdin: &InputStream, esc_state: &mut u8) {
         Err(StreamError::Closed) => std::process::exit(0),
         Err(StreamError::LastOperationFailed(_)) => {}
     }
+}
+
+fn flush_console_filtered(bus: &mut MachineBus, esc_state: &mut u8) {
+    use std::io::Write;
+    let bytes = bus.uart.drain_tx();
+    if bytes.is_empty() {
+        return;
+    }
+
+    let stdout = wasi::cli::stdout::get_stdout();
+    for &b in &bytes {
+        match *esc_state {
+            0 if b == 0x1b => {
+                *esc_state = 1;
+            }
+            1 if b == b'[' => {
+                *esc_state = 2;
+            }
+            1 => {
+                *esc_state = 0;
+                let _ = stdout.write(&[0x1b, b]);
+            }
+            2 => {
+                if b.is_ascii_alphabetic() || b == b'~' {
+                    *esc_state = 0;
+                }
+            }
+            0 => {
+                let _ = stdout.write(&[b]);
+            }
+            _ => {}
+        }
+    }
+    let _ = stdout.flush();
 }

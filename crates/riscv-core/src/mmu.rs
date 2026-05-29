@@ -1,4 +1,3 @@
-// translate virtual memory addresses to physical memory addresses
 use crate::system_bus::SystemBus;
 
 const PTE_V: u64 = 1 << 0;
@@ -7,15 +6,9 @@ const PTE_W: u64 = 1 << 2;
 const PTE_X: u64 = 1 << 3;
 const PTE_D: u64 = 1 << 7;
 
-#[cfg(not(target_arch = "wasm32"))]
 const TLB_SIZE: usize = 512;
-
-#[cfg(target_arch = "wasm32")]
-const TLB_SIZE: usize = 256;
-
 const TLB_MASK: u64 = (TLB_SIZE - 1) as u64;
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy)]
 struct TlbEntry {
     virt_page_num: u64,
@@ -24,7 +17,6 @@ struct TlbEntry {
     epoch: u32,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl TlbEntry {
     const EMPTY: Self = Self {
         virt_page_num: u64::MAX,
@@ -34,17 +26,9 @@ impl TlbEntry {
     };
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub struct Mmu {
     tlb: [TlbEntry; TLB_SIZE],
     epoch: u32,
-}
-
-#[cfg(target_arch = "wasm32")]
-pub struct Mmu {
-    tlb_virt: [u64; TLB_SIZE],
-    tlb_phys: [u64; TLB_SIZE],
-    tlb_flags: [u64; TLB_SIZE],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +70,6 @@ impl Default for Mmu {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Mmu {
     pub fn new() -> Self {
         Self {
@@ -106,7 +89,6 @@ impl Mmu {
     fn lookup(&self, virt_page_num: u64) -> Option<(u64, u64)> {
         let slot = (virt_page_num & TLB_MASK) as usize;
         let e = &self.tlb[slot];
-
         if e.epoch == self.epoch && e.virt_page_num == virt_page_num {
             Some((e.phys_page_num, e.flags))
         } else {
@@ -134,15 +116,12 @@ impl Mmu {
         if satp >> 60 == 0 {
             return Ok(virt_addr);
         }
-
         let vpn = virt_addr >> 12;
-
         if let Some((ppn, flags)) = self.lookup(vpn)
             && flags & PTE_X != 0
         {
             return Ok((ppn << 12) | (virt_addr & 0xfff));
         }
-
         self.walk(virt_addr, satp, false, true, bus)
             .map_err(|_| MmuFault::InstructionPageFault(virt_addr))
     }
@@ -156,15 +135,12 @@ impl Mmu {
         if satp >> 60 == 0 {
             return Ok(virt_addr);
         }
-
         let vpn = virt_addr >> 12;
-
         if let Some((ppn, flags)) = self.lookup(vpn)
             && flags & PTE_R != 0
         {
             return Ok((ppn << 12) | (virt_addr & 0xfff));
         }
-
         self.walk(virt_addr, satp, false, false, bus)
             .map_err(|_| MmuFault::LoadPageFault(virt_addr))
     }
@@ -179,13 +155,11 @@ impl Mmu {
             return Ok(virt_addr);
         }
         let vpn = virt_addr >> 12;
-
         if let Some((ppn, flags)) = self.lookup(vpn)
             && flags & (PTE_W | PTE_D) == (PTE_W | PTE_D)
         {
             return Ok((ppn << 12) | (virt_addr & 0xfff));
         }
-
         self.walk(virt_addr, satp, true, false, bus)
             .map_err(|_| MmuFault::StorePageFault(virt_addr))
     }
@@ -200,120 +174,6 @@ impl Mmu {
     ) -> Result<u64, ()> {
         let (phys_addr, vpn, pte) = walk_inner(virt_addr, satp, write, exec, bus)?;
         self.insert(vpn, phys_addr >> 12, pte);
-
-        Ok(phys_addr)
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-impl Mmu {
-    pub fn new() -> Self {
-        Self {
-            tlb_virt: [u64::MAX; TLB_SIZE],
-            tlb_phys: [0u64; TLB_SIZE],
-            tlb_flags: [0u64; TLB_SIZE],
-        }
-    }
-
-    pub fn flush(&mut self) {
-        self.tlb_virt.fill(u64::MAX);
-    }
-
-    #[inline(always)]
-    fn lookup(&self, virt_page_num: u64) -> Option<(u64, u64)> {
-        let slot = (virt_page_num & TLB_MASK) as usize;
-        let stored = self.tlb_virt[slot];
-
-        if stored == virt_page_num {
-            Some((self.tlb_phys[slot], self.tlb_flags[slot]))
-        } else {
-            None
-        }
-    }
-
-    #[inline(always)]
-    fn insert(&mut self, virt_page_num: u64, phys_page_num: u64, flags: u64) {
-        let slot = (virt_page_num & TLB_MASK) as usize;
-        self.tlb_virt[slot] = virt_page_num;
-        self.tlb_phys[slot] = phys_page_num;
-        self.tlb_flags[slot] = flags;
-    }
-
-    pub fn translate_fetch(
-        &mut self,
-        virt_addr: u64,
-        satp: u64,
-        bus: &mut impl SystemBus,
-    ) -> Result<u64, MmuFault> {
-        if satp >> 60 == 0 {
-            return Ok(virt_addr);
-        }
-        let vpn = virt_addr >> 12;
-
-        if let Some((ppn, flags)) = self.lookup(vpn) {
-            if flags & PTE_X != 0 {
-                return Ok((ppn << 12) | (virt_addr & 0xfff));
-            }
-        }
-
-        self.walk(virt_addr, satp, false, true, bus)
-            .map_err(|_| MmuFault::InstructionPageFault(virt_addr))
-    }
-
-    pub fn translate_load(
-        &mut self,
-        virt_addr: u64,
-        satp: u64,
-        bus: &mut impl SystemBus,
-    ) -> Result<u64, MmuFault> {
-        if satp >> 60 == 0 {
-            return Ok(virt_addr);
-        }
-        let vpn = virt_addr >> 12;
-
-        if let Some((ppn, flags)) = self.lookup(vpn) {
-            if flags & PTE_R != 0 {
-                return Ok((ppn << 12) | (virt_addr & 0xfff));
-            }
-        }
-
-        self.walk(virt_addr, satp, false, false, bus)
-            .map_err(|_| MmuFault::LoadPageFault(virt_addr))
-    }
-
-    pub fn translate_store(
-        &mut self,
-        virt_addr: u64,
-        satp: u64,
-        bus: &mut impl SystemBus,
-    ) -> Result<u64, MmuFault> {
-        if satp >> 60 == 0 {
-            return Ok(virt_addr);
-        }
-
-        let vpn = virt_addr >> 12;
-
-        if let Some((ppn, flags)) = self.lookup(vpn) {
-            if flags & (PTE_W | PTE_D) == (PTE_W | PTE_D) {
-                return Ok((ppn << 12) | (virt_addr & 0xfff));
-            }
-        }
-
-        self.walk(virt_addr, satp, true, false, bus)
-            .map_err(|_| MmuFault::StorePageFault(virt_addr))
-    }
-
-    fn walk(
-        &mut self,
-        virt_addr: u64,
-        satp: u64,
-        write: bool,
-        exec: bool,
-        bus: &mut impl SystemBus,
-    ) -> Result<u64, ()> {
-        let (phys_addr, vpn, pte) = walk_inner(virt_addr, satp, write, exec, bus)?;
-        self.insert(vpn, phys_addr >> 12, pte);
-
         Ok(phys_addr)
     }
 }
@@ -353,15 +213,9 @@ fn walk_inner(
         return Err(());
     }
 
-    if exec && pte & PTE_X == 0 {
-        return Err(());
-    }
-    if !exec && !write && pte & PTE_R == 0 {
-        return Err(());
-    }
-    if write && pte & PTE_W == 0 {
-        return Err(());
-    }
+    if exec && pte & PTE_X == 0 { return Err(()); }
+    if !exec && !write && pte & PTE_R == 0 { return Err(()); }
+    if write && pte & PTE_W == 0 { return Err(()); }
 
     let leaf_ppn = (pte >> 10) & 0x0fff_ffff_ffff;
     let page_offset_bits = 12 + 9 * level as u32;

@@ -8,10 +8,7 @@ use crate::mmu::{Mmu, MmuFault};
 use crate::system_bus::SystemBus;
 use crate::trap::{StepResult, TrapCause};
 
-#[cfg(not(target_arch = "wasm32"))]
 pub const ICACHE_SIZE: usize = 4096;
-
-#[cfg(not(target_arch = "wasm32"))]
 const ICACHE_TAG_SHIFT: u32 = 1 + ICACHE_SIZE.trailing_zeros();
 
 const OP_LUI: u32 = 0x37;
@@ -49,10 +46,7 @@ pub struct ExecContext<'a, B: SystemBus> {
     pub fetch_satp: &'a mut u64,
     pub vregs: &'a mut Box<[[u8; crate::hart::VLEN_BYTES]; crate::hart::VREG_COUNT]>,
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub icache_tags: &'a mut Box<[u64; ICACHE_SIZE]>,
-
-    #[cfg(not(target_arch = "wasm32"))]
     pub icache_data: &'a mut Box<[u32; ICACHE_SIZE]>,
 }
 
@@ -60,7 +54,6 @@ pub struct ExecContext<'a, B: SystemBus> {
 fn invalidate_fetch_cache<B: SystemBus>(ctx: &mut ExecContext<B>) {
     *ctx.fetch_vpage = u64::MAX;
 
-    #[cfg(not(target_arch = "wasm32"))]
     ctx.icache_tags.fill(u64::MAX);
 }
 
@@ -123,23 +116,15 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
             lo | (hi << 16)
         }
     } else {
-        #[cfg(target_arch = "wasm32")]
-        {
-            ctx.bus.read_word(fetch_pa)
-        }
-
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let idx = ((fetch_pa >> 1) as usize) & (ICACHE_SIZE - 1);
-            let tag = fetch_pa >> ICACHE_TAG_SHIFT;
-            if ctx.icache_tags[idx] == tag {
-                ctx.icache_data[idx]
-            } else {
-                let w = ctx.bus.read_word(fetch_pa);
-                ctx.icache_tags[idx] = tag;
-                ctx.icache_data[idx] = w;
-                w
-            }
+        let idx = ((fetch_pa >> 1) as usize) & (ICACHE_SIZE - 1);
+        let tag = fetch_pa >> ICACHE_TAG_SHIFT;
+        if ctx.icache_tags[idx] == tag {
+            ctx.icache_data[idx]
+        } else {
+            let w = ctx.bus.read_word(fetch_pa);
+            ctx.icache_tags[idx] = tag;
+            ctx.icache_data[idx] = w;
+            w
         }
     };
 
