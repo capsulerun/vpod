@@ -1,0 +1,15 @@
+[package]
+name = "wasm-component"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "wasm-component"
+path = "src/main.rs"
+
+[dependencies]
+machine = { path = "../machine" }
+riscv-core = { path = "../riscv-core" }
+log = "0.4"
+wasi = "0.14.7"
+flate2 = "1"

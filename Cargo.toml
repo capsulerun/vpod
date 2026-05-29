@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/riscv-core", "crates/machine", "crates/native-cli"]
+members = ["crates/riscv-core", "crates/machine", "crates/native-cli", "crates/wasm-component"]
 resolver = "3"
 
 [workspace.package]
