@@ -2,22 +2,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{DirPerms, FilePerms, IoView, WasiCtx, WasiCtxBuilder, WasiView};
+use crate::registry::Snapshot;
 
 static WASM_BYTES: &[u8] = include_bytes!(env!("CAPSULEV_WASM_PATH"));
-pub struct Snapshot {
-    pub name: String,
-    pub description: String,
-    pub version: String,
-    pub url: String,
-    pub memory_mb: u64
-}
 
 pub struct RunConfig {
     pub snapshot: Snapshot,
@@ -113,29 +106,44 @@ pub fn run(cfg: RunConfig) -> Result<()> {
     config.wasm_component_model(true);
     let engine = Engine::new(&config)?;
 
+    // Load component (expensive, cached as .cwasm)
     let component = load_component(&engine)?;
 
-    let start = Instant::now();
+    // Interactive mode: show header and wait — all heavy work is done
+    let _raw = if cfg.command.is_none() {
+        eprint!("\x1b]0;capsulev ({})\x07", cfg.snapshot.display_name());
+        print_header(&cfg.snapshot);
+        let raw = RawTerminal::enter();
+        wait_for_enter();
+        raw
+    } else {
+        None
+    };
 
-    // let snap_dir = cfg
-    //     .snapshot
-    //     .url
-    //     .unwrap_or(Path::new("."))
-    //     .to_path_buf();
+    // inject_byte_to_stdin replaced fd 0 with a pipe — now inherit it
+    if let Some(cmd) = &cfg.command {
+        inject_bytes_to_stdin(cmd.as_bytes());
+    }
 
-    // let snap_file = cfg
-    //     .snapshot
-    //     .file_name()
-    //     .context("snapshot path has no filename")?
-    //     .to_str()
-    //     .context("snapshot filename is not valid UTF-8")?
-    //     .to_string();
+    let snap_path = Path::new(&cfg.snapshot.url);
+    let snap_dir = snap_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+
+    let snap_file = snap_path
+        .file_name()
+        .context("snapshot path has no filename")?
+        .to_str()
+        .context("snapshot filename is not valid UTF-8")?
+        .to_string();
 
     let mut wasm_args = vec![
         "capsulev-wasi".to_string(),
         "--snapshot-load".to_string(),
         format!("snap/{snap_file}"),
     ];
+
     if let Some(disk) = &cfg.disk {
         let disk_name = disk
             .file_name()
@@ -145,14 +153,12 @@ pub fn run(cfg: RunConfig) -> Result<()> {
         wasm_args.push("--disk".to_string());
         wasm_args.push(format!("disk/{disk_name}"));
     }
-    if cfg.agent {
-        wasm_args.push("--agent".to_string());
-    }
 
     let mut builder = WasiCtxBuilder::new();
     builder.inherit_stdin().inherit_stdout().inherit_stderr();
     builder.args(&wasm_args);
     builder.preopened_dir(&snap_dir, "snap", DirPerms::READ, FilePerms::READ)?;
+
     if let Some(disk) = &cfg.disk {
         let disk_dir = disk.parent().unwrap_or(Path::new("."));
         builder.preopened_dir(
@@ -176,30 +182,20 @@ pub fn run(cfg: RunConfig) -> Result<()> {
         wasmtime_wasi::bindings::sync::Command::instantiate(&mut store, &component, &linker)
             .context("failed to instantiate wasm component")?;
 
-    // Stop spinner before handing off to the guest
-    drop(spinner);
-
-    // For `capsulev run "cmd"`, pipe the command into stdin
-    if let Some(cmd) = &cfg.command {
-        inject_bytes_to_stdin(cmd.as_bytes());
-    }
-
-    let _raw = if !cfg.agent { RawTerminal::enter() } else { None };
-
     let result = command.wasi_cli_run().call_run(&mut store);
-
-    if !cfg.agent {
-        let elapsed = start.elapsed().as_secs();
-        eprint!("\r\n\x1b[2m  session ended ({elapsed}s)\x1b[0m\r\n");
-        eprint!("\x1b]0;\x07");
-    }
 
     handle_result(result)
 }
 
-fn print_header(name: &str) {
-    eprintln!("\x1b[1mcapsulev\x1b[0m  \x1b[2m{name}\x1b[0m");
-    eprint!("\x1b[2mPress Enter to continue\x1b[0m");
+fn print_header(snap: &Snapshot) {
+    eprintln!();
+    eprintln!("  \x1b[1mcapsulev\x1b[0m  \x1b[2m{} {} · {}\x1b[0m",
+        snap.display_name(),
+        snap.tag,
+        snap.memory_label
+    );
+    eprintln!();
+    eprint!("  \x1b[2mPress Enter to start\x1b[0m");
 }
 
 struct Spinner {
@@ -220,7 +216,7 @@ impl Spinner {
                 i += 1;
                 std::thread::sleep(std::time::Duration::from_millis(80));
             }
-            // Clear the spinner line
+
             eprint!("\r\x1b[2K");
         });
 
@@ -245,10 +241,10 @@ fn wait_for_enter() {
             break;
         }
         match buf[0] {
-            0x03 => std::process::exit(0), // Ctrl-C before boot
+            0x03 => std::process::exit(0),
             b'\r' | b'\n' => {
                 eprint!("\r\x1b[2K");
-                inject_byte_to_stdin(b'\r');
+                inject_byte_to_stdin(b'\n');
                 break;
             }
             _ => {}
@@ -282,6 +278,7 @@ fn inject_bytes_to_stdin(bytes: &[u8]) {
                 if n <= 0 {
                     break;
                 }
+
                 let mut written = 0;
                 while written < n as usize {
                     let w = libc::write(
@@ -295,6 +292,7 @@ fn inject_bytes_to_stdin(bytes: &[u8]) {
                     written += w as usize;
                 }
             }
+
             libc::close(pipe_w);
             libc::close(real_stdin);
         });

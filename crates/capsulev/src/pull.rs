@@ -52,7 +52,6 @@ pub fn pull(snap: &Snapshot) -> Result<PathBuf> {
     let mut downloaded: u64 = 0;
     let bytes = resp.bytes().context("failed to read response body")?;
 
-    // write in chunks for progress reporting
     for chunk in bytes.chunks(65536) {
         file.write_all(chunk)?;
         hasher.update(chunk);

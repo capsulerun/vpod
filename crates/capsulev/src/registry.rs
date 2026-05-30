@@ -2,15 +2,17 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 pub const DEFAULT_REGISTRY: &str =
-    "https://capsulerun.github.io/registry.json";
+    "https://capsulerun.github.io/wasm-linux-snapshots/registry.json";
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Snapshot {
     pub name: String,
     pub tag: String,
+    pub memory_label: String,
     pub url: String,
-    pub sha256: String,
     pub size: u64,
+    pub sha256: String,
+
     #[serde(default)]
     pub description: String,
 }

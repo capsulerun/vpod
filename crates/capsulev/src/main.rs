@@ -50,31 +50,41 @@ fn main() -> Result<()> {
         local: None,
     }) {
         Cmd::Start {
-            snapshot,
+            snapshot: snapshot_name,
             disk,
             local,
         } => {
-            let snap_path = if let Some(path) = local {
+            let snapshot = if let Some(path) = local {
                 if !path.exists() {
                     anyhow::bail!("local snapshot not found: {}", path.display());
                 }
 
-                path
+                registry::Snapshot {
+                    name: snapshot_name.split(':').next().unwrap_or(&snapshot_name).to_string(),
+                    tag: snapshot_name.split(':').nth(1).unwrap_or("local").to_string(),
+                    memory_label: "256MB".to_string(),
+                    description: path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("local snapshot")
+                        .to_string(),
+                    url: path.to_str().unwrap().to_string(),
+                    sha256: String::new(),
+                    size: 0,
+                }
             } else {
-                resolve_snapshot(&snapshot, reg_url)?
+                resolve_snapshot(&snapshot_name, reg_url)?
             };
 
             run::run(run::RunConfig {
-                snapshot_name: snapshot.clone(),
-                snapshot: snap_path,
+                snapshot,
                 disk,
-                agent: false,
                 command: None,
             })?;
         }
 
         Cmd::Pull { snapshot } => {
-            let snapshots = registry::fetch(reg_url)?;
+            let snapshots = registry::fetch(reg_url)
+                .context("failed to fetch registry — cannot pull without registry")?;
             let snap = registry::resolve(&snapshots, &snapshot)
                 .with_context(|| format!("unknown snapshot '{snapshot}' — run `capsulev list`"))?;
 
@@ -86,26 +96,39 @@ fn main() -> Result<()> {
         }
 
         Cmd::List => {
-            let snapshots = registry::fetch(reg_url)?;
-            println!(
-                "{:<20} {:<10} {} {}",
-                "NAME", "SIZE", "DESCRIPTION", "STATUS"
-            );
+            match registry::fetch(reg_url) {
+                Ok(snapshots) => {
+                    println!(
+                        "{:<20} {:<12} {:<10} {} {}",
+                        "NAME", "TAG", "MEMORY", "DESCRIPTION", "STATUS"
+                    );
 
-            for snap in &snapshots {
-                let (status, desc_style) = if pull::is_cached(snap) {
-                    ("✓ cached", "")
-                } else {
-                    ("  remote", "\x1b[2m")
-                };
-                println!(
-                    "{:<20} {:<10} {}{}\x1b[0m {}",
-                    snap.display_name(),
-                    format_size(snap.size),
-                    desc_style,
-                    snap.description,
-                    status,
-                );
+                    for snap in &snapshots {
+                        let (status, desc_style) = if pull::is_cached(snap) {
+                            ("✓ cached", "")
+                        } else {
+                            ("  remote", "\x1b[2m")
+                        };
+                        println!(
+                            "{:<20} {:<12} {:<10} {}{}\x1b[0m {}",
+                            snap.display_name(),
+                            snap.tag,
+                            snap.memory_label,
+                            desc_style,
+                            snap.description,
+                            status,
+                        );
+                    }
+                }
+                Err(_) => {
+                    eprintln!("\x1b[2mRegistry unavailable, showing local snapshots:\x1b[0m");
+                    println!(
+                        "{:<20} {:<12} {:<10} {}",
+                        "NAME", "TAG", "MEMORY", "LOCATION"
+                    );
+
+                    list_local_snapshots();
+                }
             }
         }
     }
@@ -113,17 +136,46 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Resolve a snapshot name to a local path, checking fallbacks before hitting the registry.
-fn resolve_snapshot(name: &str, reg_url: &str) -> Result<PathBuf> {
-    // 1. CAPSULEV_SNAPSHOT env var (set by SDK or user)
-    if let Ok(path) = std::env::var("CAPSULEV_SNAPSHOT") {
-        let p = PathBuf::from(path);
-        if p.exists() {
-            return Ok(p);
+fn resolve_snapshot(name: &str, reg_url: &str) -> Result<registry::Snapshot> {
+    if let Ok(snapshots) = registry::fetch(reg_url) {
+        if let Some(snap) = registry::resolve(&snapshots, name) {
+
+            let path = if pull::is_cached(snap) {
+                pull::snapshot_path(snap)
+            } else {
+                eprintln!("Snapshot '{}' not found locally, downloading...", snap.display_name());
+                pull::pull(snap)?
+            };
+
+            let mut snap = snap.clone();
+            snap.url = path.to_str().unwrap().to_string();
+            return Ok(snap);
         }
     }
 
-    // 2. dev fallback: dist/<name>.snap next to the binary or in cwd
+    resolve_snapshot_local(name)
+}
+
+fn resolve_snapshot_local(name: &str) -> Result<registry::Snapshot> {
+    if let Ok(path_str) = std::env::var("CAPSULEV_SNAPSHOT") {
+        let path = PathBuf::from(&path_str);
+        if path.exists() {
+            return Ok(registry::Snapshot {
+                name: name.split(':').next().unwrap_or(name).to_string(),
+                tag: name.split(':').nth(1).unwrap_or("local").to_string(),
+                memory_label: "256MB".to_string(),
+                description: path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("local snapshot")
+                    .to_string(),
+                url: path_str,
+                sha256: String::new(),
+                size: 0,
+            });
+        }
+    }
+
+    // Check dev fallback paths: dist/<name>.snap
     let snap_name = name.split(':').next().unwrap_or(name);
     for base in [
         std::env::current_exe()
@@ -137,31 +189,58 @@ fn resolve_snapshot(name: &str, reg_url: &str) -> Result<PathBuf> {
     {
         let candidate = base.join(format!("{snap_name}.snap"));
         if candidate.exists() {
-            return Ok(candidate);
+            return Ok(registry::Snapshot {
+                name: snap_name.to_string(),
+                tag: name.split(':').nth(1).unwrap_or("dev").to_string(),
+                memory_label: "256MB".to_string(),
+                description: "local dev snapshot".to_string(),
+                url: candidate.to_str().unwrap().to_string(),
+                sha256: String::new(),
+                size: 0,
+            });
         }
     }
 
-    // 3. registry cache
-    let snapshots = registry::fetch(reg_url)
-        .context("failed to fetch registry — use --local or set CAPSULEV_SNAPSHOT for offline use")?;
-    let snap = registry::resolve(&snapshots, name)
-        .with_context(|| format!("unknown snapshot '{name}' — run `capsulev list`"))?;
-
-    if pull::is_cached(snap) {
-        return Ok(pull::snapshot_path(snap));
-    }
-
-    // 4. download
-    eprintln!("Snapshot '{}' not found locally, downloading...", snap.display_name());
-    pull::pull(snap)
+    anyhow::bail!("snapshot '{}' not found locally", name)
 }
 
-fn format_size(bytes: u64) -> String {
-    if bytes >= 1_000_000 {
-        format!("{:.0}MB", bytes as f64 / 1_000_000.0)
-    } else if bytes >= 1_000 {
-        format!("{:.0}KB", bytes as f64 / 1_000.0)
-    } else {
-        format!("{bytes}B")
+fn list_local_snapshots() {
+    if let Ok(path_str) = std::env::var("CAPSULEV_SNAPSHOT") {
+        let path = PathBuf::from(&path_str);
+        if path.exists() {
+            let name = path.file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            println!(
+                "{:<20} {:<12} {:<10} {}",
+                name, "local", "256MB", path.display()
+            );
+        }
+    }
+
+    for base in [
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf())),
+        Some(PathBuf::from(".")),
+        Some(PathBuf::from("dist")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Ok(entries) = std::fs::read_dir(&base) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("snap") {
+                    let name = path.file_stem()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown");
+                    println!(
+                        "{:<20} {:<12} {:<10} {}",
+                        name, "dev", "256MB", path.display()
+                    );
+                }
+            }
+        }
     }
 }
