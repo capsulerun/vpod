@@ -1,0 +1,324 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
+
+use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
+use wasmtime::component::{Component, Linker, ResourceTable};
+use wasmtime::{Config, Engine, Store};
+use wasmtime_wasi::{DirPerms, FilePerms, IoView, WasiCtx, WasiCtxBuilder, WasiView};
+
+static WASM_BYTES: &[u8] = include_bytes!(env!("CAPSULEV_WASM_PATH"));
+
+pub struct RunConfig {
+    pub snapshot: PathBuf,
+    pub disk: Option<PathBuf>,
+    pub agent: bool,
+    pub snapshot_name: String,
+    pub command: Option<String>,
+}
+
+struct State {
+    wasi: WasiCtx,
+    table: ResourceTable,
+}
+
+impl IoView for State {
+    fn table(&mut self) -> &mut ResourceTable {
+        &mut self.table
+    }
+}
+
+impl WasiView for State {
+    fn ctx(&mut self) -> &mut WasiCtx {
+        &mut self.wasi
+    }
+}
+
+/// RAII guard that restores the terminal to its original state on drop.
+struct RawTerminal {
+    saved: libc::termios,
+}
+
+impl RawTerminal {
+    fn enter() -> Option<Self> {
+        if unsafe { libc::isatty(libc::STDIN_FILENO) } == 0 {
+            return None;
+        }
+        unsafe {
+            let mut t: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(libc::STDIN_FILENO, &mut t) != 0 {
+                return None;
+            }
+            let saved = t;
+            libc::cfmakeraw(&mut t);
+            // keep ISIG so Ctrl-C/Ctrl-Z still deliver signals to the host process
+            t.c_lflag |= libc::ISIG;
+            // keep output post-processing so \n → \r\n works normally
+            t.c_oflag |= libc::OPOST;
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &t);
+            Some(Self { saved })
+        }
+    }
+}
+
+impl Drop for RawTerminal {
+    fn drop(&mut self) {
+        unsafe {
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &self.saved);
+        }
+    }
+}
+
+fn cwasm_cache_path() -> PathBuf {
+    let base = dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".cache"));
+    let hash = hex::encode(&Sha256::digest(WASM_BYTES)[..8]);
+    base.join("capsulev").join(format!("component-{hash}.cwasm"))
+}
+
+fn load_component(engine: &Engine) -> Result<Component> {
+    let cache = cwasm_cache_path();
+
+    // Try loading precompiled cache (instant — skips Cranelift entirely)
+    if cache.exists() {
+        if let Ok(c) = unsafe { Component::deserialize_file(engine, &cache) } {
+            return Ok(c);
+        }
+        // stale or incompatible — remove and recompile
+        fs::remove_file(&cache).ok();
+    }
+
+    // JIT compile and cache for next time
+    let component = Component::from_binary(engine, WASM_BYTES)
+        .context("failed to compile wasm component")?;
+
+    if let Some(parent) = cache.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    if let Ok(bytes) = component.serialize() {
+        fs::write(&cache, bytes).ok();
+    }
+
+    Ok(component)
+}
+
+pub fn run(cfg: RunConfig) -> Result<()> {
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    let engine = Engine::new(&config)?;
+
+    let component = load_component(&engine)?;
+
+    let start = Instant::now();
+
+    let spinner = if !cfg.agent {
+        eprint!("\x1b]0;capsulev ({})\x07", cfg.snapshot_name);
+        print_header(&format!("{} {}", cfg.snapshot_name, "v0.23.0 (256mb)"));
+        let _raw_wait = RawTerminal::enter();
+        wait_for_enter();
+        drop(_raw_wait);
+        Some(Spinner::start("booting"))
+    } else {
+        None
+    };
+
+    let snap_dir = cfg
+        .snapshot
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    let snap_file = cfg
+        .snapshot
+        .file_name()
+        .context("snapshot path has no filename")?
+        .to_str()
+        .context("snapshot filename is not valid UTF-8")?
+        .to_string();
+
+    let mut wasm_args = vec![
+        "capsulev-wasi".to_string(),
+        "--snapshot-load".to_string(),
+        format!("snap/{snap_file}"),
+    ];
+    if let Some(disk) = &cfg.disk {
+        let disk_name = disk
+            .file_name()
+            .context("disk path has no filename")?
+            .to_str()
+            .context("disk filename is not valid UTF-8")?;
+        wasm_args.push("--disk".to_string());
+        wasm_args.push(format!("disk/{disk_name}"));
+    }
+    if cfg.agent {
+        wasm_args.push("--agent".to_string());
+    }
+
+    let mut builder = WasiCtxBuilder::new();
+    builder.inherit_stdin().inherit_stdout().inherit_stderr();
+    builder.args(&wasm_args);
+    builder.preopened_dir(&snap_dir, "snap", DirPerms::READ, FilePerms::READ)?;
+    if let Some(disk) = &cfg.disk {
+        let disk_dir = disk.parent().unwrap_or(Path::new("."));
+        builder.preopened_dir(
+            disk_dir,
+            "disk",
+            DirPerms::READ | DirPerms::MUTATE,
+            FilePerms::READ | FilePerms::WRITE,
+        )?;
+    }
+
+    let state = State {
+        wasi: builder.build(),
+        table: ResourceTable::new(),
+    };
+    let mut store = Store::new(&engine, state);
+
+    let mut linker: Linker<State> = Linker::new(&engine);
+    wasmtime_wasi::add_to_linker_sync(&mut linker)?;
+
+    let command =
+        wasmtime_wasi::bindings::sync::Command::instantiate(&mut store, &component, &linker)
+            .context("failed to instantiate wasm component")?;
+
+    // Stop spinner before handing off to the guest
+    drop(spinner);
+
+    // For `capsulev run "cmd"`, pipe the command into stdin
+    if let Some(cmd) = &cfg.command {
+        inject_bytes_to_stdin(cmd.as_bytes());
+    }
+
+    let _raw = if !cfg.agent { RawTerminal::enter() } else { None };
+
+    let result = command.wasi_cli_run().call_run(&mut store);
+
+    if !cfg.agent {
+        let elapsed = start.elapsed().as_secs();
+        eprint!("\r\n\x1b[2m  session ended ({elapsed}s)\x1b[0m\r\n");
+        // Reset terminal tab title
+        eprint!("\x1b]0;\x07");
+    }
+
+    handle_result(result)
+}
+
+fn print_header(name: &str) {
+    eprintln!();
+    eprintln!("  \x1b[1mcapsulev\x1b[0m  \x1b[2m{name}\x1b[0m");
+    eprintln!();
+    eprint!("  \x1b[2mPress Enter to start\x1b[0m");
+}
+
+struct Spinner {
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Spinner {
+    fn start(msg: &'static str) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = stop.clone();
+
+        let handle = std::thread::spawn(move || {
+            const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let mut i = 0;
+            while !stop_clone.load(Ordering::Relaxed) {
+                eprint!("\r  \x1b[2m{} {msg}\x1b[0m", FRAMES[i % FRAMES.len()]);
+                i += 1;
+                std::thread::sleep(std::time::Duration::from_millis(80));
+            }
+            // Clear the spinner line
+            eprint!("\r\x1b[2K");
+        });
+
+        Self { stop, handle: Some(handle) }
+    }
+}
+
+impl Drop for Spinner {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            h.join().ok();
+        }
+    }
+}
+
+fn wait_for_enter() {
+    use std::io::Read;
+    let mut buf = [0u8; 1];
+    loop {
+        if std::io::stdin().read(&mut buf).is_err() {
+            break;
+        }
+        match buf[0] {
+            0x03 => std::process::exit(0), // Ctrl-C before boot
+            b'\r' | b'\n' => {
+                eprint!("\r\x1b[2K");
+                inject_byte_to_stdin(b'\r');
+                break;
+            }
+            _ => {}
+        }
+    }
+}
+
+fn inject_byte_to_stdin(byte: u8) {
+    inject_bytes_to_stdin(&[byte]);
+}
+
+fn inject_bytes_to_stdin(bytes: &[u8]) {
+    unsafe {
+        let mut fds = [0i32; 2];
+        if libc::pipe(fds.as_mut_ptr()) != 0 {
+            return;
+        }
+
+        let (pipe_r, pipe_w) = (fds[0], fds[1]);
+
+        libc::write(pipe_w, bytes.as_ptr() as *const libc::c_void, bytes.len());
+
+        let real_stdin = libc::dup(libc::STDIN_FILENO);
+        libc::dup2(pipe_r, libc::STDIN_FILENO);
+        libc::close(pipe_r);
+
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 256];
+            loop {
+                let n = libc::read(real_stdin, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
+                if n <= 0 {
+                    break;
+                }
+                let mut written = 0;
+                while written < n as usize {
+                    let w = libc::write(
+                        pipe_w,
+                        buf[written..].as_ptr() as *const libc::c_void,
+                        (n as usize) - written,
+                    );
+                    if w <= 0 {
+                        break;
+                    }
+                    written += w as usize;
+                }
+            }
+            libc::close(pipe_w);
+            libc::close(real_stdin);
+        });
+    }
+}
+
+fn handle_result(result: anyhow::Result<Result<(), ()>>) -> Result<()> {
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(())) => std::process::exit(1),
+        Err(e) => {
+            if let Some(exit) = e.downcast_ref::<wasmtime_wasi::I32Exit>() {
+                std::process::exit(exit.0);
+            }
+            Err(e.context("component run failed"))
+        }
+    }
+}

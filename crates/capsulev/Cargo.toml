@@ -1,0 +1,24 @@
+[package]
+name = "capsulev"
+version = "0.1.0"
+edition.workspace = true
+description = "RISC-V Linux container runtime"
+license = "Apache-2.0"
+
+[[bin]]
+name = "capsulev"
+path = "src/main.rs"
+
+[dependencies]
+wasmtime = "31"
+wasmtime-wasi = "31"
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+indicatif = "0.17"
+reqwest = { version = "0.12", features = ["blocking", "json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+dirs = "5"
+libc = "0.2"
