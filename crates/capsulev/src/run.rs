@@ -11,12 +11,17 @@ use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{DirPerms, FilePerms, IoView, WasiCtx, WasiCtxBuilder, WasiView};
 
 static WASM_BYTES: &[u8] = include_bytes!(env!("CAPSULEV_WASM_PATH"));
+pub struct Snapshot {
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub url: String,
+    pub memory_mb: u64
+}
 
 pub struct RunConfig {
-    pub snapshot: PathBuf,
+    pub snapshot: Snapshot,
     pub disk: Option<PathBuf>,
-    pub agent: bool,
-    pub snapshot_name: String,
     pub command: Option<String>,
 }
 
@@ -37,7 +42,6 @@ impl WasiView for State {
     }
 }
 
-/// RAII guard that restores the terminal to its original state on drop.
 struct RawTerminal {
     saved: libc::termios,
 }
@@ -47,18 +51,19 @@ impl RawTerminal {
         if unsafe { libc::isatty(libc::STDIN_FILENO) } == 0 {
             return None;
         }
+
         unsafe {
             let mut t: libc::termios = std::mem::zeroed();
             if libc::tcgetattr(libc::STDIN_FILENO, &mut t) != 0 {
                 return None;
             }
+
             let saved = t;
             libc::cfmakeraw(&mut t);
-            // keep ISIG so Ctrl-C/Ctrl-Z still deliver signals to the host process
             t.c_lflag |= libc::ISIG;
-            // keep output post-processing so \n → \r\n works normally
             t.c_oflag |= libc::OPOST;
             libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &t);
+
             Some(Self { saved })
         }
     }
@@ -75,28 +80,27 @@ impl Drop for RawTerminal {
 fn cwasm_cache_path() -> PathBuf {
     let base = dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".cache"));
     let hash = hex::encode(&Sha256::digest(WASM_BYTES)[..8]);
+
     base.join("capsulev").join(format!("component-{hash}.cwasm"))
 }
 
 fn load_component(engine: &Engine) -> Result<Component> {
     let cache = cwasm_cache_path();
 
-    // Try loading precompiled cache (instant — skips Cranelift entirely)
     if cache.exists() {
         if let Ok(c) = unsafe { Component::deserialize_file(engine, &cache) } {
             return Ok(c);
         }
-        // stale or incompatible — remove and recompile
         fs::remove_file(&cache).ok();
     }
 
-    // JIT compile and cache for next time
     let component = Component::from_binary(engine, WASM_BYTES)
         .context("failed to compile wasm component")?;
 
     if let Some(parent) = cache.parent() {
         fs::create_dir_all(parent).ok();
     }
+
     if let Ok(bytes) = component.serialize() {
         fs::write(&cache, bytes).ok();
     }
@@ -113,29 +117,19 @@ pub fn run(cfg: RunConfig) -> Result<()> {
 
     let start = Instant::now();
 
-    let spinner = if !cfg.agent {
-        eprint!("\x1b]0;capsulev ({})\x07", cfg.snapshot_name);
-        print_header(&format!("{} {}", cfg.snapshot_name, "v0.23.0 (256mb)"));
-        let _raw_wait = RawTerminal::enter();
-        wait_for_enter();
-        drop(_raw_wait);
-        Some(Spinner::start("booting"))
-    } else {
-        None
-    };
+    // let snap_dir = cfg
+    //     .snapshot
+    //     .url
+    //     .unwrap_or(Path::new("."))
+    //     .to_path_buf();
 
-    let snap_dir = cfg
-        .snapshot
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
-    let snap_file = cfg
-        .snapshot
-        .file_name()
-        .context("snapshot path has no filename")?
-        .to_str()
-        .context("snapshot filename is not valid UTF-8")?
-        .to_string();
+    // let snap_file = cfg
+    //     .snapshot
+    //     .file_name()
+    //     .context("snapshot path has no filename")?
+    //     .to_str()
+    //     .context("snapshot filename is not valid UTF-8")?
+    //     .to_string();
 
     let mut wasm_args = vec![
         "capsulev-wasi".to_string(),
@@ -197,7 +191,6 @@ pub fn run(cfg: RunConfig) -> Result<()> {
     if !cfg.agent {
         let elapsed = start.elapsed().as_secs();
         eprint!("\r\n\x1b[2m  session ended ({elapsed}s)\x1b[0m\r\n");
-        // Reset terminal tab title
         eprint!("\x1b]0;\x07");
     }
 
@@ -205,10 +198,8 @@ pub fn run(cfg: RunConfig) -> Result<()> {
 }
 
 fn print_header(name: &str) {
-    eprintln!();
-    eprintln!("  \x1b[1mcapsulev\x1b[0m  \x1b[2m{name}\x1b[0m");
-    eprintln!();
-    eprint!("  \x1b[2mPress Enter to start\x1b[0m");
+    eprintln!("\x1b[1mcapsulev\x1b[0m  \x1b[2m{name}\x1b[0m");
+    eprint!("\x1b[2mPress Enter to continue\x1b[0m");
 }
 
 struct Spinner {
