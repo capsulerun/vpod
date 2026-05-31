@@ -129,6 +129,13 @@ impl Uart {
         self.update_irq();
     }
 
+    pub fn rx_pending(&self) -> bool {
+        let buf = self.rx_buf.take();
+        let pending = !buf.is_empty();
+        self.rx_buf.set(buf);
+        pending
+    }
+
     fn dlab(&self) -> bool {
         self.lcr.get() & 0x80 != 0
     }

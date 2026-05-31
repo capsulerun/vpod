@@ -100,6 +100,10 @@ impl VirtioConsole {
             self.tx_buf.clear();
         }
     }
+
+    pub fn take_tx_buffer(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.tx_buf)
+    }
 }
 
 impl Default for VirtioConsole {

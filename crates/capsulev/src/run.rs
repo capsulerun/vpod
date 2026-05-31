@@ -1,7 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
@@ -13,9 +11,7 @@ use crate::registry::Snapshot;
 static WASM_BYTES: &[u8] = include_bytes!(env!("CAPSULEV_WASM_PATH"));
 
 pub struct RunConfig {
-    pub snapshot: Snapshot,
-    pub disk: Option<PathBuf>,
-    pub command: Option<String>,
+    pub snapshot: Snapshot
 }
 
 struct State {
@@ -106,24 +102,12 @@ pub fn run(cfg: RunConfig) -> Result<()> {
     config.wasm_component_model(true);
     let engine = Engine::new(&config)?;
 
-    // Load component (expensive, cached as .cwasm)
     let component = load_component(&engine)?;
 
-    // Interactive mode: show header and wait — all heavy work is done
-    let _raw = if cfg.command.is_none() {
-        eprint!("\x1b]0;capsulev ({})\x07", cfg.snapshot.display_name());
-        print_header(&cfg.snapshot);
-        let raw = RawTerminal::enter();
-        wait_for_enter();
-        raw
-    } else {
-        None
-    };
-
-    // inject_byte_to_stdin replaced fd 0 with a pipe — now inherit it
-    if let Some(cmd) = &cfg.command {
-        inject_bytes_to_stdin(cmd.as_bytes());
-    }
+    eprint!("\x1b]0;capsulev ({})\x07", cfg.snapshot.display_name());
+    print_header(&cfg.snapshot);
+    let _raw = RawTerminal::enter();
+    wait_for_enter();
 
     let snap_path = Path::new(&cfg.snapshot.url);
     let snap_dir = snap_path
@@ -138,36 +122,16 @@ pub fn run(cfg: RunConfig) -> Result<()> {
         .context("snapshot filename is not valid UTF-8")?
         .to_string();
 
-    let mut wasm_args = vec![
+    let wasm_args = vec![
         "capsulev-wasi".to_string(),
         "--snapshot-load".to_string(),
         format!("snap/{snap_file}"),
     ];
 
-    if let Some(disk) = &cfg.disk {
-        let disk_name = disk
-            .file_name()
-            .context("disk path has no filename")?
-            .to_str()
-            .context("disk filename is not valid UTF-8")?;
-        wasm_args.push("--disk".to_string());
-        wasm_args.push(format!("disk/{disk_name}"));
-    }
-
     let mut builder = WasiCtxBuilder::new();
     builder.inherit_stdin().inherit_stdout().inherit_stderr();
     builder.args(&wasm_args);
     builder.preopened_dir(&snap_dir, "snap", DirPerms::READ, FilePerms::READ)?;
-
-    if let Some(disk) = &cfg.disk {
-        let disk_dir = disk.parent().unwrap_or(Path::new("."));
-        builder.preopened_dir(
-            disk_dir,
-            "disk",
-            DirPerms::READ | DirPerms::MUTATE,
-            FilePerms::READ | FilePerms::WRITE,
-        )?;
-    }
 
     let state = State {
         wasi: builder.build(),
@@ -198,40 +162,40 @@ fn print_header(snap: &Snapshot) {
     eprint!("  \x1b[2mPress Enter to start\x1b[0m");
 }
 
-struct Spinner {
-    stop: Arc<AtomicBool>,
-    handle: Option<std::thread::JoinHandle<()>>,
-}
+// struct Spinner {
+//     stop: Arc<AtomicBool>,
+//     handle: Option<std::thread::JoinHandle<()>>,
+// }
 
-impl Spinner {
-    fn start(msg: &'static str) -> Self {
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_clone = stop.clone();
+// impl Spinner {
+//     fn start(msg: &'static str) -> Self {
+//         let stop = Arc::new(AtomicBool::new(false));
+//         let stop_clone = stop.clone();
 
-        let handle = std::thread::spawn(move || {
-            const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-            let mut i = 0;
-            while !stop_clone.load(Ordering::Relaxed) {
-                eprint!("\r  \x1b[2m{} {msg}\x1b[0m", FRAMES[i % FRAMES.len()]);
-                i += 1;
-                std::thread::sleep(std::time::Duration::from_millis(80));
-            }
+//         let handle = std::thread::spawn(move || {
+//             const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+//             let mut i = 0;
+//             while !stop_clone.load(Ordering::Relaxed) {
+//                 eprint!("\r  \x1b[2m{} {msg}\x1b[0m", FRAMES[i % FRAMES.len()]);
+//                 i += 1;
+//                 std::thread::sleep(std::time::Duration::from_millis(80));
+//             }
 
-            eprint!("\r\x1b[2K");
-        });
+//             eprint!("\r\x1b[2K");
+//         });
 
-        Self { stop, handle: Some(handle) }
-    }
-}
+//         Self { stop, handle: Some(handle) }
+//     }
+// }
 
-impl Drop for Spinner {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(h) = self.handle.take() {
-            h.join().ok();
-        }
-    }
-}
+// impl Drop for Spinner {
+//     fn drop(&mut self) {
+//         self.stop.store(true, Ordering::Relaxed);
+//         if let Some(h) = self.handle.take() {
+//             h.join().ok();
+//         }
+//     }
+// }
 
 fn wait_for_enter() {
     use std::io::Read;
@@ -244,7 +208,7 @@ fn wait_for_enter() {
             0x03 => std::process::exit(0),
             b'\r' | b'\n' => {
                 eprint!("\r\x1b[2K");
-                inject_byte_to_stdin(b'\n');
+                inject_bytes_to_stdin(&[b'\n']);
                 break;
             }
             _ => {}
@@ -252,9 +216,6 @@ fn wait_for_enter() {
     }
 }
 
-fn inject_byte_to_stdin(byte: u8) {
-    inject_bytes_to_stdin(&[byte]);
-}
 
 fn inject_bytes_to_stdin(bytes: &[u8]) {
     unsafe {

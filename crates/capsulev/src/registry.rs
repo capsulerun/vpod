@@ -19,7 +19,7 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub fn display_name(&self) -> String {
-        format!("{}:{}", self.name, self.tag)
+        format!("{}", self.name)
     }
 }
 

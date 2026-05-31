@@ -44,6 +44,7 @@ fn main() {
     });
 
     let mut bus = MachineBus::new(256 * 1024 * 1024); // 256mb ram
+    bus.uart.capture_tx.set(true); // Capture UART output for panic detection
     let mut hart = Hart::new(0x1000);
 
     if let Some(path) = &disk_path {
