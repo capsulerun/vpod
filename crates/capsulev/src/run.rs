@@ -67,7 +67,7 @@ impl Drop for RawTerminal {
 }
 
 fn cwasm_cache_path() -> PathBuf {
-    let base = dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".cache"));
+    let base = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".local/share"));
     let hash = hex::encode(&Sha256::digest(WASM_BYTES)[..8]);
 
     base.join("capsulev").join(format!("component-{hash}.cwasm"))
@@ -98,16 +98,21 @@ fn load_component(engine: &Engine) -> Result<Component> {
 }
 
 pub fn run(cfg: RunConfig) -> Result<()> {
+    eprint!("\x1b]0;capsulev ({})\x07", cfg.snapshot.display_name());
+    print_header(&cfg.snapshot);
+
+    eprint!("  \x1b[2mLoading...\x1b[0m");
+
     let mut config = Config::new();
     config.wasm_component_model(true);
     let engine = Engine::new(&config)?;
-
     let component = load_component(&engine)?;
 
-    eprint!("\x1b]0;capsulev ({})\x07", cfg.snapshot.display_name());
-    print_header(&cfg.snapshot);
+    // For clear loading message
+    eprint!("\r\x1b[2K");
     let _raw = RawTerminal::enter();
-    wait_for_enter();
+    unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH); }
+    eprint!("\r~ # ");
 
     let snap_path = Path::new(&cfg.snapshot.url);
     let snap_dir = snap_path
@@ -152,14 +157,11 @@ pub fn run(cfg: RunConfig) -> Result<()> {
 }
 
 fn print_header(snap: &Snapshot) {
-    eprintln!();
-    eprintln!("  \x1b[1mcapsulev\x1b[0m  \x1b[2m{} {} · {}\x1b[0m",
+    eprintln!("\x1b[1mcapsulev\x1b[0m  \x1b[2m{} {} · {}\x1b[0m",
         snap.display_name(),
         snap.tag,
         snap.memory_label
     );
-    eprintln!();
-    eprint!("  \x1b[2mPress Enter to start\x1b[0m");
 }
 
 // struct Spinner {
@@ -197,68 +199,7 @@ fn print_header(snap: &Snapshot) {
 //     }
 // }
 
-fn wait_for_enter() {
-    use std::io::Read;
-    let mut buf = [0u8; 1];
-    loop {
-        if std::io::stdin().read(&mut buf).is_err() {
-            break;
-        }
-        match buf[0] {
-            0x03 => std::process::exit(0),
-            b'\r' | b'\n' => {
-                eprint!("\r\x1b[2K");
-                inject_bytes_to_stdin(&[b'\n']);
-                break;
-            }
-            _ => {}
-        }
-    }
-}
 
-
-fn inject_bytes_to_stdin(bytes: &[u8]) {
-    unsafe {
-        let mut fds = [0i32; 2];
-        if libc::pipe(fds.as_mut_ptr()) != 0 {
-            return;
-        }
-
-        let (pipe_r, pipe_w) = (fds[0], fds[1]);
-
-        libc::write(pipe_w, bytes.as_ptr() as *const libc::c_void, bytes.len());
-
-        let real_stdin = libc::dup(libc::STDIN_FILENO);
-        libc::dup2(pipe_r, libc::STDIN_FILENO);
-        libc::close(pipe_r);
-
-        std::thread::spawn(move || {
-            let mut buf = [0u8; 256];
-            loop {
-                let n = libc::read(real_stdin, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
-                if n <= 0 {
-                    break;
-                }
-
-                let mut written = 0;
-                while written < n as usize {
-                    let w = libc::write(
-                        pipe_w,
-                        buf[written..].as_ptr() as *const libc::c_void,
-                        (n as usize) - written,
-                    );
-                    if w <= 0 {
-                        break;
-                    }
-                    written += w as usize;
-                }
-            }
-
-            libc::close(pipe_w);
-            libc::close(real_stdin);
-        });
-    }
-}
 
 fn handle_result(result: anyhow::Result<Result<(), ()>>) -> Result<()> {
     match result {

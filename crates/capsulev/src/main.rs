@@ -117,30 +117,30 @@ fn resolve_snapshot(name: &str, reg_url: &str) -> Result<registry::Snapshot> {
     anyhow::bail!("snapshot '{}' not found in registry", name)
 }
 
-fn list_local_snapshots() {
-    for base in [
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|p| p.to_path_buf())),
-        Some(PathBuf::from(".")),
-        Some(PathBuf::from("dist")),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if let Ok(entries) = std::fs::read_dir(&base) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("snap") {
-                    let name = path.file_stem()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("unknown");
-                    println!(
-                        "{:<20} {:<12} {:<10} {}",
-                        name, "dev", "256MB", path.display()
-                    );
-                }
-            }
-        }
-    }
-}
+// fn list_local_snapshots() {
+//     for base in [
+//         std::env::current_exe()
+//             .ok()
+//             .and_then(|p| p.parent().map(|p| p.to_path_buf())),
+//         Some(PathBuf::from(".")),
+//         Some(PathBuf::from("dist")),
+//     ]
+//     .into_iter()
+//     .flatten()
+//     {
+//         if let Ok(entries) = std::fs::read_dir(&base) {
+//             for entry in entries.flatten() {
+//                 let path = entry.path();
+//                 if path.extension().and_then(|e| e.to_str()) == Some("snap") {
+//                     let name = path.file_stem()
+//                         .and_then(|n| n.to_str())
+//                         .unwrap_or("unknown");
+//                     println!(
+//                         "{:<20} {:<12} {:<10} {}",
+//                         name, "dev", "256MB", path.display()
+//                     );
+//                 }
+//             }
+//         }
+//     }
+// }

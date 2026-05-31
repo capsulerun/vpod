@@ -127,6 +127,12 @@ impl MachineBus {
         self.console.flush_tx_to_stdout();
     }
 
+    pub fn flush_console_rx(&mut self) {
+        let mask = self.ram_mask;
+        let mut ram = RamView::new(&mut self.ram, mask);
+        self.console.flush_rx(&mut ram);
+    }
+
     #[inline(always)]
     fn ram_idx(&self, pa: u64) -> usize {
         (pa - RAM_BASE) as usize & self.ram_mask as usize

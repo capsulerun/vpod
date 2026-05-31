@@ -1,51 +1,43 @@
 use machine::machine_bus::MachineBus;
 use riscv_core::{Hart, StepResult};
-use wasi::clocks::monotonic_clock;
-use wasi::io::poll;
 use wasi::io::streams::{InputStream, StreamError};
 
 pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
     let stdin = wasi::cli::stdin::get_stdin();
 
-    const POLL_INTERVAL: u64 = 8192;
+    const POLL_INTERVAL: u64 = 32768;
+    const IDLE_THRESHOLD: u32 = 64;
 
-    // let mut steps: u64 = 0;
-    let mut consecutive_idle = 0u32;
-    let mut panic_detected = false;
+    let mut idle_count = 0u32;
 
     loop {
         bus.clint.advance(POLL_INTERVAL);
         bus.poll(hart);
 
-        poll_stdin(bus, &stdin);
+        if poll_stdin(bus, &stdin) {
+            bus.poll(hart);
+            idle_count = 0;
+        }
 
-        if hart.is_waiting && bus.has_pending_io() {
+        flush_console(bus);
+
+        if hart.is_waiting {
+            if idle_count >= IDLE_THRESHOLD {
+                let sleep_ms = if idle_count < IDLE_THRESHOLD + 5 {
+                    1
+                } else if idle_count < IDLE_THRESHOLD + 20 {
+                    5
+                } else {
+                    10
+                };
+                std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+                continue;
+            }
             hart.is_waiting = false;
+            idle_count += 1;
+        } else {
+            idle_count = 0;
         }
-
-        if hart.is_waiting && !bus.has_pending_io() {
-            if flush_output(bus, &mut panic_detected) {
-                break; // Clean exit on init exit
-            }
-
-            if flush_console_output(bus, &mut panic_detected) {
-                break; // Clean exit on init exit
-            }
-            consecutive_idle += 1;
-
-            let sleep_ms = if consecutive_idle < 5 {
-                1
-            } else if consecutive_idle < 20 {
-                5
-            } else {
-                10
-            };
-
-            std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
-            continue;
-        }
-
-        consecutive_idle = 0;
 
         match hart.run(bus, POLL_INTERVAL) {
             StepResult::Ok => {}
@@ -59,82 +51,38 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
             StepResult::Halt => break,
         }
 
-        if flush_output(bus, &mut panic_detected) {
-            break; // Clean exit on init exit
-        }
-        if flush_console_output(bus, &mut panic_detected) {
-            break; // Clean exit on init exit
-        }
-
-        // steps += POLL_INTERVAL;
+        flush_console(bus);
     }
 
-    flush_output(bus, &mut panic_detected);
-    flush_console_output(bus, &mut panic_detected);
+    flush_console(bus);
 }
 
-fn poll_stdin(bus: &mut MachineBus, stdin: &InputStream) {
+fn poll_stdin(bus: &mut MachineBus, stdin: &InputStream) -> bool {
     let pollable = stdin.subscribe();
-    let timer = monotonic_clock::subscribe_duration(0);
-    let ready = poll::poll(&[&pollable, &timer]);
-
-    if !ready.contains(&0) {
-        return;
+    if !pollable.ready() {
+        return false;
     }
 
     match stdin.read(64) {
-        Ok(bytes) => {
-            for b in bytes {
+        Ok(bytes) if !bytes.is_empty() => {
+            for &b in &bytes {
                 bus.uart.push_rx(b);
             }
+            true
         }
+        Ok(_) => false,
         Err(StreamError::Closed) => std::process::exit(0),
-        Err(StreamError::LastOperationFailed(_)) => {}
+        Err(StreamError::LastOperationFailed(_)) => false,
     }
 }
 
-fn flush_output(bus: &mut MachineBus, panic_detected: &mut bool) -> bool {
-    let bytes = bus.uart.drain_tx();
-    if bytes.is_empty() {
-        return false;
-    }
-
-    if let Ok(text) = std::str::from_utf8(&bytes) {
-        if text.contains("Kernel panic") {
-            *panic_detected = true;
-            std::process::exit(0);
-        }
-
-        if *panic_detected {
-            return true;
-        }
-    }
-
-    let stdout = wasi::cli::stdout::get_stdout();
-    let _ = stdout.write(&bytes);
-    let _ = stdout.flush();
-    false
-}
-
-fn flush_console_output(bus: &mut MachineBus, panic_detected: &mut bool) -> bool {
+fn flush_console(bus: &mut MachineBus) {
     let bytes = bus.console.take_tx_buffer();
     if bytes.is_empty() {
-        return false;
-    }
-
-    if let Ok(text) = std::str::from_utf8(&bytes) {
-        if text.contains("Kernel panic") {
-            *panic_detected = true;
-            std::process::exit(0);
-        }
-
-        if *panic_detected {
-            return true;
-        }
+        return;
     }
 
     let stdout = wasi::cli::stdout::get_stdout();
     let _ = stdout.write(&bytes);
     let _ = stdout.flush();
-    false
 }
