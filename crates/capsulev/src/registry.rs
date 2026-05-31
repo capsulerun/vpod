@@ -19,7 +19,7 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub fn display_name(&self) -> String {
-        format!("{}", self.name)
+        self.name.to_string()
     }
 }
 
@@ -46,7 +46,7 @@ pub fn resolve<'a>(snapshots: &'a [Snapshot], name: &str) -> Option<&'a Snapshot
         None => (name, None),
     };
 
-    snapshots.iter().find(|s| {
-        s.name == want_name && want_tag.map_or(true, |t| t == "latest" || t == s.tag)
-    })
+    snapshots
+        .iter()
+        .find(|s| s.name == want_name && want_tag.is_none_or(|t| t == "latest" || t == s.tag))
 }

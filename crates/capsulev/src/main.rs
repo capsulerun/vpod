@@ -2,8 +2,6 @@ mod pull;
 mod registry;
 mod run;
 
-use std::path::PathBuf;
-
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
@@ -23,7 +21,7 @@ struct Cli {
 enum Cmd {
     Start {
         #[arg(default_value = "alpine-256mb")]
-        snapshot: String
+        snapshot: String,
     },
 
     Pull {
@@ -39,16 +37,14 @@ fn main() -> Result<()> {
     let reg_url = cli.registry.as_deref().unwrap_or(DEFAULT_REGISTRY);
 
     match cli.command.unwrap_or(Cmd::Start {
-        snapshot: "alpine-256mb".to_string()
+        snapshot: "alpine-256mb".to_string(),
     }) {
         Cmd::Start {
-            snapshot: snapshot_name
+            snapshot: snapshot_name,
         } => {
             let snapshot = resolve_snapshot(&snapshot_name, reg_url)?;
 
-            run::run(run::RunConfig {
-                snapshot
-            })?;
+            run::run(run::RunConfig { snapshot })?;
         }
 
         Cmd::Pull { snapshot } => {
@@ -58,60 +54,62 @@ fn main() -> Result<()> {
                 .with_context(|| format!("unknown snapshot '{snapshot}' — run `capsulev list`"))?;
 
             if pull::is_cached(snap) {
-                eprintln!("'{}' is already cached at {}", snap.display_name(), pull::snapshot_path(snap).display());
+                eprintln!(
+                    "'{}' is already cached at {}",
+                    snap.display_name(),
+                    pull::snapshot_path(snap).display()
+                );
             } else {
                 pull::pull(snap)?;
             }
         }
 
-        Cmd::List => {
-            match registry::fetch(reg_url) {
-                Ok(snapshots) => {
-                    println!(
-                        "{:<20} {:<12} {:<10} {} {}",
-                        "NAME", "TAG", "MEMORY", "DESCRIPTION", "STATUS"
-                    );
+        Cmd::List => match registry::fetch(reg_url) {
+            Ok(snapshots) => {
+                println!(
+                    "{:<20} {:<12} {:<10} DESCRIPTION STATUS",
+                    "NAME", "TAG", "MEMORY"
+                );
 
-                    for snap in &snapshots {
-                        let (status, desc_style) = if pull::is_cached(snap) {
-                            ("✓ cached", "")
-                        } else {
-                            ("  remote", "\x1b[2m")
-                        };
-                        println!(
-                            "{:<20} {:<12} {:<10} {}{}\x1b[0m {}",
-                            snap.display_name(),
-                            snap.tag,
-                            snap.memory_label,
-                            desc_style,
-                            snap.description,
-                            status,
-                        );
-                    }
-                }
-                Err(_) => {
-                    eprintln!("\x1b[2mRegistry unreachable\x1b[0m");
+                for snap in &snapshots {
+                    let (status, desc_style) = if pull::is_cached(snap) {
+                        ("✓ cached", "")
+                    } else {
+                        ("  remote", "\x1b[2m")
+                    };
+                    println!(
+                        "{:<20} {:<12} {:<10} {}{}\x1b[0m {}",
+                        snap.display_name(),
+                        snap.tag,
+                        snap.memory_label,
+                        desc_style,
+                        snap.description,
+                        status,
+                    );
                 }
             }
-        }
+            Err(_) => {
+                eprintln!("\x1b[2mRegistry unreachable\x1b[0m");
+            }
+        },
     }
 
     Ok(())
 }
 
 fn resolve_snapshot(name: &str, reg_url: &str) -> Result<registry::Snapshot> {
-    if let Ok(snapshots) = registry::fetch(reg_url) {
-        if let Some(snap) = registry::resolve(&snapshots, name) {
-            let path = if pull::is_cached(snap) {
-                pull::snapshot_path(snap)
-            } else {
-                pull::pull(snap)?
-            };
+    if let Ok(snapshots) = registry::fetch(reg_url)
+        && let Some(snap) = registry::resolve(&snapshots, name)
+    {
+        let path = if pull::is_cached(snap) {
+            pull::snapshot_path(snap)
+        } else {
+            pull::pull(snap)?
+        };
 
-            let mut snap = snap.clone();
-            snap.url = path.to_str().unwrap().to_string();
-            return Ok(snap);
-        }
+        let mut snap = snap.clone();
+        snap.url = path.to_str().unwrap().to_string();
+        return Ok(snap);
     }
 
     anyhow::bail!("snapshot '{}' not found in registry", name)

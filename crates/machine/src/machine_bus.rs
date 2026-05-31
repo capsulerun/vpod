@@ -116,7 +116,6 @@ impl MachineBus {
         self.uart.rx_pending() || self.net_rx_pending()
     }
 
-
     pub fn drain_console_tx(&mut self) -> Vec<u8> {
         let bytes = self.console.tx_buf.clone();
         self.console.tx_buf.clear();

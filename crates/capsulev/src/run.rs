@@ -1,17 +1,17 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::registry::Snapshot;
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{DirPerms, FilePerms, IoView, WasiCtx, WasiCtxBuilder, WasiView};
-use crate::registry::Snapshot;
 
 static WASM_BYTES: &[u8] = include_bytes!(env!("CAPSULEV_WASM_PATH"));
 
 pub struct RunConfig {
-    pub snapshot: Snapshot
+    pub snapshot: Snapshot,
 }
 
 struct State {
@@ -70,7 +70,8 @@ fn cwasm_cache_path() -> PathBuf {
     let base = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".local/share"));
     let hash = hex::encode(&Sha256::digest(WASM_BYTES)[..8]);
 
-    base.join("capsulev").join(format!("component-{hash}.cwasm"))
+    base.join("capsulev")
+        .join(format!("component-{hash}.cwasm"))
 }
 
 fn load_component(engine: &Engine) -> Result<Component> {
@@ -83,8 +84,8 @@ fn load_component(engine: &Engine) -> Result<Component> {
         fs::remove_file(&cache).ok();
     }
 
-    let component = Component::from_binary(engine, WASM_BYTES)
-        .context("failed to compile wasm component")?;
+    let component =
+        Component::from_binary(engine, WASM_BYTES).context("failed to compile wasm component")?;
 
     if let Some(parent) = cache.parent() {
         fs::create_dir_all(parent).ok();
@@ -111,14 +112,13 @@ pub fn run(cfg: RunConfig) -> Result<()> {
     // For clear loading message
     eprint!("\r\x1b[2K");
     let _raw = RawTerminal::enter();
-    unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH); }
+    unsafe {
+        libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH);
+    }
     eprint!("\r~ # ");
 
     let snap_path = Path::new(&cfg.snapshot.url);
-    let snap_dir = snap_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
+    let snap_dir = snap_path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
     let snap_file = snap_path
         .file_name()
@@ -157,7 +157,8 @@ pub fn run(cfg: RunConfig) -> Result<()> {
 }
 
 fn print_header(snap: &Snapshot) {
-    eprintln!("\x1b[1mcapsulev\x1b[0m  \x1b[2m{} {} · {}\x1b[0m",
+    eprintln!(
+        "\x1b[1mcapsulev\x1b[0m  \x1b[2m{} {} · {}\x1b[0m",
         snap.display_name(),
         snap.tag,
         snap.memory_label
@@ -198,8 +199,6 @@ fn print_header(snap: &Snapshot) {
 //         }
 //     }
 // }
-
-
 
 fn handle_result(result: anyhow::Result<Result<(), ()>>) -> Result<()> {
     match result {

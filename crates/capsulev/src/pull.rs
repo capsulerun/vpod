@@ -9,8 +9,7 @@ use sha2::{Digest, Sha256};
 use crate::registry::Snapshot;
 
 pub fn cache_dir() -> PathBuf {
-    let base = dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.local/share"));
+    let base = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("~/.local/share"));
     base.join("capsulev").join("snapshots")
 }
 
@@ -45,8 +44,8 @@ pub fn pull(snap: &Snapshot) -> Result<PathBuf> {
     );
     pb.set_message(snap.display_name());
 
-    let mut file = fs::File::create(&tmp)
-        .with_context(|| format!("failed to create {}", tmp.display()))?;
+    let mut file =
+        fs::File::create(&tmp).with_context(|| format!("failed to create {}", tmp.display()))?;
 
     let mut hasher = Sha256::new();
     let mut downloaded: u64 = 0;

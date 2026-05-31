@@ -42,7 +42,7 @@ impl Hart {
 
             icache_tags: Box::new([u64::MAX; ICACHE_SIZE]),
             icache_data: Box::new([0u32; ICACHE_SIZE]),
-            is_waiting: false
+            is_waiting: false,
         }
     }
 
@@ -66,7 +66,7 @@ impl Hart {
             icache_tags: &mut self.icache_tags,
             icache_data: &mut self.icache_data,
 
-            is_waiting: &mut self.is_waiting
+            is_waiting: &mut self.is_waiting,
         };
 
         execute::step(&mut ctx)
@@ -86,7 +86,7 @@ impl Hart {
             vregs: &mut self.vregs,
             icache_tags: &mut self.icache_tags,
             icache_data: &mut self.icache_data,
-            is_waiting: &mut self.is_waiting
+            is_waiting: &mut self.is_waiting,
         };
 
         execute::run(&mut ctx, max_steps)
