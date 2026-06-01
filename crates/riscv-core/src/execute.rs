@@ -83,20 +83,19 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
     };
 
     let virtual_page = pc >> 12;
-    let fetch_physical_address = if virtual_page == *ctx.fetch_vpage
-        && effective_satp == *ctx.fetch_satp
-    {
-        (*ctx.fetch_ppage << 12) | (pc & 0xfff)
-    } else {
-        let physical_address = match ctx.mmu.translate_fetch(pc, effective_satp, ctx.bus) {
-            Ok(pa) => pa,
-            Err(fault) => return trap_from_mmu(ctx, fault),
+    let fetch_physical_address =
+        if virtual_page == *ctx.fetch_vpage && effective_satp == *ctx.fetch_satp {
+            (*ctx.fetch_ppage << 12) | (pc & 0xfff)
+        } else {
+            let physical_address = match ctx.mmu.translate_fetch(pc, effective_satp, ctx.bus) {
+                Ok(pa) => pa,
+                Err(fault) => return trap_from_mmu(ctx, fault),
+            };
+            *ctx.fetch_vpage = virtual_page;
+            *ctx.fetch_ppage = physical_address >> 12;
+            *ctx.fetch_satp = effective_satp;
+            physical_address
         };
-        *ctx.fetch_vpage = virtual_page;
-        *ctx.fetch_ppage = physical_address >> 12;
-        *ctx.fetch_satp = effective_satp;
-        physical_address
-    };
 
     let instruction_encoding = if fetch_physical_address & 0xfff == 0xffe {
         let lo = ctx.bus.read_halfword(fetch_physical_address) as u32;

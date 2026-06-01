@@ -15,7 +15,6 @@ fn main() {
                 .join("release")
                 .join("wasi-component.wasm"),
         ),
-
         Some(workspace_root.join("dist").join("capsulev.wasm")),
     ];
 

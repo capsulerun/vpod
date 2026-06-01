@@ -48,7 +48,9 @@ pub fn vsetvl_compute(avl: u64, vtype_val: u64) -> (u64, u64) {
 fn check_vs<B: SystemBus>(ctx: &ExecContext<B>, instruction_encoding: u32) -> Option<StepResult> {
     // mstatus.VS
     if (ctx.csr.mstatus >> 9) & 3 == 0 {
-        Some(StepResult::Trap(TrapCause::IllegalInstruction(instruction_encoding)))
+        Some(StepResult::Trap(TrapCause::IllegalInstruction(
+            instruction_encoding,
+        )))
     } else {
         None
     }
@@ -119,7 +121,11 @@ fn vec_translate_store<B: SystemBus>(ctx: &mut ExecContext<B>, va: u64) -> Resul
 
 // vsetvl*
 
-fn exec_opcfg<B: SystemBus>(ctx: &mut ExecContext<B>, instruction_encoding: u32, pc: u64) -> StepResult {
+fn exec_opcfg<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    instruction_encoding: u32,
+    pc: u64,
+) -> StepResult {
     let rd = ((instruction_encoding >> 7) & 0x1F) as usize;
     let rs1 = ((instruction_encoding >> 15) & 0x1F) as usize;
     let bit31 = (instruction_encoding >> 31) & 1;
@@ -165,7 +171,11 @@ fn exec_opcfg<B: SystemBus>(ctx: &mut ExecContext<B>, instruction_encoding: u32,
 
 // unit-stride and strided load
 
-fn exec_vload<B: SystemBus>(ctx: &mut ExecContext<B>, instruction_encoding: u32, pc: u64) -> StepResult {
+fn exec_vload<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    instruction_encoding: u32,
+    pc: u64,
+) -> StepResult {
     if let Some(trap_result) = check_vs(ctx, instruction_encoding) {
         return trap_result;
     }
@@ -234,7 +244,11 @@ fn exec_vload<B: SystemBus>(ctx: &mut ExecContext<B>, instruction_encoding: u32,
 
 // unit-stride and strided store
 
-fn exec_vstore<B: SystemBus>(ctx: &mut ExecContext<B>, instruction_encoding: u32, pc: u64) -> StepResult {
+fn exec_vstore<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    instruction_encoding: u32,
+    pc: u64,
+) -> StepResult {
     if let Some(trap_result) = check_vs(ctx, instruction_encoding) {
         return trap_result;
     }
@@ -669,7 +683,11 @@ fn mulh(a: i64, b: i64, sew_bits: u64) -> u64 {
 
 // top-level dispatcher
 
-pub fn exec_vec<B: SystemBus>(ctx: &mut ExecContext<B>, instruction_encoding: u32, pc: u64) -> StepResult {
+pub fn exec_vec<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    instruction_encoding: u32,
+    pc: u64,
+) -> StepResult {
     let opcode = instruction_encoding & 0x7F;
     let funct3 = (instruction_encoding >> 12) & 0x7;
     let funct6 = instruction_encoding >> 26;
