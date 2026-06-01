@@ -54,12 +54,12 @@ impl MmuFault {
     }
     pub fn tval(&self) -> u64 {
         match self {
-            Self::LoadPageFault(a)
-            | Self::StorePageFault(a)
-            | Self::InstructionPageFault(a)
-            | Self::LoadAccessFault(a)
-            | Self::StoreAccessFault(a)
-            | Self::InstructionAccessFault(a) => *a,
+            Self::LoadPageFault(address)
+            | Self::StorePageFault(address)
+            | Self::InstructionPageFault(address)
+            | Self::LoadAccessFault(address)
+            | Self::StoreAccessFault(address)
+            | Self::InstructionAccessFault(address) => *address,
         }
     }
 }
@@ -88,9 +88,10 @@ impl Mmu {
     #[inline(always)]
     fn lookup(&self, virt_page_num: u64) -> Option<(u64, u64)> {
         let slot = (virt_page_num & TLB_MASK) as usize;
-        let e = &self.tlb[slot];
-        if e.epoch == self.epoch && e.virt_page_num == virt_page_num {
-            Some((e.phys_page_num, e.flags))
+        let entry = &self.tlb[slot];
+
+        if entry.epoch == self.epoch && entry.virt_page_num == virt_page_num {
+            Some((entry.phys_page_num, entry.flags))
         } else {
             None
         }
@@ -109,77 +110,84 @@ impl Mmu {
 
     pub fn translate_fetch(
         &mut self,
-        virt_addr: u64,
+        virtual_address: u64,
         satp: u64,
         bus: &mut impl SystemBus,
     ) -> Result<u64, MmuFault> {
         if satp >> 60 == 0 {
-            return Ok(virt_addr);
+            return Ok(virtual_address);
         }
-        let vpn = virt_addr >> 12;
+
+        let vpn = virtual_address >> 12;
         if let Some((ppn, flags)) = self.lookup(vpn)
             && flags & PTE_X != 0
         {
-            return Ok((ppn << 12) | (virt_addr & 0xfff));
+            return Ok((ppn << 12) | (virtual_address & 0xfff));
         }
-        self.walk(virt_addr, satp, false, true, bus)
-            .map_err(|_| MmuFault::InstructionPageFault(virt_addr))
+
+        self.walk(virtual_address, satp, false, true, bus)
+            .map_err(|_| MmuFault::InstructionPageFault(virtual_address))
     }
 
     pub fn translate_load(
         &mut self,
-        virt_addr: u64,
+        virtual_address: u64,
         satp: u64,
         bus: &mut impl SystemBus,
     ) -> Result<u64, MmuFault> {
         if satp >> 60 == 0 {
-            return Ok(virt_addr);
+            return Ok(virtual_address);
         }
-        let vpn = virt_addr >> 12;
+
+        let vpn = virtual_address >> 12;
         if let Some((ppn, flags)) = self.lookup(vpn)
             && flags & PTE_R != 0
         {
-            return Ok((ppn << 12) | (virt_addr & 0xfff));
+            return Ok((ppn << 12) | (virtual_address & 0xfff));
         }
-        self.walk(virt_addr, satp, false, false, bus)
-            .map_err(|_| MmuFault::LoadPageFault(virt_addr))
+
+        self.walk(virtual_address, satp, false, false, bus)
+            .map_err(|_| MmuFault::LoadPageFault(virtual_address))
     }
 
     pub fn translate_store(
         &mut self,
-        virt_addr: u64,
+        virtual_address: u64,
         satp: u64,
         bus: &mut impl SystemBus,
     ) -> Result<u64, MmuFault> {
         if satp >> 60 == 0 {
-            return Ok(virt_addr);
+            return Ok(virtual_address);
         }
-        let vpn = virt_addr >> 12;
+
+        let vpn = virtual_address >> 12;
         if let Some((ppn, flags)) = self.lookup(vpn)
             && flags & (PTE_W | PTE_D) == (PTE_W | PTE_D)
         {
-            return Ok((ppn << 12) | (virt_addr & 0xfff));
+            return Ok((ppn << 12) | (virtual_address & 0xfff));
         }
-        self.walk(virt_addr, satp, true, false, bus)
-            .map_err(|_| MmuFault::StorePageFault(virt_addr))
+
+        self.walk(virtual_address, satp, true, false, bus)
+            .map_err(|_| MmuFault::StorePageFault(virtual_address))
     }
 
     fn walk(
         &mut self,
-        virt_addr: u64,
+        virtual_address: u64,
         satp: u64,
         write: bool,
         exec: bool,
         bus: &mut impl SystemBus,
     ) -> Result<u64, ()> {
-        let (phys_addr, vpn, pte) = walk_inner(virt_addr, satp, write, exec, bus)?;
-        self.insert(vpn, phys_addr >> 12, pte);
-        Ok(phys_addr)
+        let (physical_address, vpn, pte) = walk_inner(virtual_address, satp, write, exec, bus)?;
+        self.insert(vpn, physical_address >> 12, pte);
+
+        Ok(physical_address)
     }
 }
 
 fn walk_inner(
-    virt_addr: u64,
+    virtual_address: u64,
     satp: u64,
     write: bool,
     exec: bool,
@@ -187,9 +195,9 @@ fn walk_inner(
 ) -> Result<(u64, u64, u64), ()> {
     let root_ppn = satp & 0x0fff_ffff_ffff;
     let virt_page_nums = [
-        (virt_addr >> 30) & 0x1ff,
-        (virt_addr >> 21) & 0x1ff,
-        (virt_addr >> 12) & 0x1ff,
+        (virtual_address >> 30) & 0x1ff,
+        (virtual_address >> 21) & 0x1ff,
+        (virtual_address >> 12) & 0x1ff,
     ];
 
     let mut phys_page_num = root_ppn;
@@ -202,9 +210,11 @@ fn walk_inner(
         if pte & PTE_V == 0 {
             return Err(());
         }
+
         if pte & (PTE_R | PTE_X) != 0 {
             break;
         }
+
         phys_page_num = (pte >> 10) & 0x0fff_ffff_ffff;
         level -= 1;
     }
@@ -226,8 +236,8 @@ fn walk_inner(
     let leaf_ppn = (pte >> 10) & 0x0fff_ffff_ffff;
     let page_offset_bits = 12 + 9 * level as u32;
     let page_offset_mask = (1u64 << page_offset_bits) - 1;
-    let phys_addr = (leaf_ppn << 12) | (virt_addr & page_offset_mask);
-    let vpn = virt_addr >> 12;
+    let physical_address = (leaf_ppn << 12) | (virtual_address & page_offset_mask);
+    let vpn = virtual_address >> 12;
 
-    Ok((phys_addr, vpn, pte))
+    Ok((physical_address, vpn, pte))
 }

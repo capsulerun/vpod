@@ -83,6 +83,8 @@ pub const MIP_MTIP: u64 = 1 << 7;
 pub const MIP_SEIP: u64 = 1 << 9;
 pub const MIP_MEIP: u64 = 1 << 11;
 
+const VECTOR_REGISTER_BYTES: u64 = 16; // VLEN=128 bits = 16
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrivMode {
     U = 0,
@@ -233,8 +235,8 @@ impl Csr {
         }
     }
 
-    pub fn read(&self, addr: u32, priv_mode: PrivMode) -> Option<u64> {
-        let val = match addr {
+    pub fn read_register(&self, address: u32, priv_mode: PrivMode) -> Option<u64> {
+        let value = match address {
             // M-mode
             MSTATUS => self.read_mstatus(),
             MISA => self.misa,
@@ -275,8 +277,8 @@ impl Csr {
             MCONFIGPTR => 0,
 
             // PMP
-            0x3A0..=0x3AF => self.pmpcfg[(addr - 0x3A0) as usize],
-            0x3B0..=0x3EF => self.pmpaddr[(addr - 0x3B0) as usize],
+            0x3A0..=0x3AF => self.pmpcfg[(address - 0x3A0) as usize],
+            0x3B0..=0x3EF => self.pmpaddr[(address - 0x3B0) as usize],
 
             // Counters (U/S readable)
             CYCLE | MCYCLE => self.cycle,
@@ -305,10 +307,10 @@ impl Csr {
             VCSR => self.vcsr & 0x7,
             VL => self.vl,
             VTYPE => self.vtype,
-            VLENB => 16, // VLEN=128 bits → 16 bytes
+            VLENB => VECTOR_REGISTER_BYTES,
 
             // mhpmevent3-31
-            0x323..=0x33F => self.mhpmevent[(addr - 0x323) as usize],
+            0x323..=0x33F => self.mhpmevent[(address - 0x323) as usize],
 
             // scountovf
             0xDA0 => 0,
@@ -324,80 +326,80 @@ impl Csr {
 
             _ => return None,
         };
-        Some(val)
+        Some(value)
     }
 
-    pub fn write(&mut self, addr: u32, val: u64, priv_mode: PrivMode) -> bool {
-        match addr {
+    pub fn write_register(&mut self, address: u32, value: u64, priv_mode: PrivMode) -> bool {
+        match address {
             // M-mode
-            MSTATUS => self.write_mstatus(val),
+            MSTATUS => self.write_mstatus(value),
             MISA => {} // read-only
-            MEDELEG => self.medeleg = val,
-            MIDELEG => self.mideleg = val,
-            MIE => self.mie = val,
-            MTVEC => self.mtvec = val,
-            MCOUNTEREN => self.mcounteren = val & 0xFFFF_FFFF,
-            MCOUNTINHIBIT => self.mcountinhibit = val & 0xFFFF_FFFF,
-            MENVCFG => self.menvcfg = val,
-            MSCRATCH => self.mscratch = val,
-            MEPC => self.mepc = val & !1,
-            MCAUSE => self.mcause = val,
-            MTVAL => self.mtval = val,
+            MEDELEG => self.medeleg = value,
+            MIDELEG => self.mideleg = value,
+            MIE => self.mie = value,
+            MTVEC => self.mtvec = value,
+            MCOUNTEREN => self.mcounteren = value & 0xFFFF_FFFF,
+            MCOUNTINHIBIT => self.mcountinhibit = value & 0xFFFF_FFFF,
+            MENVCFG => self.menvcfg = value,
+            MSCRATCH => self.mscratch = value,
+            MEPC => self.mepc = value & !1,
+            MCAUSE => self.mcause = value,
+            MTVAL => self.mtval = value,
             MIP => {
                 // Only MSIP, STIP, SSIP are writable from M-mode software
                 let writable = MIP_MSIP | MIP_SSIP | MIP_STIP;
-                self.mip = (self.mip & !writable) | (val & writable);
+                self.mip = (self.mip & !writable) | (value & writable);
             }
 
             // S-mode
             SSTATUS => {
                 let mask = SSTATUS_MASK & MSTATUS_WRITE_MASK;
-                self.mstatus = (self.mstatus & !mask) | (val & mask);
+                self.mstatus = (self.mstatus & !mask) | (value & mask);
             }
             SIE => {
                 let mask = self.mideleg;
-                self.mie = (self.mie & !mask) | (val & mask);
+                self.mie = (self.mie & !mask) | (value & mask);
             }
-            STVEC => self.stvec = val,
-            SCOUNTEREN => self.scounteren = val & 0xFFFF_FFFF,
-            SENVCFG => self.senvcfg = val,
-            SSCRATCH => self.sscratch = val,
-            SEPC => self.sepc = val & !1,
-            SCAUSE => self.scause = val,
-            STVAL => self.stval = val,
+            STVEC => self.stvec = value,
+            SCOUNTEREN => self.scounteren = value & 0xFFFF_FFFF,
+            SENVCFG => self.senvcfg = value,
+            SSCRATCH => self.sscratch = value,
+            SEPC => self.sepc = value & !1,
+            SCAUSE => self.scause = value,
+            STVAL => self.stval = value,
             SIP => {
                 let mask = self.mideleg & SIP_WRITABLE;
-                self.mip = (self.mip & !mask) | (val & mask);
+                self.mip = (self.mip & !mask) | (value & mask);
             }
             SATP => {
                 if priv_mode == PrivMode::S && (self.mstatus & MSTATUS_TVM) != 0 {
                     return false;
                 }
-                self.satp = val;
+                self.satp = value;
             }
 
             // PMP
-            0x3A0..=0x3AF => self.pmpcfg[(addr - 0x3A0) as usize] = val,
-            0x3B0..=0x3EF => self.pmpaddr[(addr - 0x3B0) as usize] = val,
+            0x3A0..=0x3AF => self.pmpcfg[(address - 0x3A0) as usize] = value,
+            0x3B0..=0x3EF => self.pmpaddr[(address - 0x3B0) as usize] = value,
 
             // Counters
-            MCYCLE => self.cycle = val,
-            MINSTRET => self.instret = val,
+            MCYCLE => self.cycle = value,
+            MINSTRET => self.instret = value,
 
             // FP CSRs
-            0x001 => self.fcsr = (self.fcsr & !0x1F) | (val & 0x1F),
-            0x002 => self.fcsr = (self.fcsr & !0xE0) | ((val & 0x7) << 5),
-            0x003 => self.fcsr = val & 0xFF,
+            0x001 => self.fcsr = (self.fcsr & !0x1F) | (value & 0x1F),
+            0x002 => self.fcsr = (self.fcsr & !0xE0) | ((value & 0x7) << 5),
+            0x003 => self.fcsr = value & 0xFF,
 
             // Vector CSRs
-            VSTART => self.vstart = val,
-            VXSAT => self.vcsr = (self.vcsr & !1) | (val & 1),
-            VXRM => self.vcsr = (self.vcsr & !0x6) | ((val & 3) << 1),
-            VCSR => self.vcsr = val & 0x7,
+            VSTART => self.vstart = value,
+            VXSAT => self.vcsr = (self.vcsr & !1) | (value & 1),
+            VXRM => self.vcsr = (self.vcsr & !0x6) | ((value & 3) << 1),
+            VCSR => self.vcsr = value & 0x7,
             VL | VTYPE | VLENB => {}
 
             // HPM events
-            0x323..=0x33F => self.mhpmevent[(addr - 0x323) as usize] = val,
+            0x323..=0x33F => self.mhpmevent[(address - 0x323) as usize] = value,
 
             // HPM counters (ignore writes)
             0xB03..=0xB1F | 0xB83..=0xB9F => {}
@@ -418,25 +420,25 @@ impl Csr {
     }
 
     fn read_mstatus(&self) -> u64 {
-        let mut val = self.mstatus;
+        let mut value = self.mstatus;
 
         // MSTATUS_SD is set if FS, XS or VS indicate dirty state
-        let fs = (val >> 13) & 3;
-        let xs = (val >> 15) & 3;
-        let vs = (val >> 9) & 3;
+        let fs = (value >> 13) & 3;
+        let xs = (value >> 15) & 3;
+        let vs = (value >> 9) & 3;
 
         if fs == 3 || xs == 3 || vs == 3 {
-            val |= MSTATUS_SD;
+            value |= MSTATUS_SD;
         } else {
-            val &= !MSTATUS_SD;
+            value &= !MSTATUS_SD;
         }
 
-        val
+        value
     }
 
-    fn write_mstatus(&mut self, val: u64) {
+    fn write_mstatus(&mut self, value: u64) {
         let preserved = MSTATUS_UXL | MSTATUS_SXL;
-        self.mstatus = (self.mstatus & preserved) | (val & MSTATUS_WRITE_MASK);
+        self.mstatus = (self.mstatus & preserved) | (value & MSTATUS_WRITE_MASK);
     }
 
     pub fn pending_interrupt(&self, priv_mode: PrivMode) -> Option<u64> {
@@ -451,25 +453,25 @@ impl Csr {
         // M-mode interrupts: not delegated
         let m_pending = pending & !self.mideleg;
         if m_pending != 0 && (priv_mode != PrivMode::M || mie_bit) {
-            return Some(highest_bit(m_pending));
+            return Some(highest_priority_interrupt_bit(m_pending));
         }
 
         // S-mode interrupts: delegated
         let s_pending = pending & self.mideleg;
         if s_pending != 0 && (priv_mode == PrivMode::U || (priv_mode == PrivMode::S && sie_bit)) {
-            return Some(highest_bit(s_pending));
+            return Some(highest_priority_interrupt_bit(s_pending));
         }
 
         None
     }
 }
 
-fn highest_bit(val: u64) -> u64 {
+fn highest_priority_interrupt_bit(value: u64) -> u64 {
     // Priority order: MEI, MSI, MTI, SEI, SSI, STI (11, 3, 7, 9, 1, 5)
     for bit in [11u64, 3, 7, 9, 1, 5] {
-        if val & (1 << bit) != 0 {
+        if value & (1 << bit) != 0 {
             return bit;
         }
     }
-    63 - val.leading_zeros() as u64
+    63 - value.leading_zeros() as u64
 }

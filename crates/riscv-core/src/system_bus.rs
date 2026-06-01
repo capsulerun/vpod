@@ -1,15 +1,15 @@
 // External communication linking the hart to RAM and peripherals (disk, network).
 
 pub trait SystemBus {
-    fn read_byte(&mut self, addr: u64) -> u8;
-    fn read_halfword(&mut self, addr: u64) -> u16;
-    fn read_word(&mut self, addr: u64) -> u32;
-    fn read_doubleword(&mut self, addr: u64) -> u64;
+    fn read_byte(&mut self, address: u64) -> u8;
+    fn read_halfword(&mut self, address: u64) -> u16;
+    fn read_word(&mut self, address: u64) -> u32;
+    fn read_doubleword(&mut self, address: u64) -> u64;
 
-    fn write_byte(&mut self, addr: u64, val: u8);
-    fn write_halfword(&mut self, addr: u64, val: u16);
-    fn write_word(&mut self, addr: u64, val: u32);
-    fn write_doubleword(&mut self, addr: u64, val: u64);
+    fn write_byte(&mut self, address: u64, val: u8);
+    fn write_halfword(&mut self, address: u64, val: u16);
+    fn write_word(&mut self, address: u64, val: u32);
+    fn write_doubleword(&mut self, address: u64, val: u64);
 }
 
 pub struct FlatMemory {
@@ -34,8 +34,8 @@ impl FlatMemory {
     }
 
     #[inline(always)]
-    fn idx(&self, addr: u64) -> usize {
-        (addr & self.mask) as usize
+    fn idx(&self, address: u64) -> usize {
+        (address & self.mask) as usize
     }
 }
 
