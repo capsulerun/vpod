@@ -19,8 +19,10 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, cmds: &[String], snap_save: Op
         } else {
             POLL_INTERVAL
         };
-        bus.clint.advance(interval);
+
+        bus.clint.advance_by_instructions(interval);
         bus.poll(hart);
+
         match hart.run(bus, interval) {
             StepResult::Ok => {}
             StepResult::Trap(cause) => {
@@ -45,10 +47,11 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, cmds: &[String], snap_save: Op
         if has_prompt {
             if !sent {
                 for _ in 0..1000 {
-                    bus.clint.advance(POLL_INTERVAL);
+                    bus.clint.advance_by_instructions(POLL_INTERVAL);
                     bus.poll(hart);
                     let _ = hart.run(bus, POLL_INTERVAL);
                 }
+
                 bus.uart.drain_rx();
                 let _ = bus.uart.drain_tx();
 
@@ -67,6 +70,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, cmds: &[String], snap_save: Op
                 }
             } else {
                 output.clear();
+
                 cmd_idx += 1;
                 if cmd_idx < cmds.len() {
                     let cmd = &cmds[cmd_idx];

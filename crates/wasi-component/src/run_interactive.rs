@@ -11,7 +11,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
     let mut idle_count = 0u32;
 
     loop {
-        bus.clint.advance(POLL_INTERVAL);
+        bus.clint.advance_by_instructions(POLL_INTERVAL);
         bus.poll(hart);
 
         if poll_stdin(bus, &stdin) {

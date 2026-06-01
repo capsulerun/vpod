@@ -82,22 +82,23 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
         ctx.csr.satp
     };
 
-    let vpage = pc >> 12;
-    let fetch_pa = if vpage == *ctx.fetch_vpage && effective_satp == *ctx.fetch_satp {
-        (*ctx.fetch_ppage << 12) | (pc & 0xfff)
-    } else {
-        let pa = match ctx.mmu.translate_fetch(pc, effective_satp, ctx.bus) {
-            Ok(pa) => pa,
-            Err(f) => return trap_from_mmu(ctx, f),
+    let virtual_page = pc >> 12;
+    let fetch_physical_address =
+        if virtual_page == *ctx.fetch_vpage && effective_satp == *ctx.fetch_satp {
+            (*ctx.fetch_ppage << 12) | (pc & 0xfff)
+        } else {
+            let physical_address = match ctx.mmu.translate_fetch(pc, effective_satp, ctx.bus) {
+                Ok(pa) => pa,
+                Err(fault) => return trap_from_mmu(ctx, fault),
+            };
+            *ctx.fetch_vpage = virtual_page;
+            *ctx.fetch_ppage = physical_address >> 12;
+            *ctx.fetch_satp = effective_satp;
+            physical_address
         };
-        *ctx.fetch_vpage = vpage;
-        *ctx.fetch_ppage = pa >> 12;
-        *ctx.fetch_satp = effective_satp;
-        pa
-    };
 
-    let raw = if fetch_pa & 0xfff == 0xffe {
-        let lo = ctx.bus.read_halfword(fetch_pa) as u32;
+    let instruction_encoding = if fetch_physical_address & 0xfff == 0xffe {
+        let lo = ctx.bus.read_halfword(fetch_physical_address) as u32;
 
         if lo & 0x3 != 0x3 {
             lo
@@ -116,23 +117,23 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
             lo | (hi << 16)
         }
     } else {
-        let idx = ((fetch_pa >> 1) as usize) & (ICACHE_SIZE - 1);
-        let tag = fetch_pa >> ICACHE_TAG_SHIFT;
+        let idx = ((fetch_physical_address >> 1) as usize) & (ICACHE_SIZE - 1);
+        let tag = fetch_physical_address >> ICACHE_TAG_SHIFT;
         if ctx.icache_tags[idx] == tag {
             ctx.icache_data[idx]
         } else {
-            let w = ctx.bus.read_word(fetch_pa);
+            let w = ctx.bus.read_word(fetch_physical_address);
             ctx.icache_tags[idx] = tag;
             ctx.icache_data[idx] = w;
             w
         }
     };
 
-    let result = if raw & 0x3 != 0x3 {
-        exec_compressed(ctx, raw as u16)
+    let result = if instruction_encoding & 0x3 != 0x3 {
+        exec_compressed(ctx, instruction_encoding as u16)
     } else {
-        let inst = Instruction(raw);
-        exec_full(ctx, inst, raw, pc)
+        let inst = Instruction(instruction_encoding);
+        exec_full(ctx, inst, instruction_encoding, pc)
     };
 
     match result {
@@ -648,7 +649,7 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
         },
         funct3 => {
             let csr_addr = raw >> 20;
-            let old = match ctx.csr.read(csr_addr, *ctx.priv_mode) {
+            let old = match ctx.csr.read_register(csr_addr, *ctx.priv_mode) {
                 Some(v) => v,
                 None => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
@@ -671,7 +672,7 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
             };
 
             if do_write {
-                if !ctx.csr.write(csr_addr, new_val, *ctx.priv_mode) {
+                if !ctx.csr.write_register(csr_addr, new_val, *ctx.priv_mode) {
                     return StepResult::Trap(TrapCause::IllegalInstruction(raw));
                 }
 

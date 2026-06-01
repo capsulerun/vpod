@@ -2,53 +2,59 @@
 
 macro_rules! amo_w {
     ($name:ident, $op:expr) => {
-        pub fn $name(mem_val: u32, src: u64) -> (u64, u32) {
-            let new_mem: u32 = $op(mem_val, src as u32);
-            (mem_val as i32 as i64 as u64, new_mem)
+        pub fn $name(memory_value: u32, src: u64) -> (u64, u32) {
+            let new_memory_value: u32 = $op(memory_value, src as u32);
+            (memory_value as i32 as i64 as u64, new_memory_value)
         }
     };
 }
 
 amo_w!(amoswap_w, |_, src| src);
-amo_w!(amoadd_w, |mem_val: u32, src: u32| mem_val.wrapping_add(src));
-amo_w!(amoxor_w, |mem_val: u32, src: u32| mem_val ^ src);
-amo_w!(amoand_w, |mem_val: u32, src: u32| mem_val & src);
-amo_w!(amoor_w, |mem_val: u32, src: u32| mem_val | src);
+amo_w!(amoadd_w, |memory_value: u32, src: u32| memory_value
+    .wrapping_add(src));
+amo_w!(amoxor_w, |memory_value: u32, src: u32| memory_value ^ src);
+amo_w!(amoand_w, |memory_value: u32, src: u32| memory_value & src);
+amo_w!(amoor_w, |memory_value: u32, src: u32| memory_value | src);
 amo_w!(
     amomin_w,
-    |mem_val: u32, src: u32| (mem_val as i32).min(src as i32) as u32
+    |memory_value: u32, src: u32| (memory_value as i32).min(src as i32) as u32
 );
 amo_w!(
     amomax_w,
-    |mem_val: u32, src: u32| (mem_val as i32).max(src as i32) as u32
+    |memory_value: u32, src: u32| (memory_value as i32).max(src as i32) as u32
 );
-amo_w!(amominu_w, |mem_val: u32, src: u32| mem_val.min(src));
-amo_w!(amomaxu_w, |mem_val: u32, src: u32| mem_val.max(src));
+amo_w!(amominu_w, |memory_value: u32, src: u32| memory_value
+    .min(src));
+amo_w!(amomaxu_w, |memory_value: u32, src: u32| memory_value
+    .max(src));
 
 macro_rules! amo_d {
     ($name:ident, $op:expr) => {
-        pub fn $name(mem_val: u64, src: u64) -> (u64, u64) {
-            let new_mem: u64 = $op(mem_val, src);
-            (mem_val, new_mem)
+        pub fn $name(memory_value: u64, src: u64) -> (u64, u64) {
+            let new_memory_value: u64 = $op(memory_value, src);
+            (memory_value, new_memory_value)
         }
     };
 }
 
 amo_d!(amoswap_d, |_, src| src);
-amo_d!(amoadd_d, |mem_val: u64, src: u64| mem_val.wrapping_add(src));
-amo_d!(amoxor_d, |mem_val: u64, src: u64| mem_val ^ src);
-amo_d!(amoand_d, |mem_val: u64, src: u64| mem_val & src);
-amo_d!(amoor_d, |mem_val: u64, src: u64| mem_val | src);
+amo_d!(amoadd_d, |memory_value: u64, src: u64| memory_value
+    .wrapping_add(src));
+amo_d!(amoxor_d, |memory_value: u64, src: u64| memory_value ^ src);
+amo_d!(amoand_d, |memory_value: u64, src: u64| memory_value & src);
+amo_d!(amoor_d, |memory_value: u64, src: u64| memory_value | src);
 amo_d!(
     amomin_d,
-    |mem_val: u64, src: u64| (mem_val as i64).min(src as i64) as u64
+    |memory_value: u64, src: u64| (memory_value as i64).min(src as i64) as u64
 );
 amo_d!(
     amomax_d,
-    |mem_val: u64, src: u64| (mem_val as i64).max(src as i64) as u64
+    |memory_value: u64, src: u64| (memory_value as i64).max(src as i64) as u64
 );
-amo_d!(amominu_d, |mem_val: u64, src: u64| mem_val.min(src));
-amo_d!(amomaxu_d, |mem_val: u64, src: u64| mem_val.max(src));
+amo_d!(amominu_d, |memory_value: u64, src: u64| memory_value
+    .min(src));
+amo_d!(amomaxu_d, |memory_value: u64, src: u64| memory_value
+    .max(src));
 
 macro_rules! word_signed_op {
     ($name:ident, div_zero_is_lhs: false, $overflow_ret:expr, $op:ident) => {

@@ -6,7 +6,7 @@ const FDT_END: u32 = 0x00000009;
 const FDT_VERSION: u32 = 17;
 
 pub struct DtbBuilder {
-    structure: Vec<u8>,
+    structure_block: Vec<u8>,
     strings: Vec<u8>,
 }
 
@@ -19,97 +19,105 @@ impl Default for DtbBuilder {
 impl DtbBuilder {
     pub fn new() -> Self {
         Self {
-            structure: Vec::new(),
+            structure_block: Vec::new(),
             strings: Vec::new(),
         }
     }
 
     pub fn begin_node(&mut self, name: &str) {
         self.push_u32(FDT_BEGIN_NODE);
-        self.structure.extend_from_slice(name.as_bytes());
-        self.structure.push(0);
-        self.align4();
+
+        self.structure_block.extend_from_slice(name.as_bytes());
+        self.structure_block.push(0);
+
+        self.align_to_4_bytes();
     }
 
     pub fn end_node(&mut self) {
         self.push_u32(FDT_END_NODE);
     }
 
-    pub fn prop_u32(&mut self, name: &str, val: u32) {
-        let off = self.string_offset(name);
+    pub fn prop_u32(&mut self, name: &str, value: u32) {
+        let offset = self.string_offset(name);
 
         self.push_u32(FDT_PROP);
         self.push_u32(4);
-        self.push_u32(off);
-        self.push_u32(val);
+        self.push_u32(offset);
+        self.push_u32(value);
     }
 
-    pub fn prop_u64(&mut self, name: &str, val: u64) {
-        let off = self.string_offset(name);
+    pub fn prop_u64(&mut self, name: &str, value: u64) {
+        let offset = self.string_offset(name);
 
         self.push_u32(FDT_PROP);
         self.push_u32(8);
-        self.push_u32(off);
-        self.push_u32((val >> 32) as u32);
-        self.push_u32(val as u32);
+        self.push_u32(offset);
+        self.push_u32((value >> 32) as u32);
+        self.push_u32(value as u32);
     }
 
-    pub fn prop_str(&mut self, name: &str, val: &str) {
-        let off = self.string_offset(name);
+    pub fn prop_str(&mut self, name: &str, value: &str) {
+        let offset = self.string_offset(name);
 
         self.push_u32(FDT_PROP);
-        self.push_u32((val.len() + 1) as u32);
-        self.push_u32(off);
-        self.structure.extend_from_slice(val.as_bytes());
-        self.structure.push(0);
-        self.align4();
+        self.push_u32((value.len() + 1) as u32);
+        self.push_u32(offset);
+
+        self.structure_block.extend_from_slice(value.as_bytes());
+        self.structure_block.push(0);
+
+        self.align_to_4_bytes();
     }
 
     pub fn prop_reg(&mut self, addr: u64, size: u64) {
-        let off = self.string_offset("reg");
+        let offset = self.string_offset("reg");
 
         self.push_u32(FDT_PROP);
         self.push_u32(16);
-        self.push_u32(off);
+        self.push_u32(offset);
         self.push_u32((addr >> 32) as u32);
         self.push_u32(addr as u32);
         self.push_u32((size >> 32) as u32);
         self.push_u32(size as u32);
     }
 
-    pub fn prop_strlist(&mut self, name: &str, vals: &[&str]) {
-        let off = self.string_offset(name);
-        let total: usize = vals.iter().map(|s| s.len() + 1).sum();
+    pub fn prop_strlist(&mut self, name: &str, values: &[&str]) {
+        let offset = self.string_offset(name);
+        let total: usize = values
+            .iter()
+            .map(|string_value| string_value.len() + 1)
+            .sum();
 
         self.push_u32(FDT_PROP);
         self.push_u32(total as u32);
-        self.push_u32(off);
+        self.push_u32(offset);
 
-        for s in vals {
-            self.structure.extend_from_slice(s.as_bytes());
-            self.structure.push(0);
+        for string_value in values {
+            self.structure_block
+                .extend_from_slice(string_value.as_bytes());
+            self.structure_block.push(0);
         }
 
-        self.align4();
+        self.align_to_4_bytes();
     }
 
     pub fn prop_empty(&mut self, name: &str) {
-        let off = self.string_offset(name);
+        let offset = self.string_offset(name);
 
         self.push_u32(FDT_PROP);
         self.push_u32(0);
-        self.push_u32(off);
+        self.push_u32(offset);
     }
 
     pub fn prop_cells(&mut self, name: &str, cells: &[u32]) {
-        let off = self.string_offset(name);
+        let offset = self.string_offset(name);
 
         self.push_u32(FDT_PROP);
         self.push_u32((cells.len() * 4) as u32);
-        self.push_u32(off);
+        self.push_u32(offset);
 
-        for &c in cells {
-            self.push_u32(c);
+        for &cell in cells {
+            self.push_u32(cell);
         }
     }
 
@@ -131,43 +139,45 @@ impl DtbBuilder {
         let header_size: u32 = 40;
         let mem_rsvmap_size: u32 = 16;
         let struct_offset = header_size + mem_rsvmap_size;
-        let struct_size = self.structure.len() as u32;
+        let struct_size = self.structure_block.len() as u32;
         let strings_offset = struct_offset + struct_size;
         let strings_size = self.strings.len() as u32;
         let total_size = strings_offset + strings_size;
 
         let mut out = Vec::with_capacity(total_size as usize);
 
-        push_be_u32(&mut out, FDT_MAGIC);
-        push_be_u32(&mut out, total_size);
-        push_be_u32(&mut out, struct_offset);
-        push_be_u32(&mut out, strings_offset);
-        push_be_u32(&mut out, header_size);
-        push_be_u32(&mut out, FDT_VERSION);
-        push_be_u32(&mut out, 16);
-        push_be_u32(&mut out, 0);
-        push_be_u32(&mut out, strings_size);
-        push_be_u32(&mut out, struct_size);
+        push_big_endian_u32(&mut out, FDT_MAGIC);
+        push_big_endian_u32(&mut out, total_size);
+        push_big_endian_u32(&mut out, struct_offset);
+        push_big_endian_u32(&mut out, strings_offset);
+        push_big_endian_u32(&mut out, header_size);
+        push_big_endian_u32(&mut out, FDT_VERSION);
+        push_big_endian_u32(&mut out, 16);
+        push_big_endian_u32(&mut out, 0);
+        push_big_endian_u32(&mut out, strings_size);
+        push_big_endian_u32(&mut out, struct_size);
 
         out.extend_from_slice(&[0u8; 16]);
 
-        out.extend_from_slice(&self.structure);
+        out.extend_from_slice(&self.structure_block);
         out.extend_from_slice(&self.strings);
+
         out
     }
 
-    fn push_u32(&mut self, val: u32) {
-        self.structure.extend_from_slice(&val.to_be_bytes());
+    fn push_u32(&mut self, value: u32) {
+        self.structure_block.extend_from_slice(&value.to_be_bytes());
     }
 
-    fn align4(&mut self) {
-        while !self.structure.len().is_multiple_of(4) {
-            self.structure.push(0);
+    fn align_to_4_bytes(&mut self) {
+        while !self.structure_block.len().is_multiple_of(4) {
+            self.structure_block.push(0);
         }
     }
 
     fn string_offset(&mut self, name: &str) -> u32 {
         let needle = name.as_bytes();
+
         let mut i = 0;
         while i < self.strings.len() {
             let end = i + needle.len();
@@ -183,16 +193,16 @@ impl DtbBuilder {
             i += 1;
         }
 
-        let off = self.strings.len() as u32;
+        let offset = self.strings.len() as u32;
         self.strings.extend_from_slice(needle);
         self.strings.push(0);
 
-        off
+        offset
     }
 }
 
-fn push_be_u32(buf: &mut Vec<u8>, val: u32) {
-    buf.extend_from_slice(&val.to_be_bytes());
+fn push_big_endian_u32(buf: &mut Vec<u8>, value: u32) {
+    buf.extend_from_slice(&value.to_be_bytes());
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -213,112 +223,114 @@ pub fn build(
     initrd_start: u64,
     initrd_end: u64,
 ) -> Vec<u8> {
-    let mut b = DtbBuilder::new();
+    let mut builder = DtbBuilder::new();
 
     // Root node
-    b.begin_node("");
-    b.prop_u32("#address-cells", 2);
-    b.prop_u32("#size-cells", 2);
-    b.prop_str("compatible", "riscv-virtio");
-    b.prop_str("model", "riscv-virtio,qemu");
+    builder.begin_node("");
+    builder.prop_u32("#address-cells", 2);
+    builder.prop_u32("#size-cells", 2);
+    builder.prop_str("compatible", "riscv-virtio");
+    builder.prop_str("model", "riscv-virtio,qemu");
 
-    b.begin_node("aliases");
-    b.prop_str("serial0", &format!("/uart@{:x}", uart_base));
-    b.end_node();
+    builder.begin_node("aliases");
+    builder.prop_str("serial0", &format!("/uart@{:x}", uart_base));
+    builder.end_node();
 
-    b.begin_node("chosen");
-    b.prop_str("bootargs", bootargs);
-    b.prop_str("stdout-path", "serial0:115200n8");
+    builder.begin_node("chosen");
+    builder.prop_str("bootargs", bootargs);
+    builder.prop_str("stdout-path", "serial0:115200n8");
     if initrd_start != 0 {
-        b.prop_u64("linux,initrd-start", initrd_start);
-        b.prop_u64("linux,initrd-end", initrd_end);
+        builder.prop_u64("linux,initrd-start", initrd_start);
+        builder.prop_u64("linux,initrd-end", initrd_end);
     }
-    b.end_node();
+    builder.end_node();
 
     // cpus
-    b.begin_node("cpus");
-    b.prop_u32("#address-cells", 1);
-    b.prop_u32("#size-cells", 0);
-    b.prop_u32("timebase-frequency", timebase_freq as u32);
+    builder.begin_node("cpus");
+    builder.prop_u32("#address-cells", 1);
+    builder.prop_u32("#size-cells", 0);
+    builder.prop_u32("timebase-frequency", timebase_freq as u32);
 
-    b.begin_node("cpu@0");
-    b.prop_str("device_type", "cpu");
-    b.prop_u32("reg", 0);
-    b.prop_str("status", "okay");
-    b.prop_str("compatible", "riscv");
-    b.prop_str("riscv,isa", "rv64imafdcsu_zicsr_zifencei");
-    b.prop_strlist(
+    builder.begin_node("cpu@0");
+    builder.prop_str("device_type", "cpu");
+    builder.prop_u32("reg", 0);
+    builder.prop_str("status", "okay");
+    builder.prop_str("compatible", "riscv");
+    builder.prop_str("riscv,isa", "rv64imafdcsu_zicsr_zifencei");
+    builder.prop_strlist(
         "riscv,isa-extensions",
         &["i", "m", "a", "f", "d", "c", "s", "u", "zicsr", "zifencei"],
     );
-    b.prop_str("mmu-type", "riscv,sv39");
-    b.prop_phandle(1);
+    builder.prop_str("mmu-type", "riscv,sv39");
+    builder.prop_phandle(1);
 
-    b.begin_node("interrupt-controller");
-    b.prop_u32("#interrupt-cells", 1);
-    b.prop_str("compatible", "riscv,cpu-intc");
-    b.prop_empty("interrupt-controller");
-    b.prop_phandle(2);
-    b.end_node();
+    builder.begin_node("interrupt-controller");
+    builder.prop_u32("#interrupt-cells", 1);
+    builder.prop_str("compatible", "riscv,cpu-intc");
+    builder.prop_empty("interrupt-controller");
+    builder.prop_phandle(2);
+    builder.end_node();
 
-    b.end_node(); // cpu@0
-    b.end_node(); // cpus
+    builder.end_node();
+    builder.end_node();
 
     // memory
-    b.begin_node(&format!("memory@{:x}", ram_base));
-    b.prop_str("device_type", "memory");
-    b.prop_reg(ram_base, ram_size);
-    b.end_node();
+    builder.begin_node(&format!("memory@{:x}", ram_base));
+    builder.prop_str("device_type", "memory");
+    builder.prop_reg(ram_base, ram_size);
+    builder.end_node();
 
     // cells
-    b.begin_node(&format!("clint@{:x}", clint_base));
-    b.prop_str("compatible", "riscv,clint0");
-    b.prop_cells("interrupts-extended", &[2, 3, 2, 7]);
-    b.prop_reg(clint_base, 0x000c_0000);
-    b.end_node();
+    builder.begin_node(&format!("clint@{:x}", clint_base));
+    builder.prop_str("compatible", "riscv,clint0");
+    builder.prop_cells("interrupts-extended", &[2, 3, 2, 7]);
+    builder.prop_reg(clint_base, 0x000c_0000);
+    builder.end_node();
 
     // PLIC
-    b.begin_node(&format!("plic@{:x}", plic_base));
-    b.prop_str("compatible", "sifive,plic-1.0.0");
-    b.prop_u32("#interrupt-cells", 1);
-    b.prop_u32("#address-cells", 0);
-    b.prop_empty("interrupt-controller");
-    b.prop_phandle(3);
-    b.prop_u32("riscv,ndev", 31);
+    builder.begin_node(&format!("plic@{:x}", plic_base));
+    builder.prop_str("compatible", "sifive,plic-1.0.0");
+    builder.prop_u32("#interrupt-cells", 1);
+    builder.prop_u32("#address-cells", 0);
+    builder.prop_empty("interrupt-controller");
+    builder.prop_phandle(3);
+    builder.prop_u32("riscv,ndev", 31);
 
-    b.prop_cells("interrupts-extended", &[2, 9, 2, 11]);
-    b.prop_reg(plic_base, 0x0040_0000);
-    b.end_node();
+    builder.prop_cells("interrupts-extended", &[2, 9, 2, 11]);
+    builder.prop_reg(plic_base, 0x0040_0000);
+    builder.end_node();
 
     // UART
-    b.begin_node(&format!("uart@{:x}", uart_base));
-    b.prop_str("compatible", "ns16550a");
-    b.prop_reg(uart_base, 0x100);
-    b.prop_u32("clock-frequency", 3_686_400);
-    b.prop_interrupt_parent(3);
-    b.prop_interrupts(uart_irq);
-    b.end_node();
+    builder.begin_node(&format!("uart@{:x}", uart_base));
+    builder.prop_str("compatible", "ns16550a");
+    builder.prop_reg(uart_base, 0x100);
+    builder.prop_u32("clock-frequency", 3_686_400);
+    builder.prop_interrupt_parent(3);
+    builder.prop_interrupts(uart_irq);
+    builder.end_node();
 
     let virtio_names = ["virtio-blk", "virtio-console", "virtio-net"];
     for (i, (&irq, name)) in virtio_irqs.iter().zip(virtio_names.iter()).enumerate() {
         if i == 0 && !has_blk {
             continue;
         }
+
         if i == 2 && !has_net {
             continue;
         }
+
         let base = virtio_base + i as u64 * virtio_size;
-        b.begin_node(&format!("virtio_mmio@{:x}", base));
-        b.prop_str("compatible", "virtio,mmio");
-        b.prop_reg(base, virtio_size);
-        b.prop_interrupt_parent(3);
-        b.prop_interrupts(irq);
-        b.prop_str("device", name);
-        b.end_node();
+        builder.begin_node(&format!("virtio_mmio@{:x}", base));
+        builder.prop_str("compatible", "virtio,mmio");
+        builder.prop_reg(base, virtio_size);
+        builder.prop_interrupt_parent(3);
+        builder.prop_interrupts(irq);
+        builder.prop_str("device", name);
+        builder.end_node();
     }
 
-    b.end_node(); // root
-    b.finish()
+    builder.end_node(); // root
+    builder.finish()
 }
 
 // #[cfg(test)]

@@ -37,18 +37,18 @@ fn main() -> Result<()> {
     let reg_url = cli.registry.as_deref().unwrap_or(DEFAULT_REGISTRY);
 
     match cli.command.unwrap_or(Cmd::Start {
-        snapshot: "alpine-256mb".to_string(),
+        snapshot: "alpine-3.23.0-256mb".to_string(),
     }) {
         Cmd::Start {
             snapshot: snapshot_name,
         } => {
-            let snapshot = resolve_snapshot(&snapshot_name, reg_url)?;
+            let (version, snapshot) = resolve_snapshot(&snapshot_name, reg_url)?;
 
-            run::run(run::RunConfig { snapshot })?;
+            run::run(run::RunConfig { version, snapshot })?;
         }
 
         Cmd::Pull { snapshot } => {
-            let snapshots = registry::fetch(reg_url)
+            let (_, snapshots) = registry::fetch(reg_url)
                 .context("failed to fetch registry — cannot pull without registry")?;
             let snap = registry::resolve(&snapshots, &snapshot)
                 .with_context(|| format!("unknown snapshot '{snapshot}' — run `capsulev list`"))?;
@@ -65,10 +65,10 @@ fn main() -> Result<()> {
         }
 
         Cmd::List => match registry::fetch(reg_url) {
-            Ok(snapshots) => {
+            Ok((_, snapshots)) => {
                 println!(
-                    "{:<20} {:<12} {:<10} DESCRIPTION STATUS",
-                    "NAME", "TAG", "MEMORY"
+                    "{:<25} {:<15} {:<12} {:<10} DESCRIPTION STATUS",
+                    "ID", "NAME", "TAG", "MEMORY"
                 );
 
                 for snap in &snapshots {
@@ -78,8 +78,9 @@ fn main() -> Result<()> {
                         ("  remote", "\x1b[2m")
                     };
                     println!(
-                        "{:<20} {:<12} {:<10} {}{}\x1b[0m {}",
-                        snap.display_name(),
+                        "{:<25} {:<15} {:<12} {:<10} {}{}\x1b[0m {}",
+                        snap.id,
+                        snap.name,
                         snap.tag,
                         snap.memory_label,
                         desc_style,
@@ -97,8 +98,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn resolve_snapshot(name: &str, reg_url: &str) -> Result<registry::Snapshot> {
-    if let Ok(snapshots) = registry::fetch(reg_url)
+fn resolve_snapshot(name: &str, reg_url: &str) -> Result<(String, registry::Snapshot)> {
+    if let Ok((version, snapshots)) = registry::fetch(reg_url)
         && let Some(snap) = registry::resolve(&snapshots, name)
     {
         let path = if pull::is_cached(snap) {
@@ -109,7 +110,7 @@ fn resolve_snapshot(name: &str, reg_url: &str) -> Result<registry::Snapshot> {
 
         let mut snap = snap.clone();
         snap.url = path.to_str().unwrap().to_string();
-        return Ok(snap);
+        return Ok((version, snap));
     }
 
     anyhow::bail!("snapshot '{}' not found in registry", name)

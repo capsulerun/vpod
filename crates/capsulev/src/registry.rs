@@ -6,6 +6,7 @@ pub const DEFAULT_REGISTRY: &str =
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Snapshot {
+    pub id: String,
     pub name: String,
     pub tag: String,
     pub memory_label: String,
@@ -25,10 +26,11 @@ impl Snapshot {
 
 #[derive(Debug, Deserialize)]
 struct Registry {
+    version: String,
     snapshots: Vec<Snapshot>,
 }
 
-pub fn fetch(registry_url: &str) -> Result<Vec<Snapshot>> {
+pub fn fetch(registry_url: &str) -> Result<(String, Vec<Snapshot>)> {
     let resp = reqwest::blocking::get(registry_url)
         .with_context(|| format!("failed to fetch registry from {registry_url}"))?;
 
@@ -37,7 +39,7 @@ pub fn fetch(registry_url: &str) -> Result<Vec<Snapshot>> {
     }
 
     let reg: Registry = resp.json().context("failed to parse registry JSON")?;
-    Ok(reg.snapshots)
+    Ok((reg.version, reg.snapshots))
 }
 
 pub fn resolve<'a>(snapshots: &'a [Snapshot], name: &str) -> Option<&'a Snapshot> {
@@ -46,7 +48,8 @@ pub fn resolve<'a>(snapshots: &'a [Snapshot], name: &str) -> Option<&'a Snapshot
         None => (name, None),
     };
 
-    snapshots
-        .iter()
-        .find(|s| s.name == want_name && want_tag.is_none_or(|t| t == "latest" || t == s.tag))
+    snapshots.iter().find(|s| {
+        s.id == name
+            || (s.name == want_name && want_tag.is_none_or(|t| t == "latest" || t == s.tag))
+    })
 }

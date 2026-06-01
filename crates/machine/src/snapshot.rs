@@ -6,48 +6,51 @@ use riscv_core::csr::PrivMode;
 use crate::LOW_RAM_SIZE;
 use crate::machine_bus::MachineBus;
 
-const MAGIC: &[u8; 4] = b"TEMU";
+const MAGIC: &[u8; 7] = b"CAPSULE";
 const VERSION: u8 = 2;
 
-pub fn save(bus: &MachineBus, hart: &Hart, w: &mut impl Write) -> io::Result<()> {
-    w.write_all(MAGIC)?;
-    w.write_all(&[VERSION])?;
+pub fn save(bus: &MachineBus, hart: &Hart, writer: &mut impl Write) -> io::Result<()> {
+    writer.write_all(MAGIC)?;
+    writer.write_all(&[VERSION])?;
 
     let ram_size = bus.ram_size();
-    w.write_all(&ram_size.to_le_bytes())?;
-    w.write_all(&bus.ram)?;
-    w.write_all(&bus.low_ram)?;
+    writer.write_all(&ram_size.to_le_bytes())?;
+    writer.write_all(&bus.ram)?;
+    writer.write_all(&bus.low_ram)?;
 
-    save_hart(hart, w)?;
-    bus.clint.save(w)?;
-    bus.plic.save(w)?;
-    bus.uart.save(w)?;
+    save_hart(hart, writer)?;
+    bus.clint.serialize(writer)?;
+    bus.plic.save_state(writer)?;
+    bus.uart.serialize(writer)?;
 
     Ok(())
 }
 
-pub fn restore(bus: &mut MachineBus, hart: &mut Hart, r: &mut impl Read) -> io::Result<()> {
-    let mut magic = [0u8; 4];
-    r.read_exact(&mut magic)?;
+pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) -> io::Result<()> {
+    let mut magic = [0u8; 7];
+    reader.read_exact(&mut magic)?;
+
     if &magic != MAGIC {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "bad snapshot magic",
+            "invalid snapshot magic",
         ));
     }
 
-    let mut ver = [0u8; 1];
-    r.read_exact(&mut ver)?;
-    if ver[0] != VERSION {
+    let mut version = [0u8; 1];
+    reader.read_exact(&mut version)?;
+
+    if version[0] != VERSION {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("unsupported snapshot version {}", ver[0]),
+            format!("unsupported snapshot version {}", version[0]),
         ));
     }
 
-    let mut b8 = [0u8; 8];
-    r.read_exact(&mut b8)?;
-    let ram_size = u64::from_le_bytes(b8);
+    let mut buffer_u64 = [0u8; 8];
+    reader.read_exact(&mut buffer_u64)?;
+
+    let ram_size = u64::from_le_bytes(buffer_u64);
     if ram_size != bus.ram_size() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -59,206 +62,209 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, r: &mut impl Read) -> io::
         ));
     }
 
-    r.read_exact(&mut bus.ram)?;
+    reader.read_exact(&mut bus.ram)?;
 
     let mut low = vec![0u8; LOW_RAM_SIZE as usize];
-    r.read_exact(&mut low)?;
+    reader.read_exact(&mut low)?;
     bus.low_ram = low;
 
-    restore_hart(hart, r)?;
-    bus.clint.restore(r)?;
-    bus.plic.restore(r)?;
-    bus.uart.restore(r)?;
+    restore_hart(hart, reader)?;
+    bus.clint.deserialize(reader)?;
+    bus.plic.restore_state(reader)?;
+    bus.uart.deserialize(reader)?;
 
     Ok(())
 }
 
-fn save_hart(hart: &Hart, w: &mut impl Write) -> io::Result<()> {
+fn save_hart(hart: &Hart, writer: &mut impl Write) -> io::Result<()> {
     for i in 0..32usize {
-        w.write_all(&hart.regs.read(i).to_le_bytes())?;
+        writer.write_all(&hart.regs.read(i).to_le_bytes())?;
     }
 
-    w.write_all(&hart.regs.pc.to_le_bytes())?;
+    writer.write_all(&hart.regs.pc.to_le_bytes())?;
     for i in 0..32usize {
-        w.write_all(&hart.regs.read_f(i).to_le_bytes())?;
+        writer.write_all(&hart.regs.read_f(i).to_le_bytes())?;
     }
 
-    let pm: u8 = match hart.priv_mode {
+    let privilege_mode: u8 = match hart.priv_mode {
         PrivMode::U => 0,
         PrivMode::S => 1,
         PrivMode::M => 3,
     };
-    w.write_all(&[pm])?;
+    writer.write_all(&[privilege_mode])?;
 
     match hart.lr_addr {
-        None => w.write_all(&[0u8])?,
-        Some(a) => {
-            w.write_all(&[1u8])?;
-            w.write_all(&a.to_le_bytes())?;
+        None => writer.write_all(&[0u8])?,
+        Some(address) => {
+            writer.write_all(&[1u8])?;
+            writer.write_all(&address.to_le_bytes())?;
         }
     }
 
-    w.write_all(&hart.fetch_vpage.to_le_bytes())?;
-    w.write_all(&hart.fetch_ppage.to_le_bytes())?;
-    w.write_all(&hart.fetch_satp.to_le_bytes())?;
+    writer.write_all(&hart.fetch_vpage.to_le_bytes())?;
+    writer.write_all(&hart.fetch_ppage.to_le_bytes())?;
+    writer.write_all(&hart.fetch_satp.to_le_bytes())?;
 
-    save_csr(hart, w)
+    save_csr(hart, writer)
 }
 
-fn restore_hart(hart: &mut Hart, r: &mut impl Read) -> io::Result<()> {
-    let mut b8 = [0u8; 8];
+fn restore_hart(hart: &mut Hart, reader: &mut impl Read) -> io::Result<()> {
+    let mut buffer_u64 = [0u8; 8];
 
     for i in 0..32usize {
-        r.read_exact(&mut b8)?;
-        hart.regs.write(i, u64::from_le_bytes(b8));
+        reader.read_exact(&mut buffer_u64)?;
+        hart.regs.write(i, u64::from_le_bytes(buffer_u64));
     }
 
-    r.read_exact(&mut b8)?;
-    hart.regs.pc = u64::from_le_bytes(b8);
+    reader.read_exact(&mut buffer_u64)?;
+    hart.regs.pc = u64::from_le_bytes(buffer_u64);
+
     for i in 0..32usize {
-        r.read_exact(&mut b8)?;
-        hart.regs.write_f(i, u64::from_le_bytes(b8));
+        reader.read_exact(&mut buffer_u64)?;
+        hart.regs.write_f(i, u64::from_le_bytes(buffer_u64));
     }
 
-    let mut b1 = [0u8; 1];
-    r.read_exact(&mut b1)?;
-    hart.priv_mode = match b1[0] {
+    let mut buffer_u8 = [0u8; 1];
+    reader.read_exact(&mut buffer_u8)?;
+    hart.priv_mode = match buffer_u8[0] {
         0 => PrivMode::U,
         1 => PrivMode::S,
         _ => PrivMode::M,
     };
 
-    r.read_exact(&mut b1)?;
-    hart.lr_addr = if b1[0] == 0 {
+    reader.read_exact(&mut buffer_u8)?;
+    hart.lr_addr = if buffer_u8[0] == 0 {
         None
     } else {
-        r.read_exact(&mut b8)?;
-        Some(u64::from_le_bytes(b8))
+        reader.read_exact(&mut buffer_u64)?;
+        Some(u64::from_le_bytes(buffer_u64))
     };
 
-    r.read_exact(&mut b8)?;
-    hart.fetch_vpage = u64::from_le_bytes(b8);
-    r.read_exact(&mut b8)?;
-    hart.fetch_ppage = u64::from_le_bytes(b8);
-    r.read_exact(&mut b8)?;
-    hart.fetch_satp = u64::from_le_bytes(b8);
+    reader.read_exact(&mut buffer_u64)?;
+    hart.fetch_vpage = u64::from_le_bytes(buffer_u64);
 
-    restore_csr(hart, r)
+    reader.read_exact(&mut buffer_u64)?;
+    hart.fetch_ppage = u64::from_le_bytes(buffer_u64);
+
+    reader.read_exact(&mut buffer_u64)?;
+    hart.fetch_satp = u64::from_le_bytes(buffer_u64);
+
+    restore_csr(hart, reader)
 }
 
-fn save_csr(hart: &Hart, w: &mut impl Write) -> io::Result<()> {
-    let c = &hart.csr;
+fn save_csr(hart: &Hart, writer: &mut impl Write) -> io::Result<()> {
+    let csr_state = &hart.csr;
 
-    macro_rules! wu64 {
+    macro_rules! write_u64 {
         ($f:expr) => {
-            w.write_all(&$f.to_le_bytes())?
+            writer.write_all(&$f.to_le_bytes())?
         };
     }
-    wu64!(c.mstatus);
-    wu64!(c.misa);
-    wu64!(c.medeleg);
-    wu64!(c.mideleg);
-    wu64!(c.mie);
-    wu64!(c.mtvec);
-    wu64!(c.mcounteren);
-    wu64!(c.mcountinhibit);
-    wu64!(c.mscratch);
-    wu64!(c.mepc);
-    wu64!(c.mcause);
-    wu64!(c.mtval);
-    wu64!(c.mip);
-    wu64!(c.menvcfg);
-    wu64!(c.stvec);
-    wu64!(c.scounteren);
-    wu64!(c.senvcfg);
-    wu64!(c.sscratch);
-    wu64!(c.sepc);
-    wu64!(c.scause);
-    wu64!(c.stval);
-    wu64!(c.satp);
-    wu64!(c.cycle);
-    wu64!(c.instret);
-    wu64!(c.time);
-    wu64!(c.fcsr);
-    wu64!(c.vtype);
-    wu64!(c.vl);
-    wu64!(c.vstart);
-    wu64!(c.vcsr);
+    write_u64!(csr_state.mstatus);
+    write_u64!(csr_state.misa);
+    write_u64!(csr_state.medeleg);
+    write_u64!(csr_state.mideleg);
+    write_u64!(csr_state.mie);
+    write_u64!(csr_state.mtvec);
+    write_u64!(csr_state.mcounteren);
+    write_u64!(csr_state.mcountinhibit);
+    write_u64!(csr_state.mscratch);
+    write_u64!(csr_state.mepc);
+    write_u64!(csr_state.mcause);
+    write_u64!(csr_state.mtval);
+    write_u64!(csr_state.mip);
+    write_u64!(csr_state.menvcfg);
+    write_u64!(csr_state.stvec);
+    write_u64!(csr_state.scounteren);
+    write_u64!(csr_state.senvcfg);
+    write_u64!(csr_state.sscratch);
+    write_u64!(csr_state.sepc);
+    write_u64!(csr_state.scause);
+    write_u64!(csr_state.stval);
+    write_u64!(csr_state.satp);
+    write_u64!(csr_state.cycle);
+    write_u64!(csr_state.instret);
+    write_u64!(csr_state.time);
+    write_u64!(csr_state.fcsr);
+    write_u64!(csr_state.vtype);
+    write_u64!(csr_state.vl);
+    write_u64!(csr_state.vstart);
+    write_u64!(csr_state.vcsr);
 
-    for v in &c.pmpcfg {
-        wu64!(v);
+    for value in &csr_state.pmpcfg {
+        write_u64!(value);
     }
-    for v in &c.pmpaddr {
-        wu64!(v);
+    for value in &csr_state.pmpaddr {
+        write_u64!(value);
     }
-    for v in &c.mhpmevent {
-        wu64!(v);
+    for value in &csr_state.mhpmevent {
+        write_u64!(value);
     }
 
     for vreg in hart.vregs.iter() {
-        w.write_all(vreg)?;
+        writer.write_all(vreg)?;
     }
     Ok(())
 }
 
-fn restore_csr(hart: &mut Hart, r: &mut impl Read) -> io::Result<()> {
-    let c = &mut hart.csr;
-    let mut b = [0u8; 8];
+fn restore_csr(hart: &mut Hart, reader: &mut impl Read) -> io::Result<()> {
+    let csr_state = &mut hart.csr;
+    let mut buffer = [0u8; 8];
 
-    macro_rules! ru64 {
+    macro_rules! read_u64 {
         ($f:expr) => {
-            r.read_exact(&mut b)?;
-            $f = u64::from_le_bytes(b);
+            reader.read_exact(&mut buffer)?;
+            $f = u64::from_le_bytes(buffer);
         };
     }
-    ru64!(c.mstatus);
-    ru64!(c.misa);
-    ru64!(c.medeleg);
-    ru64!(c.mideleg);
-    ru64!(c.mie);
-    ru64!(c.mtvec);
-    ru64!(c.mcounteren);
-    ru64!(c.mcountinhibit);
-    ru64!(c.mscratch);
-    ru64!(c.mepc);
-    ru64!(c.mcause);
-    ru64!(c.mtval);
-    ru64!(c.mip);
-    ru64!(c.menvcfg);
-    ru64!(c.stvec);
-    ru64!(c.scounteren);
-    ru64!(c.senvcfg);
-    ru64!(c.sscratch);
-    ru64!(c.sepc);
-    ru64!(c.scause);
-    ru64!(c.stval);
-    ru64!(c.satp);
-    ru64!(c.cycle);
-    ru64!(c.instret);
-    ru64!(c.time);
-    ru64!(c.fcsr);
-    ru64!(c.vtype);
-    ru64!(c.vl);
-    ru64!(c.vstart);
-    ru64!(c.vcsr);
+    read_u64!(csr_state.mstatus);
+    read_u64!(csr_state.misa);
+    read_u64!(csr_state.medeleg);
+    read_u64!(csr_state.mideleg);
+    read_u64!(csr_state.mie);
+    read_u64!(csr_state.mtvec);
+    read_u64!(csr_state.mcounteren);
+    read_u64!(csr_state.mcountinhibit);
+    read_u64!(csr_state.mscratch);
+    read_u64!(csr_state.mepc);
+    read_u64!(csr_state.mcause);
+    read_u64!(csr_state.mtval);
+    read_u64!(csr_state.mip);
+    read_u64!(csr_state.menvcfg);
+    read_u64!(csr_state.stvec);
+    read_u64!(csr_state.scounteren);
+    read_u64!(csr_state.senvcfg);
+    read_u64!(csr_state.sscratch);
+    read_u64!(csr_state.sepc);
+    read_u64!(csr_state.scause);
+    read_u64!(csr_state.stval);
+    read_u64!(csr_state.satp);
+    read_u64!(csr_state.cycle);
+    read_u64!(csr_state.instret);
+    read_u64!(csr_state.time);
+    read_u64!(csr_state.fcsr);
+    read_u64!(csr_state.vtype);
+    read_u64!(csr_state.vl);
+    read_u64!(csr_state.vstart);
+    read_u64!(csr_state.vcsr);
 
-    for v in c.pmpcfg.iter_mut() {
-        r.read_exact(&mut b)?;
-        *v = u64::from_le_bytes(b);
+    for value in csr_state.pmpcfg.iter_mut() {
+        reader.read_exact(&mut buffer)?;
+        *value = u64::from_le_bytes(buffer);
     }
 
-    for v in c.pmpaddr.iter_mut() {
-        r.read_exact(&mut b)?;
-        *v = u64::from_le_bytes(b);
+    for value in csr_state.pmpaddr.iter_mut() {
+        reader.read_exact(&mut buffer)?;
+        *value = u64::from_le_bytes(buffer);
     }
 
-    for v in c.mhpmevent.iter_mut() {
-        r.read_exact(&mut b)?;
-        *v = u64::from_le_bytes(b);
+    for value in csr_state.mhpmevent.iter_mut() {
+        reader.read_exact(&mut buffer)?;
+        *value = u64::from_le_bytes(buffer);
     }
 
     for vreg in hart.vregs.iter_mut() {
-        r.read_exact(vreg)?;
+        reader.read_exact(vreg)?;
     }
 
     Ok(())

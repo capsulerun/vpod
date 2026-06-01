@@ -27,7 +27,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Build WASM component
-        run: cargo build --release --target wasm32-wasip2 -p wasm-component
+        run: cargo build --release --target wasm32-wasip2 -p wasi-component
 
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -46,7 +46,7 @@ jobs:
           targets: wasm32-wasip2
 
       - name: Build WASM component
-        run: cargo build --release --target wasm32-wasip2 -p wasm-component
+        run: cargo build --release --target wasm32-wasip2 -p wasi-component
 
       - name: Run cargo test
         run: cargo test --all --verbose
