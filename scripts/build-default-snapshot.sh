@@ -159,7 +159,9 @@ fi
 
 export TERM=dumb
 export ENV=''
-exec setsid sh -c 'exec sh </dev/ttyS0 >/dev/ttyS0 2>&1'
+unset HISTFILE
+set +o history 2>/dev/null || true
+exec setsid sh -c 'HISTFILE=/dev/null HISTSIZE=0 exec sh </dev/ttyS0 >/dev/ttyS0 2>&1'
 INIT_EOF
 chmod +x "$OVERLAY/sbin/init"
 ln -sf /sbin/init "$OVERLAY/init"
@@ -186,7 +188,7 @@ cat "$PART_MINI" "$PART_OVL" > "$OUT"
 rm -f "$PART_MINI" "$PART_OVL"
 echo "   Done: $OUT ($(du -sh "$OUT" | cut -f1))"
 
-SNAP="$ROOT/dist/alpine.snap"
+SNAP="$ROOT/dist/alpine-3.23.0-256mb.snap"
 BOOTARGS="root=/dev/ram0 rw console=ttyS0 earlycon init=/sbin/init"
 
 echo "── Booting guest to pre-install ca-certificates + python3..."
@@ -197,7 +199,8 @@ echo "── Booting guest to pre-install ca-certificates + python3..."
     --ram "$RAM_MB" \
     --bootargs "$BOOTARGS" \
     --net \
-    --setup "sed -i 's|https://|http://|g' /etc/apk/repositories; apk update --allow-untrusted; apk add --allow-untrusted ca-certificates python3 py3-pip; sed -i 's|http://|https://|g' /etc/apk/repositories" \
+    --setup "sed -i 's|https://|http://|g' /etc/apk/repositories; apk update --allow-untrusted; apk add --allow-untrusted ca-certificates python3 py3-pip; sed -i 's|http://|https://|g' /etc/apk/repositories; sync" \
+    --setup "HISTFILE=/dev/null HISTSIZE=0 exec sh" \
     --snapshot-save "$SNAP"
 
 echo ""

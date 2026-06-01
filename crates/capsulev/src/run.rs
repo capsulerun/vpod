@@ -11,6 +11,7 @@ use wasmtime_wasi::{DirPerms, FilePerms, IoView, WasiCtx, WasiCtxBuilder, WasiVi
 static WASM_BYTES: &[u8] = include_bytes!(env!("CAPSULEV_WASM_PATH"));
 
 pub struct RunConfig {
+    pub version: String,
     pub snapshot: Snapshot,
 }
 
@@ -66,16 +67,16 @@ impl Drop for RawTerminal {
     }
 }
 
-fn cwasm_cache_path() -> PathBuf {
+fn cwasm_cache_path(version: &str) -> PathBuf {
     let base = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".local/share"));
     let hash = hex::encode(&Sha256::digest(WASM_BYTES)[..8]);
 
     base.join("capsulev")
-        .join(format!("component-{hash}.cwasm"))
+        .join(format!("component-{version}-{hash}.cwasm"))
 }
 
-fn load_component(engine: &Engine) -> Result<Component> {
-    let cache = cwasm_cache_path();
+fn load_component(engine: &Engine, version: &str) -> Result<Component> {
+    let cache = cwasm_cache_path(version);
 
     if cache.exists() {
         if let Ok(c) = unsafe { Component::deserialize_file(engine, &cache) } {
@@ -107,7 +108,7 @@ pub fn run(cfg: RunConfig) -> Result<()> {
     let mut config = Config::new();
     config.wasm_component_model(true);
     let engine = Engine::new(&config)?;
-    let component = load_component(&engine)?;
+    let component = load_component(&engine, &cfg.version)?;
 
     // For clear loading message
     eprint!("\r\x1b[2K");
