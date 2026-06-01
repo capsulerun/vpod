@@ -48,7 +48,8 @@ pub fn resolve<'a>(snapshots: &'a [Snapshot], name: &str) -> Option<&'a Snapshot
         None => (name, None),
     };
 
-    snapshots
-        .iter()
-        .find(|s| s.id == name || (s.name == want_name && want_tag.is_none_or(|t| t == "latest" || t == s.tag)))
+    snapshots.iter().find(|s| {
+        s.id == name
+            || (s.name == want_name && want_tag.is_none_or(|t| t == "latest" || t == s.tag))
+    })
 }
