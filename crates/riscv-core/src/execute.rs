@@ -48,9 +48,9 @@ pub struct ExecContext<'a, B: SystemBus> {
 
     pub icache_tags: &'a mut Box<[u64; ICACHE_SIZE]>,
     pub icache_data: &'a mut Box<[u32; ICACHE_SIZE]>,
+    pub is_waiting: &'a mut bool,
 }
 
-// Full invalidation
 fn invalidate_fetch_cache<B: SystemBus>(ctx: &mut ExecContext<B>) {
     *ctx.fetch_vpage = u64::MAX;
 
@@ -71,7 +71,7 @@ pub fn run<B: SystemBus>(ctx: &mut ExecContext<B>, max_steps: u64) -> StepResult
 pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
     if let Some(irq) = ctx.csr.pending_interrupt(*ctx.priv_mode) {
         *ctx.fetch_vpage = u64::MAX;
-
+        *ctx.is_waiting = false;
         return take_interrupt(ctx, irq);
     }
 
@@ -631,7 +631,9 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
             }
             0x105 => {
                 // WFI
+                *ctx.is_waiting = true;
                 ctx.regs.pc = pc.wrapping_add(4);
+
                 return StepResult::Ok;
             }
             other if (other >> 5) == 0x09 => {

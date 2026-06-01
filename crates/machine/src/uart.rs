@@ -109,6 +109,14 @@ impl Uart {
         self.tx_buf.replace(Vec::new())
     }
 
+    pub fn tx_is_empty(&self) -> bool {
+        let buf = self.tx_buf.take();
+        let empty = buf.is_empty();
+        self.tx_buf.set(buf);
+
+        empty
+    }
+
     pub fn drain_rx(&self) {
         self.rx_buf.set(std::collections::VecDeque::new());
     }
@@ -119,6 +127,13 @@ impl Uart {
 
         self.rx_buf.set(buf);
         self.update_irq();
+    }
+
+    pub fn rx_pending(&self) -> bool {
+        let buf = self.rx_buf.take();
+        let pending = !buf.is_empty();
+        self.rx_buf.set(buf);
+        pending
     }
 
     fn dlab(&self) -> bool {

@@ -1,0 +1,214 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use crate::registry::Snapshot;
+use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
+use wasmtime::component::{Component, Linker, ResourceTable};
+use wasmtime::{Config, Engine, Store};
+use wasmtime_wasi::{DirPerms, FilePerms, IoView, WasiCtx, WasiCtxBuilder, WasiView};
+
+static WASM_BYTES: &[u8] = include_bytes!(env!("CAPSULEV_WASM_PATH"));
+
+pub struct RunConfig {
+    pub snapshot: Snapshot,
+}
+
+struct State {
+    wasi: WasiCtx,
+    table: ResourceTable,
+}
+
+impl IoView for State {
+    fn table(&mut self) -> &mut ResourceTable {
+        &mut self.table
+    }
+}
+
+impl WasiView for State {
+    fn ctx(&mut self) -> &mut WasiCtx {
+        &mut self.wasi
+    }
+}
+
+struct RawTerminal {
+    saved: libc::termios,
+}
+
+impl RawTerminal {
+    fn enter() -> Option<Self> {
+        if unsafe { libc::isatty(libc::STDIN_FILENO) } == 0 {
+            return None;
+        }
+
+        unsafe {
+            let mut t: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(libc::STDIN_FILENO, &mut t) != 0 {
+                return None;
+            }
+
+            let saved = t;
+            libc::cfmakeraw(&mut t);
+            t.c_lflag |= libc::ISIG;
+            t.c_oflag |= libc::OPOST;
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &t);
+
+            Some(Self { saved })
+        }
+    }
+}
+
+impl Drop for RawTerminal {
+    fn drop(&mut self) {
+        unsafe {
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &self.saved);
+        }
+    }
+}
+
+fn cwasm_cache_path() -> PathBuf {
+    let base = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".local/share"));
+    let hash = hex::encode(&Sha256::digest(WASM_BYTES)[..8]);
+
+    base.join("capsulev")
+        .join(format!("component-{hash}.cwasm"))
+}
+
+fn load_component(engine: &Engine) -> Result<Component> {
+    let cache = cwasm_cache_path();
+
+    if cache.exists() {
+        if let Ok(c) = unsafe { Component::deserialize_file(engine, &cache) } {
+            return Ok(c);
+        }
+        fs::remove_file(&cache).ok();
+    }
+
+    let component =
+        Component::from_binary(engine, WASM_BYTES).context("failed to compile wasm component")?;
+
+    if let Some(parent) = cache.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+
+    if let Ok(bytes) = component.serialize() {
+        fs::write(&cache, bytes).ok();
+    }
+
+    Ok(component)
+}
+
+pub fn run(cfg: RunConfig) -> Result<()> {
+    eprint!("\x1b]0;capsulev ({})\x07", cfg.snapshot.display_name());
+    print_header(&cfg.snapshot);
+
+    eprint!("  \x1b[2mLoading...\x1b[0m");
+
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    let engine = Engine::new(&config)?;
+    let component = load_component(&engine)?;
+
+    // For clear loading message
+    eprint!("\r\x1b[2K");
+    let _raw = RawTerminal::enter();
+    unsafe {
+        libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH);
+    }
+    eprint!("\r~ # ");
+
+    let snap_path = Path::new(&cfg.snapshot.url);
+    let snap_dir = snap_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+
+    let snap_file = snap_path
+        .file_name()
+        .context("snapshot path has no filename")?
+        .to_str()
+        .context("snapshot filename is not valid UTF-8")?
+        .to_string();
+
+    let wasm_args = vec![
+        "capsulev-wasi".to_string(),
+        "--snapshot-load".to_string(),
+        format!("snap/{snap_file}"),
+    ];
+
+    let mut builder = WasiCtxBuilder::new();
+    builder.inherit_stdin().inherit_stdout().inherit_stderr();
+    builder.args(&wasm_args);
+    builder.preopened_dir(&snap_dir, "snap", DirPerms::READ, FilePerms::READ)?;
+
+    let state = State {
+        wasi: builder.build(),
+        table: ResourceTable::new(),
+    };
+    let mut store = Store::new(&engine, state);
+
+    let mut linker: Linker<State> = Linker::new(&engine);
+    wasmtime_wasi::add_to_linker_sync(&mut linker)?;
+
+    let command =
+        wasmtime_wasi::bindings::sync::Command::instantiate(&mut store, &component, &linker)
+            .context("failed to instantiate wasm component")?;
+
+    let result = command.wasi_cli_run().call_run(&mut store);
+
+    handle_result(result)
+}
+
+fn print_header(snap: &Snapshot) {
+    eprintln!(
+        "\x1b[1mcapsulev\x1b[0m  \x1b[2m{} {} · {}\x1b[0m",
+        snap.display_name(),
+        snap.tag,
+        snap.memory_label
+    );
+}
+
+// struct Spinner {
+//     stop: Arc<AtomicBool>,
+//     handle: Option<std::thread::JoinHandle<()>>,
+// }
+
+// impl Spinner {
+//     fn start(msg: &'static str) -> Self {
+//         let stop = Arc::new(AtomicBool::new(false));
+//         let stop_clone = stop.clone();
+
+//         let handle = std::thread::spawn(move || {
+//             const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+//             let mut i = 0;
+//             while !stop_clone.load(Ordering::Relaxed) {
+//                 eprint!("\r  \x1b[2m{} {msg}\x1b[0m", FRAMES[i % FRAMES.len()]);
+//                 i += 1;
+//                 std::thread::sleep(std::time::Duration::from_millis(80));
+//             }
+
+//             eprint!("\r\x1b[2K");
+//         });
+
+//         Self { stop, handle: Some(handle) }
+//     }
+// }
+
+// impl Drop for Spinner {
+//     fn drop(&mut self) {
+//         self.stop.store(true, Ordering::Relaxed);
+//         if let Some(h) = self.handle.take() {
+//             h.join().ok();
+//         }
+//     }
+// }
+
+fn handle_result(result: anyhow::Result<Result<(), ()>>) -> Result<()> {
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(())) => std::process::exit(1),
+        Err(e) => {
+            if let Some(exit) = e.downcast_ref::<wasmtime_wasi::I32Exit>() {
+                std::process::exit(exit.0);
+            }
+            Err(e.context("component run failed"))
+        }
+    }
+}

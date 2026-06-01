@@ -21,9 +21,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-wasip2
 
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+      - name: Build WASM component
+        run: cargo build --release --target wasm32-wasip2 -p wasm-component
 
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -38,6 +42,11 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Build WASM component
+        run: cargo build --release --target wasm32-wasip2 -p wasm-component
 
       - name: Run cargo test
         run: cargo test --all --verbose

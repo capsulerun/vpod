@@ -112,6 +112,10 @@ impl MachineBus {
         self.net.as_ref().is_some_and(|n| n.rx_pending())
     }
 
+    pub fn has_pending_io(&self) -> bool {
+        self.uart.rx_pending() || self.net_rx_pending()
+    }
+
     pub fn drain_console_tx(&mut self) -> Vec<u8> {
         let bytes = self.console.tx_buf.clone();
         self.console.tx_buf.clear();
@@ -120,6 +124,12 @@ impl MachineBus {
 
     pub fn flush_console_to_stdout(&mut self) {
         self.console.flush_tx_to_stdout();
+    }
+
+    pub fn flush_console_rx(&mut self) {
+        let mask = self.ram_mask;
+        let mut ram = RamView::new(&mut self.ram, mask);
+        self.console.flush_rx(&mut ram);
     }
 
     #[inline(always)]

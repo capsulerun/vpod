@@ -30,6 +30,12 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
     loop {
         bus.clint.advance(POLL_INTERVAL);
         bus.poll(hart);
+
+        if hart.is_waiting && !bus.has_pending_io() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            continue;
+        }
+
         match hart.run(bus, POLL_INTERVAL) {
             StepResult::Ok => {}
             StepResult::Trap(cause) => {
