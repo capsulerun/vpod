@@ -6,11 +6,8 @@ fn main() {
     let workspace_root = manifest_dir.parent().unwrap().parent().unwrap();
 
     let candidates = [
-        // 1. Explicit env var override
         env::var("CAPSULEV_WASM").ok().map(PathBuf::from),
-        // 2. Bundled WASM in the crate directory (for crates.io users)
         Some(manifest_dir.join("wasi-component.wasm")),
-        // 3. Workspace build output (for local development)
         Some(
             workspace_root
                 .join("target")
@@ -18,7 +15,7 @@ fn main() {
                 .join("release")
                 .join("wasi-component.wasm"),
         ),
-        // 4. Dist directory
+
         Some(workspace_root.join("dist").join("capsulev.wasm")),
     ];
 

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
-use machine::machine_bus::{MachineBus, boot, boot_with_bios};
+use machine::machine_bus::{MachineBus, boot};
 use machine::snapshot;
 use riscv_core::Hart;
 
@@ -151,26 +151,19 @@ fn main() {
         let bios = bios_path.as_ref().map(read_file);
         let initrd = initrd_path.as_ref().map(read_file);
 
-        if bios.is_some() {
-            boot_with_bios(
-                &mut bus,
-                &mut hart,
-                bios.as_deref(),
-                &kernel,
-                initrd.as_deref(),
-                &bootargs,
-            );
-            eprintln!(
-                "[capsule] booting {:?} | bios {:?} | initrd {:?} | RAM {}MB | disk {:?}",
-                kpath, bios_path, initrd_path, ram_mb, disk_path
-            );
-        } else {
-            boot(&mut bus, &mut hart, &kernel, &bootargs);
-            eprintln!(
-                "[capsule] booting {:?} | RAM {}MB | disk {:?}",
-                kpath, ram_mb, disk_path
-            );
-        }
+        boot(
+            &mut bus,
+            &mut hart,
+            bios.as_deref(),
+            &kernel,
+            initrd.as_deref(),
+            &bootargs,
+        );
+
+        eprintln!(
+            "[capsule] booting {:?} | bios {:?} | initrd {:?} | RAM {}MB | disk {:?}",
+            kpath, bios_path, initrd_path, ram_mb, disk_path
+        );
     }
 
     if !setup_cmds.is_empty() {

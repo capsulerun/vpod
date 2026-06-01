@@ -35,7 +35,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, snap_save: Option<&PathBuf>, t
         } else {
             POLL_INTERVAL
         };
-        bus.clint.advance(interval);
+        bus.clint.advance_by_instructions(interval);
         bus.poll(hart);
         terminal::poll_stdin(bus, snap_save, hart);
 
@@ -188,7 +188,7 @@ fn run_trace(bus: &mut MachineBus, hart: &mut Hart, trace_insns: u64) {
     const BATCH: u64 = 8192;
     let mut total: u64 = 0;
     'outer: loop {
-        bus.clint.advance(BATCH);
+        bus.clint.advance_by_instructions(BATCH);
         bus.poll(hart);
 
         for _ in 0..BATCH {

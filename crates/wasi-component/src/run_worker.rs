@@ -28,7 +28,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
 
     const POLL_INTERVAL: u64 = 8192;
     loop {
-        bus.clint.advance(POLL_INTERVAL);
+        bus.clint.advance_by_instructions(POLL_INTERVAL);
         bus.poll(hart);
 
         if hart.is_waiting && !bus.has_pending_io() {
