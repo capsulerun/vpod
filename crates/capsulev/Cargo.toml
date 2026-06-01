@@ -7,7 +7,7 @@ license = "Apache-2.0"
 include = [
     "src/**/*",
     "build.rs",
-    "wasm-component.wasm",
+    "wasi-component.wasm",
     "README.md",
     "LICENSE*"
 ]

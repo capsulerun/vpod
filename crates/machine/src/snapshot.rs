@@ -6,7 +6,7 @@ use riscv_core::csr::PrivMode;
 use crate::LOW_RAM_SIZE;
 use crate::machine_bus::MachineBus;
 
-const MAGIC: &[u8; 4] = b"TEMU";
+const MAGIC: &[u8; 7] = b"CAPSULE";
 const VERSION: u8 = 2;
 
 pub fn save(bus: &MachineBus, hart: &Hart, w: &mut impl Write) -> io::Result<()> {
@@ -27,7 +27,7 @@ pub fn save(bus: &MachineBus, hart: &Hart, w: &mut impl Write) -> io::Result<()>
 }
 
 pub fn restore(bus: &mut MachineBus, hart: &mut Hart, r: &mut impl Read) -> io::Result<()> {
-    let mut magic = [0u8; 4];
+    let mut magic = [0u8; 7];
     r.read_exact(&mut magic)?;
     if &magic != MAGIC {
         return Err(io::Error::new(

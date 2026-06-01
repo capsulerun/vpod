@@ -13,8 +13,8 @@ RUSTUP_CARGO="$RUSTUP_HOME/toolchains/$STABLE_TC/bin/cargo"
 RUSTUP_RUSTC="$RUSTUP_HOME/toolchains/$STABLE_TC/bin/rustc"
 
 echo "[build-wasm] toolchain: $STABLE_TC"
-echo "[build-wasm] building wasm-component..."
-RUSTC="$RUSTUP_RUSTC" "$RUSTUP_CARGO" build -p wasm-component --release --target wasm32-wasip2
+echo "[build-wasm] building wasi-component..."
+RUSTC="$RUSTUP_RUSTC" "$RUSTUP_CARGO" build -p wasi-component --release --target wasm32-wasip2
 
 echo "[build-wasm] building capsulev host..."
 cargo build -p capsulev --release

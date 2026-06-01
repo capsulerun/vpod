@@ -2659,6 +2659,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasi-component"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "log",
+ "machine",
+ "riscv-core",
+ "wasi 0.14.7+wasi-0.2.4",
+]
+
+[[package]]
 name = "wasip2"
 version = "1.0.3+wasi-0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2729,17 +2740,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a929b2c61f11ba3e9bc35b50c1f25cb38e0e892c0c231ae2b8cf78d5dad4437"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "wasm-component"
-version = "0.1.0"
-dependencies = [
- "flate2",
- "log",
- "machine",
- "riscv-core",
- "wasi 0.14.7+wasi-0.2.4",
 ]
 
 [[package]]
