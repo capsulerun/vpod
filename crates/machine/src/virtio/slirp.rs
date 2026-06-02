@@ -301,7 +301,6 @@ impl SlirpBackend {
                 ));
                 ready.push(i);
             }
-
         }
 
         for i in ready.into_iter().rev() {
