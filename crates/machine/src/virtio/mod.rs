@@ -302,4 +302,69 @@ impl VirtioMmio {
             *q = VirtQueue::default();
         }
     }
+
+    pub fn serialize(&self, w: &mut impl std::io::Write) -> std::io::Result<()> {
+        w.write_all(&self.driver_features.to_le_bytes())?;
+        w.write_all(&self.status.to_le_bytes())?;
+        w.write_all(&self.int_status.to_le_bytes())?;
+        w.write_all(&(self.queue_sel as u32).to_le_bytes())?;
+        w.write_all(&(self.num_queues as u32).to_le_bytes())?;
+
+        for q in &self.queues[..self.num_queues] {
+            w.write_all(&[q.ready as u8])?;
+            w.write_all(&q.num.to_le_bytes())?;
+            w.write_all(&q.last_avail_idx.to_le_bytes())?;
+            w.write_all(&q.desc_addr.to_le_bytes())?;
+            w.write_all(&q.avail_addr.to_le_bytes())?;
+            w.write_all(&q.used_addr.to_le_bytes())?;
+        }
+
+        w.write_all(&self.config)?;
+        Ok(())
+    }
+
+    pub fn deserialize(&mut self, r: &mut impl std::io::Read) -> std::io::Result<()> {
+        let mut buf8 = [0u8; 8];
+        let mut buf4 = [0u8; 4];
+        let mut buf2 = [0u8; 2];
+        let mut buf1 = [0u8; 1];
+
+        r.read_exact(&mut buf8)?;
+        self.driver_features = u64::from_le_bytes(buf8);
+
+        r.read_exact(&mut buf4)?;
+        self.status = u32::from_le_bytes(buf4);
+
+        r.read_exact(&mut buf4)?;
+        self.int_status = u32::from_le_bytes(buf4);
+
+        r.read_exact(&mut buf4)?;
+        self.queue_sel = u32::from_le_bytes(buf4) as usize;
+
+        r.read_exact(&mut buf4)?;
+        let num_queues = u32::from_le_bytes(buf4) as usize;
+
+        for q in &mut self.queues[..num_queues] {
+            r.read_exact(&mut buf1)?;
+            q.ready = buf1[0] != 0;
+
+            r.read_exact(&mut buf4)?;
+            q.num = u32::from_le_bytes(buf4);
+
+            r.read_exact(&mut buf2)?;
+            q.last_avail_idx = u16::from_le_bytes(buf2);
+
+            r.read_exact(&mut buf8)?;
+            q.desc_addr = u64::from_le_bytes(buf8);
+
+            r.read_exact(&mut buf8)?;
+            q.avail_addr = u64::from_le_bytes(buf8);
+
+            r.read_exact(&mut buf8)?;
+            q.used_addr = u64::from_le_bytes(buf8);
+        }
+
+        r.read_exact(&mut self.config)?;
+        Ok(())
+    }
 }

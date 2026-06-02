@@ -20,12 +20,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     Start {
-        #[arg(default_value = "alpine-256mb")]
+        #[arg(default_value = "alpine-3.23.0-256mb")]
         snapshot: String,
     },
 
     Pull {
-        #[arg(default_value = "alpine-256mb")]
+        #[arg(default_value = "alpine-3.23.0-256mb")]
         snapshot: String,
     },
 
@@ -99,6 +99,28 @@ fn main() -> Result<()> {
 }
 
 fn resolve_snapshot(name: &str, reg_url: &str) -> Result<(String, registry::Snapshot)> {
+    // Try local file first (for testing)
+    // let local_paths = [
+    //     std::path::PathBuf::from(&name),
+    //     std::path::PathBuf::from("dist").join(format!("{}.snap", name)),
+    //     std::path::PathBuf::from("dist").join(&name),
+    // ];
+
+    // for path in &local_paths {
+    //     if path.exists() {
+    //         return Ok(("0.1.0".to_string(), registry::Snapshot {
+    //             id: "local".to_string(),
+    //             name: name.to_string(),
+    //             tag: "local".to_string(),
+    //             memory_label: "256MB".to_string(),
+    //             description: "Local snapshot".to_string(),
+    //             url: path.to_str().unwrap().to_string(),
+    //             size: 0,
+    //             sha256: "local".to_string(),
+    //         }));
+    //     }
+    // }
+
     if let Ok((version, snapshots)) = registry::fetch(reg_url)
         && let Some(snap) = registry::resolve(&snapshots, name)
     {

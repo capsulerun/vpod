@@ -27,19 +27,19 @@ impl VirtioBlk {
         let size = file.seek(SeekFrom::End(0))?;
         let sector_count = size / SECTOR_SIZE;
 
-        let mut dev = Self {
+        let mut device = Self {
             mmio: VirtioMmio::new(DEVICE_ID, DEVICE_FEATURES, 1),
             file,
             sector_count,
         };
 
-        let cap = sector_count.to_le_bytes();
-        dev.mmio.config[0..8].copy_from_slice(&cap);
+        let capacity = sector_count.to_le_bytes();
+        device.mmio.config[0..8].copy_from_slice(&capacity);
 
-        let blk_size = SECTOR_SIZE as u32;
-        dev.mmio.config[20..24].copy_from_slice(&blk_size.to_le_bytes());
+        let block_size = SECTOR_SIZE as u32;
+        device.mmio.config[20..24].copy_from_slice(&block_size.to_le_bytes());
 
-        Ok(dev)
+        Ok(device)
     }
 
     pub fn notify(&mut self, ram: &mut RamView) {
@@ -71,22 +71,22 @@ impl VirtioBlk {
             desc = self.mmio.queues[0].read_desc(ram, desc.next);
         }
 
-        let Some(&(hdr_addr, hdr_len)) = read_bufs.first() else {
+        let Some(&(header_address, header_length)) = read_bufs.first() else {
             return 0;
         };
 
-        if hdr_len < 16 {
+        if header_length < 16 {
             return 0;
         }
 
-        let req_type = ram.read_u32(hdr_addr);
-        let sector = ram.read_u64(hdr_addr + 8);
+        let request_type = ram.read_u32(header_address);
+        let sector = ram.read_u64(header_address + 8);
 
-        let Some(&(status_addr, _)) = write_bufs.last() else {
+        let Some(&(status_address, _)) = write_bufs.last() else {
             return 0;
         };
 
-        let status = match req_type {
+        let status = match request_type {
             BLK_T_IN => self.do_read(ram, sector, &write_bufs),
             BLK_T_OUT => self.do_write(ram, sector, &read_bufs[1..]),
             BLK_T_FLUSH => {
@@ -96,9 +96,9 @@ impl VirtioBlk {
             _ => BLK_S_UNSUPP,
         };
 
-        ram.write_u8(status_addr, status);
+        ram.write_u8(status_address, status);
 
-        let data_written: u32 = if req_type == BLK_T_IN {
+        let data_written: u32 = if request_type == BLK_T_IN {
             write_bufs
                 .iter()
                 .take(write_bufs.len().saturating_sub(1))
@@ -138,36 +138,42 @@ impl VirtioBlk {
     fn read_sectors(
         &mut self,
         ram: &mut RamView,
-        dest: u64,
-        len: u32,
+        destination: u64,
+        length: u32,
         sector: u64,
     ) -> std::io::Result<()> {
-        let end_sector = sector + len as u64 / SECTOR_SIZE;
+        let end_sector = sector + length as u64 / SECTOR_SIZE;
         if end_sector > self.sector_count {
             return Err(std::io::Error::other("sector out of range"));
         }
+
         self.file.seek(SeekFrom::Start(sector * SECTOR_SIZE))?;
 
-        let i = ((dest - crate::RAM_BASE) & ram.mask) as usize;
-        self.file.read_exact(&mut ram.ram[i..i + len as usize])?;
+        let index = ((destination - crate::RAM_BASE) & ram.mask) as usize;
+        self.file
+            .read_exact(&mut ram.ram[index..index + length as usize])?;
+
         Ok(())
     }
 
     fn write_sectors(
         &mut self,
         ram: &mut RamView,
-        src: u64,
-        len: u32,
+        source: u64,
+        length: u32,
         sector: u64,
     ) -> std::io::Result<()> {
-        let end_sector = sector + len as u64 / SECTOR_SIZE;
+        let end_sector = sector + length as u64 / SECTOR_SIZE;
         if end_sector > self.sector_count {
             return Err(std::io::Error::other("sector out of range"));
         }
 
         self.file.seek(SeekFrom::Start(sector * SECTOR_SIZE))?;
-        let i = ((src - crate::RAM_BASE) & ram.mask) as usize;
-        self.file.write_all(&ram.ram[i..i + len as usize])?;
+
+        let index = ((source - crate::RAM_BASE) & ram.mask) as usize;
+        self.file
+            .write_all(&ram.ram[index..index + length as usize])?;
+
         Ok(())
     }
 }
