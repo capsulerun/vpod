@@ -1,15 +1,10 @@
 package capsulev:sandbox@0.1.0;
 
-/// Library world for Python SDK - exports executor interface.
-/// WASI imports (filesystem, sockets, etc.) are provided by the host at runtime
-/// and do not need to be declared here for bindgen to work.
 world library {
     export executor;
 }
 
-/// Core execution interface - used by the Python SDK via wasmtime-py
 interface executor {
-    /// Result of a one-shot code execution
     record execution-result {
         stdout: string,
         stderr: string,
@@ -24,7 +19,7 @@ interface executor {
     /// prompt: byte sequence marking a ready prompt, e.g. ">>> "
     session-start: func(snapshot-path: string, command: string, prompt: string) -> result<u64, string>;
 
-    /// Execute code in an existing session (stateful, preserves interpreter state)
+    /// Execute code in an existing session (stateful)
     session-exec: func(handle: u64, code: string) -> result<string, string>;
 
     /// Close a session and free all associated VM resources

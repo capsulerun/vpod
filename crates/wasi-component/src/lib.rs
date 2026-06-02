@@ -4,7 +4,7 @@ mod vm;
 
 wit_bindgen::generate!({
     world: "library",
-    path: "wit/capsulev.wit",
+    path: "capsulev.wit",
 });
 
 use api::executor::Executor;
