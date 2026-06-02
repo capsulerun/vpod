@@ -31,8 +31,8 @@ impl VirtioConsole {
         self.rx_pending.push_back(byte);
     }
 
-    pub fn notify(&mut self, queue_idx: usize, ram: &mut RamView) {
-        match queue_idx {
+    pub fn notify(&mut self, queue_index: usize, ram: &mut RamView) {
+        match queue_index {
             QUEUE_TX => self.drain_tx(ram),
             QUEUE_RX => self.flush_rx(ram),
             _ => {}
@@ -50,16 +50,20 @@ impl VirtioConsole {
 
             loop {
                 if desc.flags & VRING_DESC_F_WRITE != 0 {
-                    let cap = desc.len as usize;
-                    let n = cap.min(self.rx_pending.len());
-                    for j in 0..n {
-                        ram.write_u8(desc.addr + j as u64, self.rx_pending.pop_front().unwrap());
+                    let capacity = desc.len as usize;
+                    let bytes_to_write = capacity.min(self.rx_pending.len());
+
+                    for offset in 0..bytes_to_write {
+                        ram.write_u8(desc.addr + offset as u64, self.rx_pending.pop_front().unwrap());
                     }
-                    total += n as u32;
+
+                    total += bytes_to_write as u32;
                 }
+
                 if desc.flags & VRING_DESC_F_NEXT == 0 {
                     break;
                 }
+
                 desc = self.mmio.queues[QUEUE_RX].read_desc(ram, desc.next);
             }
 

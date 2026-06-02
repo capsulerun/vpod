@@ -29,12 +29,15 @@ const ETHERTYPE_ARP: u16 = 0x0806;
 fn ip_proto(f: &[u8]) -> u8 {
     f[14 + 9]
 }
+
 fn ip_src(f: &[u8]) -> [u8; 4] {
     f[14 + 12..14 + 16].try_into().unwrap()
 }
+
 fn ip_dst(f: &[u8]) -> [u8; 4] {
     f[14 + 16..14 + 20].try_into().unwrap()
 }
+
 fn ip_hlen(f: &[u8]) -> usize {
     ((f[14] & 0x0f) as usize) * 4
 }
@@ -287,33 +290,20 @@ impl SlirpBackend {
         for (i, req) in self.dns_pending.iter().enumerate() {
             let mut buf = [0u8; 2048];
 
-            if let Ok((n, _)) = req.sock.recv_from(&mut buf) {
-                let udp_reply = make_udp_payload(53, req.src_port, &buf[..n]);
-                self.rx_pending.push_back(make_ip_frame(
-                    &req.guest_mac,
-                    &GW_IP,
-                    &req.src_ip,
-                    IP_PROTO_UDP,
-                    &udp_reply,
-                ));
-                ready.push(i);
+            match req.sock.recv_from(&mut buf) {
+                Ok((n, _)) => {
+                    let udp_reply = make_udp_payload(53, req.src_port, &buf[..n]);
+                    self.rx_pending.push_back(make_ip_frame(
+                        &req.guest_mac,
+                        &GW_IP,
+                        &req.src_ip,
+                        IP_PROTO_UDP,
+                        &udp_reply,
+                    ));
+                    ready.push(i);
+                }
+                Err(_) => {}
             }
-
-            // match req.sock.recv_from(&mut buf) {
-            //     Ok((n, _)) => {
-            //         let udp_reply = make_udp_payload(53, req.src_port, &buf[..n]);
-            //         self.rx_pending.push_back(make_ip_frame(
-            //             &req.guest_mac,
-            //             &GW_IP,
-            //             &req.src_ip,
-            //             IP_PROTO_UDP,
-            //             &udp_reply,
-            //         ));
-
-            //         ready.push(i);
-            //     }
-            //     Err(_) => {}
-            // }
         }
 
         for i in ready.into_iter().rev() {
@@ -559,7 +549,14 @@ impl SlirpBackend {
             let wnd_shift = parse_wnd_scale(payload, tcp_hlen);
 
             let addr = SocketAddrV4::new(Ipv4Addr::from(dst_ip), dst_port);
-            let stream = match TcpStream::connect_timeout(&addr.into(), Duration::from_secs(5)) {
+
+            #[cfg(target_family = "wasm")]
+            let stream_result = TcpStream::connect(addr);
+
+            #[cfg(not(target_family = "wasm"))]
+            let stream_result = TcpStream::connect_timeout(&addr.into(), Duration::from_secs(5));
+
+            let stream = match stream_result {
                 Ok(s) => s,
                 Err(_) => {
                     self.rx_pending.push_back(make_tcp_frame(
