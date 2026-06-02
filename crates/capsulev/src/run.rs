@@ -129,7 +129,7 @@ pub fn run(cfg: RunConfig) -> Result<()> {
         .to_string();
 
     let wasm_args = vec![
-        "capsulev-wasi".to_string(),
+        "capsulev-wasi-cli".to_string(),
         "--snapshot-load".to_string(),
         format!("snap/{snap_file}"),
     ];

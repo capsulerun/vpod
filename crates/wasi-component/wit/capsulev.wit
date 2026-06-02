@@ -1,0 +1,32 @@
+package capsulev:sandbox@0.1.0;
+
+/// Library world for Python SDK - exports executor interface.
+/// WASI imports (filesystem, sockets, etc.) are provided by the host at runtime
+/// and do not need to be declared here for bindgen to work.
+world library {
+    export executor;
+}
+
+/// Core execution interface - used by the Python SDK via wasmtime-py
+interface executor {
+    /// Result of a one-shot code execution
+    record execution-result {
+        stdout: string,
+        stderr: string,
+        exit-code: u32,
+    }
+
+    /// Execute code once in a fresh VM (stateless)
+    execute: func(snapshot-path: string, code: string) -> result<execution-result, string>;
+
+    /// Start a persistent REPL session, returns opaque session handle.
+    /// command: shell command to launch the REPL, e.g. "python3 -u -i 2>&1"
+    /// prompt: byte sequence marking a ready prompt, e.g. ">>> "
+    session-start: func(snapshot-path: string, command: string, prompt: string) -> result<u64, string>;
+
+    /// Execute code in an existing session (stateful, preserves interpreter state)
+    session-exec: func(handle: u64, code: string) -> result<string, string>;
+
+    /// Close a session and free all associated VM resources
+    session-close: func(handle: u64);
+}
