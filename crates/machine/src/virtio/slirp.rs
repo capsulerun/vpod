@@ -290,20 +290,18 @@ impl SlirpBackend {
         for (i, req) in self.dns_pending.iter().enumerate() {
             let mut buf = [0u8; 2048];
 
-            match req.sock.recv_from(&mut buf) {
-                Ok((n, _)) => {
-                    let udp_reply = make_udp_payload(53, req.src_port, &buf[..n]);
-                    self.rx_pending.push_back(make_ip_frame(
-                        &req.guest_mac,
-                        &GW_IP,
-                        &req.src_ip,
-                        IP_PROTO_UDP,
-                        &udp_reply,
-                    ));
-                    ready.push(i);
-                }
-                Err(_) => {}
+            if let Ok((n, _)) = req.sock.recv_from(&mut buf) {
+                let udp_reply = make_udp_payload(53, req.src_port, &buf[..n]);
+                self.rx_pending.push_back(make_ip_frame(
+                    &req.guest_mac,
+                    &GW_IP,
+                    &req.src_ip,
+                    IP_PROTO_UDP,
+                    &udp_reply,
+                ));
+                ready.push(i);
             }
+
         }
 
         for i in ready.into_iter().rev() {

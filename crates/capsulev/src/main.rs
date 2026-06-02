@@ -99,8 +99,7 @@ fn main() -> Result<()> {
 }
 
 fn resolve_snapshot(name: &str, reg_url: &str) -> Result<(String, registry::Snapshot)> {
-
- // Try local file first (for testing)
+    // Try local file first (for testing)
     // let local_paths = [
     //     std::path::PathBuf::from(&name),
     //     std::path::PathBuf::from("dist").join(format!("{}.snap", name)),
@@ -121,7 +120,6 @@ fn resolve_snapshot(name: &str, reg_url: &str) -> Result<(String, registry::Snap
     //         }));
     //     }
     // }
-
 
     if let Ok((version, snapshots)) = registry::fetch(reg_url)
         && let Some(snap) = registry::resolve(&snapshots, name)

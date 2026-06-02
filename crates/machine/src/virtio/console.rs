@@ -54,7 +54,10 @@ impl VirtioConsole {
                     let bytes_to_write = capacity.min(self.rx_pending.len());
 
                     for offset in 0..bytes_to_write {
-                        ram.write_u8(desc.addr + offset as u64, self.rx_pending.pop_front().unwrap());
+                        ram.write_u8(
+                            desc.addr + offset as u64,
+                            self.rx_pending.pop_front().unwrap(),
+                        );
                     }
 
                     total += bytes_to_write as u32;

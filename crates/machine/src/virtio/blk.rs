@@ -150,7 +150,8 @@ impl VirtioBlk {
         self.file.seek(SeekFrom::Start(sector * SECTOR_SIZE))?;
 
         let index = ((destination - crate::RAM_BASE) & ram.mask) as usize;
-        self.file.read_exact(&mut ram.ram[index..index + length as usize])?;
+        self.file
+            .read_exact(&mut ram.ram[index..index + length as usize])?;
 
         Ok(())
     }
@@ -170,7 +171,8 @@ impl VirtioBlk {
         self.file.seek(SeekFrom::Start(sector * SECTOR_SIZE))?;
 
         let index = ((source - crate::RAM_BASE) & ram.mask) as usize;
-        self.file.write_all(&ram.ram[index..index + length as usize])?;
+        self.file
+            .write_all(&ram.ram[index..index + length as usize])?;
 
         Ok(())
     }
