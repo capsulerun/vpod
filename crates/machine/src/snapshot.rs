@@ -7,7 +7,7 @@ use crate::LOW_RAM_SIZE;
 use crate::machine_bus::MachineBus;
 
 const MAGIC: &[u8; 7] = b"CAPSULE";
-const VERSION: u8 = 2;
+const VERSION: u8 = 3;
 
 pub fn save(bus: &MachineBus, hart: &Hart, writer: &mut impl Write) -> io::Result<()> {
     writer.write_all(MAGIC)?;
@@ -22,6 +22,14 @@ pub fn save(bus: &MachineBus, hart: &Hart, writer: &mut impl Write) -> io::Resul
     bus.clint.serialize(writer)?;
     bus.plic.save_state(writer)?;
     bus.uart.serialize(writer)?;
+
+    bus.console.mmio.serialize(writer)?;
+
+    let has_net = bus.net.is_some();
+    writer.write_all(&[has_net as u8])?;
+    if let Some(net) = &bus.net {
+        net.mmio.serialize(writer)?;
+    }
 
     Ok(())
 }
@@ -72,6 +80,19 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
     bus.clint.deserialize(reader)?;
     bus.plic.restore_state(reader)?;
     bus.uart.deserialize(reader)?;
+
+    bus.console.mmio.deserialize(reader)?;
+
+    let mut has_net = [0u8; 1];
+    reader.read_exact(&mut has_net)?;
+    if has_net[0] != 0 {
+        if let Some(net) = &mut bus.net {
+            net.mmio.deserialize(reader)?;
+        } else {
+            let mut skip = crate::virtio::VirtioMmio::new(0, 0, 2);
+            skip.deserialize(reader)?;
+        }
+    }
 
     Ok(())
 }

@@ -138,6 +138,9 @@ pub fn run(cfg: RunConfig) -> Result<()> {
     builder.inherit_stdin().inherit_stdout().inherit_stderr();
     builder.args(&wasm_args);
     builder.preopened_dir(&snap_dir, "snap", DirPerms::READ, FilePerms::READ)?;
+    builder.inherit_network();
+    builder.allow_ip_name_lookup(true);
+    builder.allow_blocking_current_thread(true);
 
     let state = State {
         wasi: builder.build(),

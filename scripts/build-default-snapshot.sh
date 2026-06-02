@@ -158,10 +158,11 @@ if [ -c /dev/hvc0 ]; then
 fi
 
 export TERM=dumb
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 export ENV=''
 unset HISTFILE
 set +o history 2>/dev/null || true
-exec setsid sh -c 'HISTFILE=/dev/null HISTSIZE=0 exec sh </dev/ttyS0 >/dev/ttyS0 2>&1'
+exec setsid sh -c 'HISTFILE=/dev/null HISTSIZE=0 SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt exec sh </dev/ttyS0 >/dev/ttyS0 2>&1'
 INIT_EOF
 chmod +x "$OVERLAY/sbin/init"
 ln -sf /sbin/init "$OVERLAY/init"
@@ -199,7 +200,7 @@ echo "── Booting guest to pre-install ca-certificates + python3..."
     --ram "$RAM_MB" \
     --bootargs "$BOOTARGS" \
     --net \
-    --setup "sed -i 's|https://|http://|g' /etc/apk/repositories; apk update --allow-untrusted; apk add --allow-untrusted ca-certificates python3 py3-pip; sed -i 's|http://|https://|g' /etc/apk/repositories; sync" \
+    --setup "date -s '$(date -u '+%Y-%m-%d %H:%M:%S')'; sed -i 's|https://|http://|g' /etc/apk/repositories; apk update --allow-untrusted; apk add --allow-untrusted ca-certificates python3 py3-pip; sed -i 's|http://|https://|g' /etc/apk/repositories; sync" \
     --setup "HISTFILE=/dev/null HISTSIZE=0 exec sh" \
     --snapshot-save "$SNAP"
 

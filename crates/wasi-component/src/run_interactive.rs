@@ -6,12 +6,19 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
     let stdin = wasi::cli::stdin::get_stdin();
 
     const POLL_INTERVAL: u64 = 32768;
+    const POLL_INTERVAL_NET: u64 = 4096;
     const IDLE_THRESHOLD: u32 = 64;
 
     let mut idle_count = 0u32;
 
     loop {
-        bus.clint.advance_by_instructions(POLL_INTERVAL);
+        let interval = if bus.net_rx_pending() {
+            POLL_INTERVAL_NET
+        } else {
+            POLL_INTERVAL
+        };
+
+        bus.clint.advance_by_instructions(interval);
         bus.poll(hart);
 
         if poll_stdin(bus, &stdin) {
@@ -22,7 +29,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
         flush_console(bus);
 
         if hart.is_waiting {
-            if idle_count >= IDLE_THRESHOLD {
+            if idle_count >= IDLE_THRESHOLD && !bus.has_pending_io() {
                 let sleep_ms = if idle_count < IDLE_THRESHOLD + 5 {
                     1
                 } else if idle_count < IDLE_THRESHOLD + 20 {
@@ -31,7 +38,6 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
                     10
                 };
                 std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
-                continue;
             }
             hart.is_waiting = false;
             idle_count += 1;
@@ -39,7 +45,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
             idle_count = 0;
         }
 
-        match hart.run(bus, POLL_INTERVAL) {
+        match hart.run(bus, interval) {
             StepResult::Ok => {}
             StepResult::Trap(cause) => {
                 eprintln!(
