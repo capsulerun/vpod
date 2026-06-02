@@ -7,13 +7,13 @@ fn main() {
 
     let candidates = [
         env::var("CAPSULEV_WASM").ok().map(PathBuf::from),
-        Some(manifest_dir.join("wasi-component.wasm")),
+        Some(manifest_dir.join("capsulev-wasi-cli.wasm")),
         Some(
             workspace_root
                 .join("target")
                 .join("wasm32-wasip2")
                 .join("release")
-                .join("wasi-component.wasm"),
+                .join("capsulev-wasi-cli.wasm"),
         ),
         Some(workspace_root.join("dist").join("capsulev.wasm")),
     ];
@@ -23,10 +23,9 @@ fn main() {
         .flatten()
         .find(|p| p.exists())
         .expect(
-            "wasi-component.wasm not found. Build it with:\n  \
-             cargo build --release --target wasm32-wasip2 -p wasi-component\n  \
-             cp target/wasm32-wasip2/release/wasi-component.wasm crates/capsulev/\n\
-             Or set CAPSULEV_WASM=/path/to/wasi-component.wasm",
+            "capsulev-wasi-cli.wasm not found. Build it with:\n  \
+             cargo build --release --target wasm32-wasip2 -p wasi-component --bin capsulev-wasi-cli\n\
+             Or set CAPSULEV_WASM=/path/to/capsulev-wasi-cli.wasm",
         );
 
     println!("cargo:rustc-env=CAPSULEV_WASM_PATH={}", wasm_path.display());
