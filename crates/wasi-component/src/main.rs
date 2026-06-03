@@ -5,7 +5,7 @@ mod vm;
 use std::path::PathBuf;
 
 fn usage() -> ! {
-    eprintln!("usage: capsulev-wasi-cli --snapshot-load <file> [--disk <img>]");
+    eprintln!("usage: vpod-wasi-cli --snapshot-load <file> [--disk <img>]");
     std::process::exit(1);
 }
 

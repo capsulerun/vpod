@@ -1,5 +1,5 @@
 [package]
-name = "capsulev"
+name = "vpod"
 version = "0.1.0"
 edition.workspace = true
 description = "RISC-V Linux container runtime"
@@ -13,7 +13,7 @@ include = [
 ]
 
 [[bin]]
-name = "capsulev"
+name = "vpod"
 path = "src/main.rs"
 
 [dependencies]

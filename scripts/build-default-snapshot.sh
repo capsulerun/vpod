@@ -36,7 +36,7 @@ OPENSBI_FW="$ROOT/dist/fw_jump.bin"
 OPENSBI_URL="https://github.com/riscv-software-src/opensbi/releases/download/v${OPENSBI_VERSION}/opensbi-${OPENSBI_VERSION}-rv-bin.tar.xz"
 OPENSBI_TAR="$ROOT/dist/opensbi-${OPENSBI_VERSION}-rv-bin.tar.xz"
 OVERLAY="$ROOT/dist/agent-overlay"
-CAPSULEV="$ROOT/target/release/capsulev-native"
+VPOD="$ROOT/target/release/vpod-native"
 
 echo "=== Capsulev snapshot builder ==="
 echo "Alpine : ${ALPINE_VERSION}"
@@ -61,11 +61,11 @@ echo "   OK"
 
 mkdir -p "$ROOT/dist" "$ALPINE_DIR"
 
-if [ ! -f "$CAPSULEV" ]; then
-    echo "── Building capsulev..."
-    (cd "$ROOT" && cargo build --release --bin capsulev-native)
+if [ ! -f "$VPOD" ]; then
+    echo "── Building vpod..."
+    (cd "$ROOT" && cargo build --release --bin vpod-native)
 else
-    echo "── capsulev already built, skipping."
+    echo "── vpod already built, skipping."
 fi
 
 # Download pre-built OpenSBI fw_jump.bin
@@ -148,11 +148,11 @@ echo "nameserver 10.0.2.2" > /etc/resolv.conf
 
 if [ -c /dev/hvc0 ]; then
     (
-        echo "CAPSULEV_READY" >/dev/hvc0
+        echo "VPOD_READY" >/dev/hvc0
         while IFS= read -r cmd </dev/hvc0; do
             [ -z "$cmd" ] && continue
             sh -c "$cmd" >/dev/hvc0 2>&1
-            printf 'CAPSULEV_EXIT:%d\n' "$?" >/dev/hvc0
+            printf 'VPOD_EXIT:%d\n' "$?" >/dev/hvc0
         done
     ) &
 fi
@@ -193,7 +193,7 @@ SNAP="$ROOT/dist/alpine-3.23.0-256mb.snap"
 BOOTARGS="root=/dev/ram0 rw console=ttyS0 earlycon init=/sbin/init"
 
 echo "── Booting guest to pre-install ca-certificates + python3..."
-"$CAPSULEV" \
+"$VPOD" \
     "$KERNEL" \
     --bios "$OPENSBI_FW" \
     --initrd "$OUT" \

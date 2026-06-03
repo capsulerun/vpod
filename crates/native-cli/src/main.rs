@@ -14,7 +14,7 @@ use riscv_core::Hart;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: capsulev <kernel> [--bios <fw>] [--initrd <rd>] [--disk <img>] [--net] [--agent] \
+        "usage: vpod <kernel> [--bios <fw>] [--initrd <rd>] [--disk <img>] [--net] [--agent] \
          [--setup <cmds...>] [--ram <mb>] [--bootargs <args>] \
          [--snapshot-save <file>] [--snapshot-load <file>]"
     );

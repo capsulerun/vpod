@@ -10,7 +10,7 @@ use crate::registry::Snapshot;
 
 pub fn cache_dir() -> PathBuf {
     let base = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("~/.local/share"));
-    base.join("capsulev").join("snapshots")
+    base.join("vpod").join("snapshots")
 }
 
 pub fn snapshot_path(snap: &Snapshot) -> PathBuf {

@@ -457,7 +457,7 @@ pub fn boot(
     let dtb_physical_address = RAM_BASE + dtb_offset;
     bus.load_ram(dtb_offset, &dtb_data);
 
-    let _ = std::fs::write("/tmp/capsulev.dtb", &dtb_data);
+    let _ = std::fs::write("/tmp/vpod.dtb", &dtb_data);
 
     let dtb_magic = u32::from_le_bytes(
         bus.ram[dtb_offset as usize..dtb_offset as usize + 4]

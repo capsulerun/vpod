@@ -14,15 +14,15 @@ RUSTUP_RUSTC="$RUSTUP_HOME/toolchains/$STABLE_TC/bin/rustc"
 
 echo "[build-wasm] toolchain: $STABLE_TC"
 echo "[build-wasm] building wasi-component (cli)..."
-RUSTC="$RUSTUP_RUSTC" "$RUSTUP_CARGO" build -p wasi-component --bin capsulev-wasi-cli --release --target wasm32-wasip2
+RUSTC="$RUSTUP_RUSTC" "$RUSTUP_CARGO" build -p wasi-component --bin vpod-wasi-cli --release --target wasm32-wasip2
 
 echo "[build-wasm] building wasi-component (library)..."
 RUSTC="$RUSTUP_RUSTC" "$RUSTUP_CARGO" build -p wasi-component --lib --release --target wasm32-wasip2
 
-echo "[build-wasm] building capsulev host..."
-cargo build -p capsulev --release
+echo "[build-wasm] building vpod host..."
+cargo build -p vpod --release
 
 echo "[build-wasm] done"
-echo "  cli:       target/wasm32-wasip2/release/capsulev-wasi-cli.wasm"
-echo "  library:   target/wasm32-wasip2/release/capsulev_wasi_lib.wasm"
-echo "  host:      target/release/capsulev"
+echo "  cli:       target/wasm32-wasip2/release/vpod-wasi-cli.wasm"
+echo "  library:   target/wasm32-wasip2/release/vpod_wasi_lib.wasm"
+echo "  host:      target/release/vpod"
