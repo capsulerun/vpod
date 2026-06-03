@@ -10,9 +10,9 @@ use crate::terminal;
 
 pub fn run(bus: &mut MachineBus, hart: &mut Hart, snap_save: Option<&PathBuf>, trace_insns: u64) {
     if snap_save.is_some() {
-        eprintln!("[capsule] Press Ctrl-S to save snapshot. Press Ctrl-C to exit.");
+        eprintln!("[vpod] Press Ctrl-S to save snapshot. Press Ctrl-C to exit.");
     } else {
-        eprintln!("[capsule] Press Ctrl-C to exit the emulator.");
+        eprintln!("[vpod] Press Ctrl-C to exit the emulator.");
     }
 
     if trace_insns > 0 {
@@ -44,13 +44,13 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, snap_save: Option<&PathBuf>, t
             StepResult::Ok => {}
             StepResult::Trap(cause) => {
                 eprintln!(
-                    "\r\n[capsule] unhandled trap {:?} at pc={:#x}",
+                    "\r\n[vpod] unhandled trap {:?} at pc={:#x}",
                     cause, hart.regs.pc
                 );
                 break;
             }
             StepResult::Halt => {
-                eprintln!("\r\n[capsule] halt after {} steps", steps);
+                eprintln!("\r\n[vpod] halt after {} steps", steps);
                 break;
             }
         }
@@ -58,7 +58,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, snap_save: Option<&PathBuf>, t
 
         if sample_idx < sample_at.len() && steps >= sample_at[sample_idx] {
             eprintln!(
-                "[capsule] @ {}M insns: pc={:#x}  mtvec={:#x}  mcause={:#x}  mepc={:#x}",
+                "[vpod] @ {}M insns: pc={:#x}  mtvec={:#x}  mcause={:#x}  mepc={:#x}",
                 steps / 1_000_000,
                 hart.regs.pc,
                 hart.csr.mtvec,
