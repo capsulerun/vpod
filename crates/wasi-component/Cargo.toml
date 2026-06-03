@@ -3,8 +3,13 @@ name = "wasi-component"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+crate-type = ["cdylib"]
+name = "capsulev_wasi_lib"
+path = "src/lib.rs"
+
 [[bin]]
-name = "wasi-component"
+name = "capsulev-wasi-cli"
 path = "src/main.rs"
 
 [dependencies]
@@ -13,3 +18,4 @@ riscv-core = { path = "../riscv-core" }
 log = "0.4"
 wasi = "0.14.7"
 flate2 = "1"
+wit-bindgen = "0.57"
