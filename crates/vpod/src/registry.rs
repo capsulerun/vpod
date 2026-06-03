@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-pub const DEFAULT_REGISTRY: &str =
-    "https://registry.vpod.sh/v1/snapshots.json";
+pub const DEFAULT_REGISTRY: &str = "https://registry.vpod.sh/v1/snapshots.json";
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Snapshot {
