@@ -2,7 +2,7 @@ use machine::machine_bus::MachineBus;
 use riscv_core::{Hart, StepResult};
 
 use crate::api::session::SESSION_MANAGER;
-use crate::exports::capsulev::sandbox::executor::{ExecutionResult, Guest};
+use crate::exports::vpod::sandbox::executor::{ExecutionResult, Guest};
 use crate::vm;
 
 pub struct Executor;
@@ -49,7 +49,7 @@ fn run_code(bus: &mut MachineBus, hart: &mut Hart, code: &str) -> String {
         bus.uart.push_rx(b'\n');
     }
 
-    for byte in b"CAPSULEV_EOF\n" {
+    for byte in b"VPOD_EOF\n" {
         bus.uart.push_rx(*byte);
     }
 

@@ -14,7 +14,7 @@ use riscv_core::Hart;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: capsulev <kernel> [--bios <fw>] [--initrd <rd>] [--disk <img>] [--net] [--agent] \
+        "usage: vpod <kernel> [--bios <fw>] [--initrd <rd>] [--disk <img>] [--net] [--agent] \
          [--setup <cmds...>] [--ram <mb>] [--bootargs <args>] \
          [--snapshot-save <file>] [--snapshot-load <file>]"
     );
@@ -33,11 +33,11 @@ fn save_snapshot(bus: &MachineBus, hart: &Hart, path: &PathBuf) {
         Ok(f) => {
             let mut w = GzEncoder::new(f, Compression::best());
             match snapshot::save(bus, hart, &mut w) {
-                Ok(()) => eprintln!("\r\n[capsule] snapshot saved to {:?}", path),
-                Err(e) => eprintln!("\r\n[capsule] snapshot save failed: {e}"),
+                Ok(()) => eprintln!("\r\n[vpod] snapshot saved to {:?}", path),
+                Err(e) => eprintln!("\r\n[vpod] snapshot save failed: {e}"),
             }
         }
-        Err(e) => eprintln!("\r\n[capsule] cannot create snapshot file {:?}: {e}", path),
+        Err(e) => eprintln!("\r\n[vpod] cannot create snapshot file {:?}: {e}", path),
     }
 }
 
@@ -139,7 +139,7 @@ fn main() {
             std::process::exit(1);
         });
         eprintln!(
-            "[capsule] restored from snapshot {:?} | disk {:?}",
+            "[vpod] restored from snapshot {:?} | disk {:?}",
             snap, disk_path
         );
     } else {
@@ -161,7 +161,7 @@ fn main() {
         );
 
         eprintln!(
-            "[capsule] booting {:?} | bios {:?} | initrd {:?} | RAM {}MB | disk {:?}",
+            "[vpod] booting {:?} | bios {:?} | initrd {:?} | RAM {}MB | disk {:?}",
             kpath, bios_path, initrd_path, ram_mb, disk_path
         );
     }

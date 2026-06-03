@@ -55,7 +55,7 @@ pub fn poll_stdin(bus: &mut MachineBus, snap_path: Option<&PathBuf>, hart: &Hart
             for &b in &buf[..n] {
                 match b {
                     0x1d | 0x03 => {
-                        eprintln!("\r\n[capsule] exiting.");
+                        eprintln!("\r\n[vpod] exiting.");
                         std::process::exit(0);
                     }
                     0x13 => {

@@ -4,7 +4,7 @@ use machine::machine_bus::MachineBus;
 use riscv_core::{Hart, StepResult};
 
 pub fn run(bus: &mut MachineBus, hart: &mut Hart, cmds: &[String], snap_save: Option<&PathBuf>) {
-    eprintln!("[capsule] setup booting guest, waiting for shell prompt...");
+    eprintln!("[vpod] setup booting guest, waiting for shell prompt...");
     bus.uart.capture_tx.set(true);
 
     let mut output = String::new();
@@ -26,7 +26,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, cmds: &[String], snap_save: Op
         match hart.run(bus, interval) {
             StepResult::Ok => {}
             StepResult::Trap(cause) => {
-                eprintln!("[capsule-setup] trap {:?} at pc={:#x}", cause, hart.regs.pc);
+                eprintln!("[vpod-setup] trap {:?} at pc={:#x}", cause, hart.regs.pc);
                 std::process::exit(1);
             }
             StepResult::Halt => break,
@@ -57,7 +57,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, cmds: &[String], snap_save: Op
 
                 if cmd_idx < cmds.len() {
                     let cmd = &cmds[cmd_idx];
-                    eprintln!("\n[capsule-setup] running: {}", cmd);
+                    eprintln!("\n[vpod-setup] running: {}", cmd);
                     for b in cmd.bytes() {
                         bus.uart.push_rx(b);
                     }
@@ -74,7 +74,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, cmds: &[String], snap_save: Op
                 cmd_idx += 1;
                 if cmd_idx < cmds.len() {
                     let cmd = &cmds[cmd_idx];
-                    eprintln!("\n[capsule-setup] running: {}", cmd);
+                    eprintln!("\n[vpod-setup] running: {}", cmd);
                     bus.uart.drain_rx();
                     for b in cmd.bytes() {
                         bus.uart.push_rx(b);
@@ -90,5 +90,5 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, cmds: &[String], snap_save: Op
     if let Some(path) = snap_save {
         super::save_snapshot(bus, hart, path);
     }
-    eprintln!("[capsule-setup] done.");
+    eprintln!("[vpod-setup] done.");
 }

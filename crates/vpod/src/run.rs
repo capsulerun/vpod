@@ -8,7 +8,7 @@ use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{DirPerms, FilePerms, IoView, WasiCtx, WasiCtxBuilder, WasiView};
 
-static WASM_BYTES: &[u8] = include_bytes!(env!("CAPSULEV_WASM_PATH"));
+static WASM_BYTES: &[u8] = include_bytes!(env!("VPOD_WASM_PATH"));
 
 pub struct RunConfig {
     pub version: String,
@@ -71,7 +71,7 @@ fn cwasm_cache_path(version: &str) -> PathBuf {
     let base = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".local/share"));
     let hash = hex::encode(&Sha256::digest(WASM_BYTES)[..8]);
 
-    base.join("capsulev")
+    base.join("vpod")
         .join(format!("component-{version}-{hash}.cwasm"))
 }
 
@@ -100,7 +100,7 @@ fn load_component(engine: &Engine, version: &str) -> Result<Component> {
 }
 
 pub fn run(cfg: RunConfig) -> Result<()> {
-    eprint!("\x1b]0;capsulev ({})\x07", cfg.snapshot.display_name());
+    eprint!("\x1b]0;vpod ({})\x07", cfg.snapshot.display_name());
     print_header(&cfg.snapshot);
 
     eprint!("  \x1b[2mLoading...\x1b[0m");
@@ -129,7 +129,7 @@ pub fn run(cfg: RunConfig) -> Result<()> {
         .to_string();
 
     let wasm_args = vec![
-        "capsulev-wasi-cli".to_string(),
+        "vpod-wasi-cli".to_string(),
         "--snapshot-load".to_string(),
         format!("snap/{snap_file}"),
     ];
@@ -162,7 +162,7 @@ pub fn run(cfg: RunConfig) -> Result<()> {
 
 fn print_header(snap: &Snapshot) {
     eprintln!(
-        "\x1b[1mcapsulev\x1b[0m  \x1b[2m{} {} · {}\x1b[0m",
+        "\x1b[1mvpod\x1b[0m  \x1b[2m{} {} · {}\x1b[0m",
         snap.display_name(),
         snap.tag,
         snap.memory_label

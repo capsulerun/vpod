@@ -49,7 +49,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
             StepResult::Ok => {}
             StepResult::Trap(cause) => {
                 eprintln!(
-                    "\r\n[capsulev-wasi] unhandled trap {:?} at pc={:#x}",
+                    "\r\n[vpod-wasi] unhandled trap {:?} at pc={:#x}",
                     cause, hart.regs.pc
                 );
                 break;

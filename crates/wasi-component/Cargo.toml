@@ -5,11 +5,11 @@ edition = "2024"
 
 [lib]
 crate-type = ["cdylib"]
-name = "capsulev_wasi_lib"
+name = "vpod_wasi_lib"
 path = "src/lib.rs"
 
 [[bin]]
-name = "capsulev-wasi-cli"
+name = "vpod-wasi-cli"
 path = "src/main.rs"
 
 [dependencies]

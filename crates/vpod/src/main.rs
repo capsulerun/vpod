@@ -8,12 +8,12 @@ use clap::{Parser, Subcommand};
 use registry::DEFAULT_REGISTRY;
 
 #[derive(Parser)]
-#[command(name = "capsulev", about = "RISC-V Linux sandbox")]
+#[command(name = "vpod", about = "RISC-V Linux sandbox")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Cmd>,
 
-    #[arg(long, env = "CAPSULEV_REGISTRY", global = true, hide = true)]
+    #[arg(long, env = "VPOD_REGISTRY", global = true, hide = true)]
     registry: Option<String>,
 }
 
@@ -51,7 +51,7 @@ fn main() -> Result<()> {
             let (_, snapshots) = registry::fetch(reg_url)
                 .context("failed to fetch registry — cannot pull without registry")?;
             let snap = registry::resolve(&snapshots, &snapshot)
-                .with_context(|| format!("unknown snapshot '{snapshot}' — run `capsulev list`"))?;
+                .with_context(|| format!("unknown snapshot '{snapshot}' — run `vpod list`"))?;
 
             if pull::is_cached(snap) {
                 eprintln!(
