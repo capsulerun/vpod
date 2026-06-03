@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream, UdpSocket};
+
+#[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
 
 use super::net::NetworkBackend;

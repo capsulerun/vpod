@@ -209,12 +209,15 @@ fn run_trace(bus: &mut MachineBus, hart: &mut Hart, trace_insns: u64) {
                     } else {
                         eprintln!("[milestone @{}] pc={:#x}  {}", total, pc, ms.name);
                     }
+
                     visited[idx] = true;
+
                     if ms.name.contains("FAIL") {
                         break 'outer;
                     }
                 }
             }
+
             match hart.step(bus) {
                 riscv_core::StepResult::Ok => {}
                 riscv_core::StepResult::Trap(c) => {
