@@ -1,21 +1,26 @@
 use machine::machine_bus::MachineBus;
 use riscv_core::{Hart, StepResult};
+use wasi::clocks::monotonic_clock;
+use wasi::io::poll;
 use wasi::io::streams::{InputStream, StreamError};
 
 pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
     let stdin = wasi::cli::stdin::get_stdin();
 
-    const POLL_INTERVAL: u64 = 32768;
+    const POLL_INTERVAL_ACTIVE: u64 = 32768;
+    const POLL_INTERVAL_IDLE: u64 = 1024;
     const POLL_INTERVAL_NET: u64 = 4096;
-    const IDLE_THRESHOLD: u32 = 64;
+    const IDLE_TIMEOUT_NS: u64 = 10_000_000;
 
-    let mut idle_count = 0u32;
+    let mut idle_ticks = 0u32;
 
     loop {
         let interval = if bus.net_rx_pending() {
             POLL_INTERVAL_NET
+        } else if idle_ticks > 4 {
+            POLL_INTERVAL_IDLE
         } else {
-            POLL_INTERVAL
+            POLL_INTERVAL_ACTIVE
         };
 
         bus.clint.advance_by_instructions(interval);
@@ -23,26 +28,22 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
 
         if poll_stdin(bus, &stdin) {
             bus.poll(hart);
-            idle_count = 0;
+            idle_ticks = 0;
         }
 
         flush_console(bus);
 
         if hart.is_waiting {
-            if idle_count >= IDLE_THRESHOLD && !bus.has_pending_io() {
-                let sleep_ms = if idle_count < IDLE_THRESHOLD + 5 {
-                    1
-                } else if idle_count < IDLE_THRESHOLD + 20 {
-                    5
-                } else {
-                    10
-                };
-                std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
-            }
+            idle_ticks += 1;
             hart.is_waiting = false;
-            idle_count += 1;
+
+            if !bus.has_pending_io() {
+                let stdin_ready = stdin.subscribe();
+                let timeout = monotonic_clock::subscribe_duration(IDLE_TIMEOUT_NS);
+                poll::poll(&[&stdin_ready, &timeout]);
+            }
         } else {
-            idle_count = 0;
+            idle_ticks = 0;
         }
 
         match hart.run(bus, interval) {

@@ -1,44 +1,48 @@
 use machine::machine_bus::MachineBus;
 use riscv_core::{Hart, StepResult};
+use wasi::clocks::monotonic_clock;
+use wasi::io::poll;
 
 const POLL_INTERVAL: u64 = 8192;
+const IDLE_TIMEOUT_NS: u64 = 10_000_000;
+const MAX_STARTUP_ITERATIONS: u64 = 500_000;
 
 pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     let mut buffer = Vec::new();
-    let mut idle_count = 0;
+    let mut iterations: u64 = 0;
 
     loop {
+        iterations += 1;
+        if iterations > MAX_STARTUP_ITERATIONS {
+            eprintln!("[session] timeout waiting for prompt");
+            return;
+        }
+
         bus.clint.advance_by_instructions(POLL_INTERVAL);
         bus.poll(hart);
 
-        let output = bus.console.take_tx_buffer();
+        let output = bus.uart.drain_tx();
         if !output.is_empty() {
             buffer.extend_from_slice(&output);
-            idle_count = 0;
 
             if buffer.windows(prompt.len()).any(|w| w == prompt) {
                 return;
             }
-        } else {
-            idle_count += 1;
-            if idle_count > 20 {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-        }
-
-        if hart.is_waiting && !bus.has_pending_io() {
-            std::thread::sleep(std::time::Duration::from_millis(5));
+        } else if hart.is_waiting && !bus.has_pending_io() {
+            hart.is_waiting = false;
+            let timeout = monotonic_clock::subscribe_duration(IDLE_TIMEOUT_NS);
+            poll::poll(&[&timeout]);
         }
 
         match hart.run(bus, POLL_INTERVAL) {
             StepResult::Ok => {}
             StepResult::Trap(cause) => {
                 eprintln!("[session] trap during startup: {:?}", cause);
-                std::process::exit(1);
+                return;
             }
             StepResult::Halt => {
                 eprintln!("[session] unexpected halt");
-                std::process::exit(1);
+                return;
             }
         }
     }
@@ -46,37 +50,39 @@ pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
 
 pub fn capture_output_until_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) -> String {
     let mut output = Vec::new();
-    let mut idle_count = 0;
-    let mut no_output_count = 0;
+    let mut consecutive_idle = 0u32;
+    let mut got_any_output = false;
 
     loop {
         bus.clint.advance_by_instructions(POLL_INTERVAL);
         bus.poll(hart);
 
-        let tx = bus.console.take_tx_buffer();
+        let tx = bus.uart.drain_tx();
         if !tx.is_empty() {
             output.extend_from_slice(&tx);
-            idle_count = 0;
-            no_output_count = 0;
+            consecutive_idle = 0;
+            got_any_output = true;
 
-            if output.ends_with(prompt) {
-                output.truncate(output.len() - prompt.len());
+            if let Some(pos) = find_subsequence(&output, prompt) {
+                output.truncate(pos);
                 break;
             }
         } else {
-            no_output_count += 1;
-            if no_output_count > 100 {
+            consecutive_idle += 1;
+
+            if got_any_output && consecutive_idle > 100_000 {
                 break;
             }
-        }
 
-        if hart.is_waiting && !bus.has_pending_io() {
-            idle_count += 1;
-            if idle_count > 10 {
-                std::thread::sleep(std::time::Duration::from_millis(5));
+            if consecutive_idle > 500_000 {
+                break;
             }
-        } else {
-            idle_count = 0;
+
+            if hart.is_waiting && !bus.has_pending_io() {
+                hart.is_waiting = false;
+                let timeout = monotonic_clock::subscribe_duration(IDLE_TIMEOUT_NS);
+                poll::poll(&[&timeout]);
+            }
         }
 
         match hart.run(bus, POLL_INTERVAL) {
@@ -89,5 +95,41 @@ pub fn capture_output_until_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt
         }
     }
 
-    String::from_utf8_lossy(&output).trim_end().to_string()
+    if let Some(pos) = output.iter().rposition(|&b| b == b'\n') {
+        output.truncate(pos + 1);
+    }
+
+    let raw = String::from_utf8_lossy(&output);
+    let cleaned = strip_ansi(&raw);
+    match cleaned.find('\n') {
+        Some(pos) => cleaned[pos + 1..].trim_end().to_string(),
+        None => cleaned.trim_end().to_string(),
+    }
+}
+
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).rposition(|w| w == needle)
+}
+
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
 }

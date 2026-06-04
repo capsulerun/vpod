@@ -1,9 +1,9 @@
-use machine::machine_bus::MachineBus;
-use riscv_core::{Hart, StepResult};
-
 use crate::api::session::SESSION_MANAGER;
 use crate::exports::vpod::sandbox::executor::{ExecutionResult, Guest};
+use crate::repl;
 use crate::vm;
+
+const DEFAULT_PROMPT: &[u8] = b"# ";
 
 pub struct Executor;
 
@@ -12,14 +12,30 @@ impl Guest for Executor {
         let (mut bus, mut hart) = vm::load(vm::VmConfig {
             snapshot: snapshot_path.as_ref(),
             disk: None,
-            capture_tx: false,
+            capture_tx: true,
         })?;
-        let stdout = run_code(&mut bus, &mut hart, &code);
+
+        for byte in b"/bin/sh\n" {
+            bus.uart.push_rx(*byte);
+        }
+
+        repl::wait_for_prompt(&mut bus, &mut hart, DEFAULT_PROMPT);
+        bus.uart.drain_tx();
+
+        let wrapped = format!("{code}; echo \"__EXIT:$?\"");
+        for byte in wrapped.bytes() {
+            bus.uart.push_rx(byte);
+        }
+        bus.uart.push_rx(b'\n');
+
+        let raw_output = repl::capture_output_until_prompt(&mut bus, &mut hart, DEFAULT_PROMPT);
+
+        let (stdout, exit_code) = parse_exit_code(&raw_output);
 
         Ok(ExecutionResult {
             stdout,
             stderr: String::new(),
-            exit_code: 0,
+            exit_code,
         })
     }
 
@@ -40,38 +56,15 @@ impl Guest for Executor {
     }
 }
 
-fn run_code(bus: &mut MachineBus, hart: &mut Hart, code: &str) -> String {
-    for byte in code.bytes() {
-        bus.uart.push_rx(byte);
+fn parse_exit_code(output: &str) -> (String, u32) {
+    let marker = "__EXIT:";
+
+    if let Some(pos) = output.rfind(marker) {
+        let code_str = output[pos + marker.len()..].trim();
+        let exit_code = code_str.parse::<u32>().unwrap_or(0);
+        let stdout = output[..pos].trim_end().to_string();
+        (stdout, exit_code)
+    } else {
+        (output.to_string(), 0)
     }
-
-    if !code.ends_with('\n') {
-        bus.uart.push_rx(b'\n');
-    }
-
-    for byte in b"VPOD_EOF\n" {
-        bus.uart.push_rx(*byte);
-    }
-
-    const POLL_INTERVAL: u64 = 8192;
-    loop {
-        bus.clint.advance_by_instructions(POLL_INTERVAL);
-        bus.poll(hart);
-
-        if hart.is_waiting && !bus.has_pending_io() {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            continue;
-        }
-
-        match hart.run(bus, POLL_INTERVAL) {
-            StepResult::Ok => {}
-            StepResult::Trap(cause) => {
-                eprintln!("[executor] trap {:?} at pc={:#x}", cause, hart.regs.pc);
-                break;
-            }
-            StepResult::Halt => break,
-        }
-    }
-
-    String::from_utf8_lossy(&bus.console.take_tx_buffer()).into_owned()
 }
