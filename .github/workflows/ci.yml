@@ -68,4 +68,35 @@ jobs:
       - name: Build Default Snapshot
         run: ./scripts/build-default-snapshot.sh
 
+  python-sdk:
+    name: Python SDK Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Build WASM library
+        run: cargo build --release --target wasm32-wasip2 -p wasi-component --lib
+
+      - name: Copy WASM to SDK
+        run: cp target/wasm32-wasip2/release/vpod_wasi_lib.wasm sdks/python/vpod/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        working-directory: sdks/python
+        run: pip install -e .[dev]
+
+      - name: Run pytest
+        working-directory: sdks/python
+        run: pytest tests/ -v
 
