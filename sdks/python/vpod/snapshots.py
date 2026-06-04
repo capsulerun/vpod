@@ -23,7 +23,6 @@ def cache_dir() -> Path:
 
 def pull(name: str = "alpine:latest") -> Path:
     """
-    Resolve and return the local path of a snapshot.
     Downloads from the registry if not already cached.
     """
     registry = fetch_registry()
@@ -42,13 +41,26 @@ def pull(name: str = "alpine:latest") -> Path:
 
 def fetch_registry() -> list[dict]:
     try:
+        request = urllib.request.Request(
+            REGISTRY_URL,
+            headers={"User-Agent": f"vpod-py/{_version()}"},
+        )
         context = _create_ssl_context()
-        with urllib.request.urlopen(REGISTRY_URL, timeout=10, context=context) as response:
+
+        with urllib.request.urlopen(request, timeout=10, context=context) as response:
             return json.loads(response.read())["snapshots"]
     except Exception as e:
         raise ConnectionError(
             f"Failed to fetch snapshot registry from {REGISTRY_URL}: {e}"
         ) from e
+
+
+def _version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("vpod")
+    except Exception:
+        return "0.0.0"
 
 
 def resolve_snapshot(registry: list[dict], name: str) -> dict:
@@ -69,10 +81,14 @@ def resolve_snapshot(registry: list[dict], name: str) -> dict:
 def _download_to(url: str, dest: Path, expected_sha256: str) -> None:
     tmp = dest.with_suffix(".tmp")
     try:
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": f"vpod-py/{_version()}"},
+        )
         context = _create_ssl_context()
-        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=context))
-        urllib.request.install_opener(opener)
-        urllib.request.urlretrieve(url, tmp)
+        with urllib.request.urlopen(request, timeout=60, context=context) as response:
+            with open(tmp, "wb") as f:
+                shutil.copyfileobj(response, f)
 
         actual_sha256 = _file_sha256(tmp)
         if actual_sha256 != expected_sha256:

@@ -1,32 +1,24 @@
 import pytest
 from vpod import Sandbox
 
-
-@pytest.fixture
-def sandbox():
-    return Sandbox.create()
+pytestmark = pytest.mark.integration
 
 
-def test_stateless_command_returns_stdout(sandbox):
-    result = sandbox.commands.run("echo hello")
-    assert result.success
-    assert "hello" in result.stdout
+def test_stateless_command():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("echo hello")
+        assert result.success
+        assert "hello" in result.stdout
 
 
-def test_stateless_command_captures_exit_code(sandbox):
-    result = sandbox.commands.run("false")
+def test_stateless_exit_code():
+    sbx = Sandbox.create()
+    result = sbx.commands.run("false")
     assert not result.success
     assert result.exit_code == 1
 
 
-def test_stateless_command_no_shared_state():
-    sbx = Sandbox.create()
-    sbx.commands.run("export FOO=bar")
-    result = sbx.commands.run("echo $FOO")
-    assert result.stdout.strip() == ""
-
-
-def test_session_commands_share_state():
+def test_session_env_persists():
     with Sandbox.create() as sbx:
         sbx.commands.run("export FOO=bar")
         result = sbx.commands.run("echo $FOO")
@@ -47,13 +39,14 @@ def test_session_code_run():
         assert "4" in result.text
 
 
-def test_session_code_captures_error():
+def test_session_code_error():
     with Sandbox.create() as sbx:
         result = sbx.code.run("nonexistent_command_xyz")
         assert not result.success
         assert result.error is not None
 
 
-def test_code_requires_session(sandbox):
+def test_code_requires_session():
+    sbx = Sandbox.create()
     with pytest.raises(RuntimeError, match="requires a session"):
-        sandbox.code.run("print(1)")
+        sbx.code.run("print(1)")

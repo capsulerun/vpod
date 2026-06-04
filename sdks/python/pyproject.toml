@@ -22,6 +22,9 @@ dev = [
     "mypy>=1.0",
 ]
 
+[tool.pytest.ini_options]
+markers = ["integration: requires a real WASM build and snapshot (run with -m integration)"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["vpod*"]
