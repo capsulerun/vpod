@@ -23,3 +23,5 @@ target
 dist
 .DS_Store
 crates/vpod/wasi-component.wasm
+__pycache__/
+*.egg-info

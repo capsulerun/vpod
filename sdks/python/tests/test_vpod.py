@@ -2,16 +2,19 @@ import pytest
 from vpod import Sandbox
 
 
-def test_stateless_command_returns_stdout():
-    sbx = Sandbox.create()
-    result = sbx.commands.run("echo hello")
+@pytest.fixture
+def sandbox():
+    return Sandbox.create()
+
+
+def test_stateless_command_returns_stdout(sandbox):
+    result = sandbox.commands.run("echo hello")
     assert result.success
     assert "hello" in result.stdout
 
 
-def test_stateless_command_captures_exit_code():
-    sbx = Sandbox.create()
-    result = sbx.commands.run("exit 1")
+def test_stateless_command_captures_exit_code(sandbox):
+    result = sandbox.commands.run("exit 1")
     assert not result.success
     assert result.exit_code == 1
 
@@ -51,7 +54,6 @@ def test_session_code_captures_error():
         assert result.error is not None
 
 
-def test_code_requires_session():
-    sbx = Sandbox.create()
+def test_code_requires_session(sandbox):
     with pytest.raises(RuntimeError, match="requires a session"):
-        sbx.code.run("print(1)")
+        sandbox.code.run("print(1)")

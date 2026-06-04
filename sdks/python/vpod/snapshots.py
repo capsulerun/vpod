@@ -1,12 +1,19 @@
 import hashlib
 import json
 import shutil
+import ssl
 import urllib.request
 from pathlib import Path
 
+import certifi
 import platformdirs
 
 REGISTRY_URL = "https://registry.vpod.sh/v1/snapshots.json"
+
+
+def _create_ssl_context():
+    """Create SSL context with certifi certificates."""
+    return ssl.create_default_context(cafile=certifi.where())
 
 
 def cache_dir() -> Path:
@@ -35,7 +42,8 @@ def pull(name: str = "alpine:latest") -> Path:
 
 def fetch_registry() -> list[dict]:
     try:
-        with urllib.request.urlopen(REGISTRY_URL, timeout=10) as response:
+        context = _create_ssl_context()
+        with urllib.request.urlopen(REGISTRY_URL, timeout=10, context=context) as response:
             return json.loads(response.read())["snapshots"]
     except Exception as e:
         raise ConnectionError(
@@ -61,6 +69,9 @@ def resolve_snapshot(registry: list[dict], name: str) -> dict:
 def _download_to(url: str, dest: Path, expected_sha256: str) -> None:
     tmp = dest.with_suffix(".tmp")
     try:
+        context = _create_ssl_context()
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=context))
+        urllib.request.install_opener(opener)
         urllib.request.urlretrieve(url, tmp)
 
         actual_sha256 = _file_sha256(tmp)

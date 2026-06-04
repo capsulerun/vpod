@@ -13,6 +13,7 @@ authors = [{ name = "vpod" }]
 dependencies = [
     "wasmtime>=25.0.0",
     "platformdirs>=4.0",
+    "certifi>=2023.0.0",
 ]
 
 [project.optional-dependencies]
