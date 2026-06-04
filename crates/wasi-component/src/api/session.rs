@@ -35,7 +35,7 @@ impl SessionManager {
         let (mut bus, mut hart) = crate::vm::load(crate::vm::VmConfig {
             snapshot: snapshot_path.as_ref(),
             disk: None,
-            capture_tx: false,
+            capture_tx: true,
         })?;
 
         let prompt_bytes = prompt.into_bytes();
@@ -46,6 +46,7 @@ impl SessionManager {
 
         bus.uart.push_rx(b'\n');
         repl::wait_for_prompt(&mut bus, &mut hart, &prompt_bytes);
+        bus.uart.drain_tx();
 
         let id = self.next_id.get();
         self.next_id.set(id + 1);
