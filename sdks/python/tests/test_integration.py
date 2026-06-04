@@ -39,6 +39,17 @@ def test_session_code_python():
         assert "4" in result.text
 
 
+def test_session_code_python_persistent():
+    with Sandbox.create() as sbx:
+        sbx.code.run("x = 1")
+        sbx.code.run("y = 1")
+        result = sbx.code.run("print(x + y)")
+
+        print(result)
+        assert result.success
+        assert "2" in result.text
+
+
 def test_session_code_error():
     with Sandbox.create() as sbx:
         result = sbx.code.run("1 / 0")

@@ -36,16 +36,26 @@ def mock_component(request, monkeypatch):
     def fake_session_start(snapshot_path, command, prompt):
         session_counter["id"] += 1
         sid = session_counter["id"]
-        sessions[sid] = {"env": {}}
+        sessions[sid] = {"env": {}, "type": command}
         return sid
 
     def fake_session_exec(sid, command):
         import subprocess
         session = sessions.get(sid, {})
-        env = session.get("env", {})
+
+        if session.get("type") == "python3":
+            result = subprocess.run(
+                ["python3", "-c", command],
+                capture_output=True, text=True,
+            )
+            output = result.stdout.strip()
+            if result.stderr:
+                output = (output + "\n" + result.stderr).strip()
+            return FakeVariant(tag="ok", payload=output)
 
         import os
         import re
+        env = session.get("env", {})
         full_env = {**os.environ, **env}
         result = subprocess.run(command, shell=True, capture_output=True, text=True, env=full_env)
 

@@ -60,6 +60,7 @@ class Sandbox:
         return self
 
     def __exit__(self, *_) -> None:
+        self.code.close()
         if self._session_id is not None:
             self._exports["session-close"](self._session_id)
             self._session_id = None
