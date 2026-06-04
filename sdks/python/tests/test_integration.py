@@ -45,7 +45,6 @@ def test_session_code_python_persistent():
         sbx.code.run("y = 1")
         result = sbx.code.run("print(x + y)")
 
-        print(result)
         assert result.success
         assert "2" in result.text
 
