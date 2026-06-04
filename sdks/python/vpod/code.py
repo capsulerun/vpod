@@ -11,7 +11,7 @@ class Code:
         self._get_session_id = get_session_id
 
     def run(self, code: str) -> CodeExecution:
-        """Run code in the sandbox session. Requires an active session."""
+        """Run Python code in the sandbox session. Requires an active session."""
         session_id = self._get_session_id()
 
         if session_id is None:
@@ -20,7 +20,9 @@ class Code:
                 "Use 'with Sandbox.create() as sandbox:'"
             )
 
-        output = unwrap_result(self._exports["session-exec"](session_id, code))
+        escaped = code.replace("'", "'\"'\"'")
+        command = f"python3 -c '{escaped}'"
+        output = unwrap_result(self._exports["session-exec"](session_id, command))
         return self._parse_output(output)
 
     def _parse_output(self, raw: str) -> CodeExecution:

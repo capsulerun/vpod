@@ -32,16 +32,16 @@ def test_session_filesystem_persists():
         assert "hello.txt" in result.stdout
 
 
-def test_session_code_run():
+def test_session_code_python():
     with Sandbox.create() as sbx:
-        result = sbx.code.run("expr 2 + 2")
+        result = sbx.code.run("print(2 + 2)")
         assert result.success
         assert "4" in result.text
 
 
 def test_session_code_error():
     with Sandbox.create() as sbx:
-        result = sbx.code.run("nonexistent_command_xyz")
+        result = sbx.code.run("1 / 0")
         assert not result.success
         assert result.error is not None
 
