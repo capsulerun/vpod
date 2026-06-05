@@ -121,11 +121,7 @@ fn vec_translate_store<B: SystemBus>(ctx: &mut ExecContext<B>, va: u64) -> Resul
 
 // vsetvl*
 
-fn opcfg<B: SystemBus>(
-    ctx: &mut ExecContext<B>,
-    instruction_encoding: u32,
-    pc: u64,
-) -> StepResult {
+fn opcfg<B: SystemBus>(ctx: &mut ExecContext<B>, instruction_encoding: u32, pc: u64) -> StepResult {
     let rd = ((instruction_encoding >> 7) & 0x1F) as usize;
     let rs1 = ((instruction_encoding >> 15) & 0x1F) as usize;
     let bit31 = (instruction_encoding >> 31) & 1;
@@ -171,11 +167,7 @@ fn opcfg<B: SystemBus>(
 
 // unit-stride and strided load
 
-fn vload<B: SystemBus>(
-    ctx: &mut ExecContext<B>,
-    instruction_encoding: u32,
-    pc: u64,
-) -> StepResult {
+fn vload<B: SystemBus>(ctx: &mut ExecContext<B>, instruction_encoding: u32, pc: u64) -> StepResult {
     if let Some(trap_result) = check_vs(ctx, instruction_encoding) {
         return trap_result;
     }

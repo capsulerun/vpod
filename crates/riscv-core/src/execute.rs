@@ -1750,12 +1750,7 @@ fn op_fp<B: SystemBus>(
     StepResult::Ok
 }
 
-fn fma<B: SystemBus>(
-    ctx: &mut ExecContext<B>,
-    inst: Instruction,
-    raw: u32,
-    pc: u64,
-) -> StepResult {
+fn fma<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32, pc: u64) -> StepResult {
     if let Some(t) = check_fs(ctx, raw) {
         return t;
     }

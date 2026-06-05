@@ -31,11 +31,11 @@ All calls share the same running VM:
 from vpod import Sandbox
 
 with Sandbox.create() as sbx:
-    sbx.commands.run("export DB_URL=postgres://localhost/mydb")
+    sbx.commands.run("export Foo=Bar")
     sbx.commands.run("touch /tmp/data.csv")
 
-    result = sbx.commands.run("echo $DB_URL")
-    print(result.stdout)  # postgres://localhost/mydb
+    result = sbx.commands.run("echo $Foo")
+    print(result.stdout)  # Bar
 ```
 
 ### Code execution
