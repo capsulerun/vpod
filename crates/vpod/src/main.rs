@@ -1,6 +1,6 @@
 mod pull;
 mod registry;
-mod run;
+mod start;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -44,7 +44,7 @@ fn main() -> Result<()> {
         } => {
             let (version, snapshot) = resolve_snapshot(&snapshot_name, reg_url)?;
 
-            run::run(run::RunConfig { version, snapshot })?;
+            start::run(start::RunConfig { version, snapshot })?;
         }
 
         Cmd::Pull { snapshot } => {

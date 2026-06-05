@@ -86,3 +86,44 @@ with Sandbox.create() as sandbox:
 
 > [!NOTE]
 > The first call to `Sandbox.create()` downloads the default snapshot (`alpine`) and caches it locally if not already present.
+
+## Documentation
+
+### CLI commands
+
+| Command | Description |
+|:---|:---|
+| `vpod` | Start an interactive shell |
+| `vpod pull <name>` | Pull a snapshot |
+| `vpod list` | List available snapshots |
+| `vpod rm <name>` | Remove a snapshot |
+
+### Python SDK
+
+#### Sandbox Class
+
+| Method | Description |
+|:---|:---|
+| `Sandbox.create()` | Create a new sandbox |
+| `sandbox.commands.run(cmd)` | Run a command |
+| `sandbox.code.run(code)` | Run Python code |
+
+
+#### Snapshots Class
+
+| Method | Description | Return Type |
+|:---|:---|:---|
+| `snapshots.fetch_registry()` | Fetch available snapshots | list[dict] |
+| `snapshots.pull(name)` | Pull a snapshot | str |
+
+##### Example
+
+```python
+from vpod import snapshots
+
+for s in snapshots.fetch_registry():
+    print(s["name"], s["tag"])
+
+path = snapshots.pull("alpine:latest")
+```
+
