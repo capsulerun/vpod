@@ -1,10 +1,14 @@
+
+
+<h1 align="center"> <code>Vpod</code> </h1>
+
+<p align="center">
+  <a href="https://github.com/capsulerun/vpod/actions/workflows/ci.yml" target="_blank">
+    <img src="https://img.shields.io/github/actions/workflow/status/capsulerun/vpod/ci.yml?branch=main&label=CI" alt="stars">
+  </a>
+</p>
+
 <div align="center">
-
-# `Vpod`
-
-[![CI](https://img.shields.io/github/actions/workflow/status/capsulerun/vpod/ci.yml?branch=main&label=CI)](https://github.com/capsulerun/vpod/actions/workflows/ci.yml)
-
-
   <a href="#getting-started">Getting started</a>
   <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
   <a href="#documentation">Documentation</a>
@@ -13,7 +17,6 @@
   <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
   <a href="#contributing">Contribute</a>
 </div>
-
 
 ## Overview
 
