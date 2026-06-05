@@ -4,11 +4,16 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/capsulerun/vpod/ci.yml?branch=main&label=CI)](https://github.com/capsulerun/vpod/actions/workflows/ci.yml)
 
-[Usage](#usage) • [Contributing](#contributing) • [Issues](https://github.com/capsulerun/vpod/issues/new)
 
+  <a href="#getting-started">Getting started</a>
+  <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
+  <a href="#documentation">Documentation</a>
+  <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
+  <a href="#issues">Issues</a>
+  <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
+  <a href="#contributing">Contribute</a>
 </div>
 
----
 
 ## Overview
 
@@ -20,28 +25,25 @@ A `vpod` is a lightweight, portable sandbox that gives an untrusted process an i
 
 ## How it works
 
-A vpod runs a RISC‑V virtual machine compiled to WebAssembly. The core implements the RV64GCV specification.
+A vpod runs a RISC‑V virtual machine compiled to WebAssembly. The core implements the RV64GCV specification. When you start a vpod, it boots from a snapshot, a saved VM state ready in under a second.
 
-When you start a vpod, it boots from a snapshot. A snapshot is a saved VM state containing a Linux userspace, packages, and a pre-loaded filesystem. This gives you a ready environment in under a second.
-
-The WASM component communicates with the host through WASI 0.2. Host functions provide controlled access to the filesystem, networking, and standard I/O. All execution state (CPU registers, memory, filesystem) stays isolated inside the WASM component.
+The WASM component communicates with the host through WASI 0.2, providing controlled access to filesystem, networking, and standard I/O while keeping all execution state (CPU registers, memory, filesystem) isolated inside the sandbox.
 
 ### RV64GCV
 
-**G — General-purpose extensions**
+**G (General-purpose extensions)**
 - **I** : Base 64-bit integer instruction set.
 - **M** : Hardware multiply and divide, useful for hashing and cryptography.
 - **A** : Atomic operations for thread-safe programs.
 - **F/D** : Single and double-precision floating-point, suited for scientific computing and ML inference.
 
-**C — Compressed instructions**
+**C (Compressed instructions)**
 Reduces code size by roughly 30%, improving instruction fetch speed and memory efficiency. This matters when running a full Linux userspace inside a memory-constrained WASM environment.
 
-**V — Vector extension**
+**V (Vector extension)**
 Adds SIMD operations for parallel data processing. Accelerates array operations, data transformations, and numerical workloads common in AI agent execution.
 
-
-## Usage
+## Getting started
 
 ### CLI
 
@@ -124,8 +126,8 @@ Full reference for the CLI and Python SDK.
 ```python
 from vpod import snapshots
 
-for s in snapshots.fetch_registry():
-    print(s["name"], s["tag"])
+for snap in snapshots.fetch_registry():
+    print(snap["name"], snap["tag"])
 
 path = snapshots.pull("alpine:latest")
 ```
