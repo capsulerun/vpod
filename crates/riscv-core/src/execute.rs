@@ -7,6 +7,7 @@ use crate::gpr::Gpr;
 use crate::mmu::{Mmu, MmuFault};
 use crate::system_bus::SystemBus;
 use crate::trap::{StepResult, TrapCause};
+use crate::vec::exec_vec;
 
 pub const ICACHE_SIZE: usize = 4096;
 const ICACHE_TAG_SHIFT: u32 = 1 + ICACHE_SIZE.trailing_zeros();
@@ -428,6 +429,7 @@ fn exec_full<B: SystemBus>(
             let imm = inst.imm_i();
             let shamt = (imm & 0x1f) as u32;
             let funct7 = inst.funct7();
+
             let val: i32 = match inst.funct3() {
                 0x0 => rs1.wrapping_add(imm as u32) as i32,
                 0x1 => match funct7 {
@@ -449,6 +451,7 @@ fn exec_full<B: SystemBus>(
                 },
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
+
             ctx.regs.write(inst.rd(), val as i64 as u64);
             ctx.regs.pc = pc.wrapping_add(4);
         }
@@ -514,6 +517,7 @@ fn exec_full<B: SystemBus>(
         OP_REG32 => {
             let rs1 = ctx.regs.read(inst.rs1());
             let rs2 = ctx.regs.read(inst.rs2());
+
             let val = match (inst.funct3(), inst.funct7()) {
                 (0x0, 0x00) => (rs1 as u32).wrapping_add(rs2 as u32) as i32 as i64 as u64,
                 (0x0, 0x20) => (rs1 as u32).wrapping_sub(rs2 as u32) as i32 as i64 as u64,
@@ -545,11 +549,11 @@ fn exec_full<B: SystemBus>(
 
         OP_SYSTEM => return exec_system(ctx, inst, raw),
 
-        OP_LOAD_FP => return exec_load_fp(ctx, inst, raw, pc),
-        OP_STORE_FP => return exec_store_fp(ctx, inst, raw, pc),
-        OP_OP_FP => return exec_op_fp(ctx, inst, raw, pc),
-        OP_FMADD | OP_FMSUB | OP_FNMSUB | OP_FNMADD => return exec_fma(ctx, inst, raw, pc),
-        OP_VEC => return exec_vec(ctx, inst, raw, pc),
+        OP_LOAD_FP => return load_fp(ctx, inst, raw, pc),
+        OP_STORE_FP => return store_fp(ctx, inst, raw, pc),
+        OP_OP_FP => return op_fp(ctx, inst, raw, pc),
+        OP_FMADD | OP_FMSUB | OP_FNMSUB | OP_FNMADD => return fma(ctx, inst, raw, pc),
+        OP_VEC => return exec_vec(ctx, raw, pc),
 
         _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
     }
@@ -582,9 +586,11 @@ fn exec_amo<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32)
             } else {
                 ctx.bus.read_doubleword(pa)
             };
+
             ctx.regs.write(inst.rd(), val);
             *ctx.lr_addr = Some(pa);
             ctx.regs.pc = pc.wrapping_add(4);
+
             return StepResult::Ok;
         }
         0x03 => {
@@ -595,6 +601,7 @@ fn exec_amo<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32)
                 } else {
                     ctx.bus.write_doubleword(pa, src);
                 }
+
                 ctx.regs.write(inst.rd(), 0);
             } else {
                 ctx.regs.write(inst.rd(), 1);
@@ -622,6 +629,7 @@ fn exec_amo<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32)
             0x1c => ext::amomaxu_w(mem, src),
             _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
         };
+
         ctx.bus.write_word(pa, new_val);
         ctx.regs.write(inst.rd(), rd_val);
     } else {
@@ -649,6 +657,7 @@ fn exec_amo<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32)
 
 fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32) -> StepResult {
     let pc = ctx.regs.pc;
+
     match inst.funct3() {
         0x0 => match raw >> 20 {
             0x000 => {
@@ -657,6 +666,7 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                     PrivMode::S => TrapCause::EcallFromSMode,
                     PrivMode::M => TrapCause::EcallFromMMode,
                 };
+
                 take_exception(ctx, cause.mcause_code(), 0);
                 return StepResult::Ok;
             }
@@ -679,8 +689,8 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                 *ctx.priv_mode = PrivMode::from_bits(spp);
                 ctx.regs.pc = ctx.csr.sepc;
                 ctx.mmu.flush();
-                invalidate_fetch_cache(ctx);
 
+                invalidate_fetch_cache(ctx);
                 return StepResult::Ok;
             }
             0x302 => {
@@ -688,13 +698,16 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                 let mpp = (ctx.csr.mstatus >> 11) & 3;
                 let mpie = (ctx.csr.mstatus >> 7) & 1;
                 ctx.csr.mstatus &= !crate::csr::MSTATUS_MPP;
+
                 if mpie != 0 {
                     ctx.csr.mstatus |= crate::csr::MSTATUS_MIE;
                 }
+
                 ctx.csr.mstatus &= !crate::csr::MSTATUS_MPIE;
                 *ctx.priv_mode = PrivMode::from_bits(mpp);
                 ctx.regs.pc = ctx.csr.mepc;
                 ctx.mmu.flush();
+
                 invalidate_fetch_cache(ctx);
                 return StepResult::Ok;
             }
@@ -771,6 +784,7 @@ fn cross_page_load_dw<B: SystemBus>(va: u64, satp: u64, ctx: &mut ExecContext<B>
         }
     } else {
         let mut buf = [0u8; 8];
+
         for i in 0..8u64 {
             let bva = va.wrapping_add(i);
             match ctx.mmu.translate_load(bva, satp, ctx.bus) {
@@ -778,6 +792,7 @@ fn cross_page_load_dw<B: SystemBus>(va: u64, satp: u64, ctx: &mut ExecContext<B>
                 Err(f) => return DwResult::Fault(trap_from_mmu(ctx, f)),
             }
         }
+
         DwResult::Ok(u64::from_le_bytes(buf))
     }
 }
@@ -793,11 +808,13 @@ fn cross_page_load_dw_result<B: SystemBus>(
         Ok(ctx.bus.read_doubleword(pa))
     } else {
         let mut buf = [0u8; 8];
+
         for i in 0..8u64 {
             let bva = va.wrapping_add(i);
             let bpa = ctx.mmu.translate_load(bva, satp, ctx.bus)?;
             buf[i as usize] = ctx.bus.read_byte(bpa);
         }
+
         Ok(u64::from_le_bytes(buf))
     }
 }
@@ -849,6 +866,7 @@ fn cross_page_store_dw_result<B: SystemBus>(
         ctx.bus.write_doubleword(pa, val);
     } else {
         let bytes = val.to_le_bytes();
+
         for i in 0..8u64 {
             let bva = va.wrapping_add(i);
             let bpa = ctx.mmu.translate_store(bva, satp, ctx.bus)?;
@@ -865,6 +883,7 @@ fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResu
     } else {
         ctx.csr.satp
     };
+
     let pc = ctx.regs.pc;
     let quad = raw & 0x3;
     let funct = (raw >> 13) as u32;
@@ -1363,14 +1382,14 @@ fn mark_fs_dirty<B: SystemBus>(ctx: &mut ExecContext<B>) {
     ctx.csr.mstatus |= crate::csr::MSTATUS_FS;
 }
 
-fn exec_load_fp<B: SystemBus>(
+fn load_fp<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     inst: Instruction,
     raw: u32,
     pc: u64,
 ) -> StepResult {
     if matches!(inst.funct3(), 0 | 5 | 6 | 7) {
-        return crate::vec::exec_vec(ctx, raw, pc);
+        return exec_vec(ctx, raw, pc);
     }
 
     if let Some(t) = check_fs(ctx, raw) {
@@ -1383,6 +1402,7 @@ fn exec_load_fp<B: SystemBus>(
     } else {
         ctx.csr.satp
     };
+
     match inst.funct3() {
         0x2 => {
             // FLW
@@ -1409,6 +1429,7 @@ fn exec_load_fp<B: SystemBus>(
         }
         _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
     }
+
     mark_fs_dirty(ctx);
     ctx.regs.pc = pc.wrapping_add(4);
     ctx.csr.instret = ctx.csr.instret.wrapping_add(1);
@@ -1416,18 +1437,20 @@ fn exec_load_fp<B: SystemBus>(
     StepResult::Ok
 }
 
-fn exec_store_fp<B: SystemBus>(
+fn store_fp<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     inst: Instruction,
     raw: u32,
     pc: u64,
 ) -> StepResult {
     if matches!(inst.funct3(), 0 | 5 | 6 | 7) {
-        return crate::vec::exec_vec(ctx, raw, pc);
+        return exec_vec(ctx, raw, pc);
     }
+
     if let Some(t) = check_fs(ctx, raw) {
         return t;
     }
+
     let va = ctx.regs.read(inst.rs1()).wrapping_add(inst.imm_s() as u64);
     let satp = if *ctx.priv_mode == PrivMode::M {
         0
@@ -1467,7 +1490,7 @@ fn exec_store_fp<B: SystemBus>(
     StepResult::Ok
 }
 
-fn exec_op_fp<B: SystemBus>(
+fn op_fp<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     inst: Instruction,
     raw: u32,
@@ -1476,6 +1499,7 @@ fn exec_op_fp<B: SystemBus>(
     if let Some(t) = check_fs(ctx, raw) {
         return t;
     }
+
     let funct7 = inst.funct7();
     let rs1 = inst.rs1();
     let rs2 = inst.rs2();
@@ -1726,7 +1750,7 @@ fn exec_op_fp<B: SystemBus>(
     StepResult::Ok
 }
 
-fn exec_fma<B: SystemBus>(
+fn fma<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     inst: Instruction,
     raw: u32,
@@ -1735,6 +1759,7 @@ fn exec_fma<B: SystemBus>(
     if let Some(t) = check_fs(ctx, raw) {
         return t;
     }
+
     let rs1 = inst.rs1();
     let rs2 = inst.rs2();
     let rs3 = (raw >> 27) as usize;
@@ -1777,13 +1802,4 @@ fn exec_fma<B: SystemBus>(
     ctx.regs.pc = pc.wrapping_add(4);
     ctx.csr.instret = ctx.csr.instret.wrapping_add(1);
     StepResult::Ok
-}
-
-fn exec_vec<B: SystemBus>(
-    ctx: &mut ExecContext<B>,
-    _inst: Instruction,
-    raw: u32,
-    pc: u64,
-) -> StepResult {
-    crate::vec::exec_vec(ctx, raw, pc)
 }

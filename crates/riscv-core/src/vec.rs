@@ -121,7 +121,7 @@ fn vec_translate_store<B: SystemBus>(ctx: &mut ExecContext<B>, va: u64) -> Resul
 
 // vsetvl*
 
-fn exec_opcfg<B: SystemBus>(
+fn opcfg<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     instruction_encoding: u32,
     pc: u64,
@@ -171,7 +171,7 @@ fn exec_opcfg<B: SystemBus>(
 
 // unit-stride and strided load
 
-fn exec_vload<B: SystemBus>(
+fn vload<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     instruction_encoding: u32,
     pc: u64,
@@ -244,7 +244,7 @@ fn exec_vload<B: SystemBus>(
 
 // unit-stride and strided store
 
-fn exec_vstore<B: SystemBus>(
+fn vstore<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     instruction_encoding: u32,
     pc: u64,
@@ -336,7 +336,7 @@ fn src_scalar(
     }
 }
 
-fn exec_opivv_opivx_opivi<B: SystemBus>(
+fn opivv_opivx_opivi<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     instruction_encoding: u32,
     pc: u64,
@@ -444,7 +444,7 @@ fn exec_opivv_opivx_opivi<B: SystemBus>(
     StepResult::Ok
 }
 
-fn exec_opmvv_opmvx<B: SystemBus>(
+fn opmvv_opmvx<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     instruction_encoding: u32,
     pc: u64,
@@ -563,7 +563,7 @@ fn exec_opmvv_opmvx<B: SystemBus>(
     StepResult::Ok
 }
 
-fn exec_vredop<B: SystemBus>(
+fn vredop<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     instruction_encoding: u32,
     pc: u64,
@@ -613,7 +613,7 @@ fn exec_vredop<B: SystemBus>(
 
 // mask logical ops
 
-fn exec_mask_logical<B: SystemBus>(
+fn mask_logical<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     instruction_encoding: u32,
     pc: u64,
@@ -681,8 +681,6 @@ fn mulh(a: i64, b: i64, sew_bits: u64) -> u64 {
     (((a as i128 * b as i128) >> sew_bits) as i64) as u64
 }
 
-// top-level dispatcher
-
 pub fn exec_vec<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     instruction_encoding: u32,
@@ -695,7 +693,7 @@ pub fn exec_vec<B: SystemBus>(
     if opcode == 0x07 {
         let width = (instruction_encoding >> 12) & 0x7;
         if matches!(width, 0 | 5 | 6 | 7) {
-            return exec_vload(ctx, instruction_encoding, pc);
+            return vload(ctx, instruction_encoding, pc);
         }
         return StepResult::Trap(TrapCause::IllegalInstruction(instruction_encoding));
     }
@@ -703,7 +701,7 @@ pub fn exec_vec<B: SystemBus>(
     if opcode == 0x27 {
         let width = (instruction_encoding >> 12) & 0x7;
         if matches!(width, 0 | 5 | 6 | 7) {
-            return exec_vstore(ctx, instruction_encoding, pc);
+            return vstore(ctx, instruction_encoding, pc);
         }
 
         return StepResult::Trap(TrapCause::IllegalInstruction(instruction_encoding));
@@ -711,24 +709,24 @@ pub fn exec_vec<B: SystemBus>(
 
     // OP_VEC (0x57)
     match funct3 {
-        7 => exec_opcfg(ctx, instruction_encoding, pc), // vsetvl*
+        7 => opcfg(ctx, instruction_encoding, pc), // vsetvl*
 
         // OPIVV=0, OPIVX=4, OPIVI=3
         0 => match funct6 {
             0x64 | 0x66 | 0x67 | 0x68 | 0x6A | 0x6B | 0x6C | 0x6E => {
-                exec_mask_logical(ctx, instruction_encoding, pc, funct6)
+                mask_logical(ctx, instruction_encoding, pc, funct6)
             }
-            _ => exec_opivv_opivx_opivi(ctx, instruction_encoding, pc, funct6, true, false),
+            _ => opivv_opivx_opivi(ctx, instruction_encoding, pc, funct6, true, false),
         },
-        3 => exec_opivv_opivx_opivi(ctx, instruction_encoding, pc, funct6, false, false), // OPIVI
-        4 => exec_opivv_opivx_opivi(ctx, instruction_encoding, pc, funct6, false, true),  // OPIVX
+        3 => opivv_opivx_opivi(ctx, instruction_encoding, pc, funct6, false, false), // OPIVI
+        4 => opivv_opivx_opivi(ctx, instruction_encoding, pc, funct6, false, true),  // OPIVX
 
         // OPMVV=2, OPMVX=6
         2 => match funct6 {
-            0x00..=0x03 => exec_vredop(ctx, instruction_encoding, pc, funct6),
-            _ => exec_opmvv_opmvx(ctx, instruction_encoding, pc, funct6, true),
+            0x00..=0x03 => vredop(ctx, instruction_encoding, pc, funct6),
+            _ => opmvv_opmvx(ctx, instruction_encoding, pc, funct6, true),
         },
-        6 => exec_opmvv_opmvx(ctx, instruction_encoding, pc, funct6, false),
+        6 => opmvv_opmvx(ctx, instruction_encoding, pc, funct6, false),
 
         // OPFVV=1, OPFVF=5
         _ => StepResult::Trap(TrapCause::IllegalInstruction(instruction_encoding)),

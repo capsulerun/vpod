@@ -812,7 +812,7 @@ fn make_udp_payload(src_port: u16, dst_port: u16, data: &[u8]) -> Vec<u8> {
     udp
 }
 
-// to refacto the function to avoid to many argument
+// to refacto the function in order to avoid to many argument
 #[allow(clippy::too_many_arguments)]
 fn make_tcp_frame(
     dst_mac: &[u8; 6],
