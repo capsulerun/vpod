@@ -34,6 +34,26 @@ const OP_FNMSUB: u32 = 0x4B;
 const OP_FNMADD: u32 = 0x4F;
 const OP_VEC: u32 = 0x57;
 
+const FUNCT3_BEQ: u32 = 0x0;
+const FUNCT3_BNE: u32 = 0x1;
+const FUNCT3_BLT: u32 = 0x4;
+const FUNCT3_BGE: u32 = 0x5;
+const FUNCT3_BLTU: u32 = 0x6;
+const FUNCT3_BGEU: u32 = 0x7;
+
+const FUNCT3_LB: u32 = 0x0;
+const FUNCT3_LH: u32 = 0x1;
+const FUNCT3_LW: u32 = 0x2;
+const FUNCT3_LD: u32 = 0x3;
+const FUNCT3_LBU: u32 = 0x4;
+const FUNCT3_LHU: u32 = 0x5;
+const FUNCT3_LWU: u32 = 0x6;
+
+const FUNCT3_SB: u32 = 0x0;
+const FUNCT3_SH: u32 = 0x1;
+const FUNCT3_SW: u32 = 0x2;
+const FUNCT3_SD: u32 = 0x3;
+
 pub struct ExecContext<'a, B: SystemBus> {
     pub regs: &'a mut Gpr,
     pub csr: &'a mut Csr,
@@ -197,117 +217,165 @@ fn exec_full<B: SystemBus>(
         }
 
         OP_BRANCH => {
-            let rs1 = ctx.regs.read(inst.rs1());
-            let rs2 = ctx.regs.read(inst.rs2());
-            let taken = match inst.funct3() {
-                0x0 => rs1 == rs2,
-                0x1 => rs1 != rs2,
-                0x4 => (rs1 as i64) < (rs2 as i64),
-                0x5 => (rs1 as i64) >= (rs2 as i64),
-                0x6 => rs1 < rs2,
-                0x7 => rs1 >= rs2,
+            let rs1_value = ctx.regs.read(inst.rs1());
+            let rs2_value = ctx.regs.read(inst.rs2());
+
+            let branch_taken = match inst.funct3() {
+                FUNCT3_BEQ => rs1_value == rs2_value,
+                FUNCT3_BNE => rs1_value != rs2_value,
+                FUNCT3_BLT => (rs1_value as i64) < (rs2_value as i64),
+                FUNCT3_BGE => (rs1_value as i64) >= (rs2_value as i64),
+                FUNCT3_BLTU => rs1_value < rs2_value,
+                FUNCT3_BGEU => rs1_value >= rs2_value,
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
 
-            if taken {
-                let target = pc.wrapping_add(inst.imm_b() as u64);
+            if branch_taken {
+                let branch_target = pc.wrapping_add(inst.imm_b() as u64);
 
-                if target & 0x1 != 0 {
+                if branch_target & 0x1 != 0 {
                     return StepResult::Trap(TrapCause::InstructionAddressMisaligned);
                 }
 
-                ctx.regs.pc = target;
+                ctx.regs.pc = branch_target;
             } else {
                 ctx.regs.pc = pc.wrapping_add(4);
             }
         }
 
         OP_LOAD => {
-            let va = ctx.regs.read(inst.rs1()).wrapping_add(inst.imm_i() as u64);
-            let size: u64 = match inst.funct3() {
-                0x0 | 0x4 => 1,
-                0x1 | 0x5 => 2,
-                0x2 | 0x6 => 4,
-                0x3 => 8,
+            let base_address = ctx.regs.read(inst.rs1());
+            let virtual_address = base_address.wrapping_add(inst.imm_i() as u64);
+
+            let access_size: u64 = match inst.funct3() {
+                FUNCT3_LB | FUNCT3_LBU => 1,
+                FUNCT3_LH | FUNCT3_LHU => 2,
+                FUNCT3_LW | FUNCT3_LWU => 4,
+                FUNCT3_LD => 8,
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
-            let page_off = va & 0xFFF;
-            let val: u64 = if page_off + size > 0x1000 {
-                let mut buf = [0u8; 8];
-                for i in 0..size {
-                    let bva = va.wrapping_add(i);
-                    let bpa = match ctx.mmu.translate_load(bva, effective_satp, ctx.bus) {
-                        Ok(p) => p,
-                        Err(f) => return trap_from_mmu(ctx, f),
-                    };
-                    buf[i as usize] = ctx.bus.read_byte(bpa);
+
+            let page_offset = virtual_address & 0xFFF;
+            let crosses_page_boundary = page_offset + access_size > 0x1000;
+
+            let loaded_value: u64 = if crosses_page_boundary {
+                let mut buffer = [0u8; 8];
+                for byte_index in 0..access_size {
+                    let byte_virtual_address = virtual_address.wrapping_add(byte_index);
+                    let byte_physical_address =
+                        match ctx
+                            .mmu
+                            .translate_load(byte_virtual_address, effective_satp, ctx.bus)
+                        {
+                            Ok(physical_address) => physical_address,
+                            Err(fault) => return trap_from_mmu(ctx, fault),
+                        };
+                    buffer[byte_index as usize] = ctx.bus.read_byte(byte_physical_address);
                 }
 
                 match inst.funct3() {
-                    0x1 => u16::from_le_bytes([buf[0], buf[1]]) as i16 as i64 as u64,
-                    0x2 => {
-                        u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as i32 as i64 as u64
+                    FUNCT3_LH => {
+                        let halfword = u16::from_le_bytes([buffer[0], buffer[1]]);
+                        halfword as i16 as i64 as u64
                     }
-                    0x3 => u64::from_le_bytes(buf),
-                    0x5 => u16::from_le_bytes([buf[0], buf[1]]) as u64,
-                    0x6 => u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as u64,
+                    FUNCT3_LW => {
+                        let word = u32::from_le_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]);
+                        word as i32 as i64 as u64
+                    }
+                    FUNCT3_LD => u64::from_le_bytes(buffer),
+                    FUNCT3_LHU => u16::from_le_bytes([buffer[0], buffer[1]]) as u64,
+                    FUNCT3_LWU => {
+                        u32::from_le_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as u64
+                    }
                     _ => unreachable!(),
                 }
             } else {
-                let pa = match ctx.mmu.translate_load(va, effective_satp, ctx.bus) {
-                    Ok(pa) => pa,
-                    Err(f) => return trap_from_mmu(ctx, f),
-                };
+                let physical_address =
+                    match ctx
+                        .mmu
+                        .translate_load(virtual_address, effective_satp, ctx.bus)
+                    {
+                        Ok(physical_address) => physical_address,
+                        Err(fault) => return trap_from_mmu(ctx, fault),
+                    };
+
                 match inst.funct3() {
-                    0x0 => ctx.bus.read_byte(pa) as i8 as i64 as u64,
-                    0x1 => ctx.bus.read_halfword(pa) as i16 as i64 as u64,
-                    0x2 => ctx.bus.read_word(pa) as i32 as i64 as u64,
-                    0x3 => ctx.bus.read_doubleword(pa),
-                    0x4 => ctx.bus.read_byte(pa) as u64,
-                    0x5 => ctx.bus.read_halfword(pa) as u64,
-                    0x6 => ctx.bus.read_word(pa) as u64,
+                    FUNCT3_LB => {
+                        let byte = ctx.bus.read_byte(physical_address);
+                        byte as i8 as i64 as u64
+                    }
+                    FUNCT3_LH => {
+                        let halfword = ctx.bus.read_halfword(physical_address);
+                        halfword as i16 as i64 as u64
+                    }
+                    FUNCT3_LW => {
+                        let word = ctx.bus.read_word(physical_address);
+                        word as i32 as i64 as u64
+                    }
+                    FUNCT3_LD => ctx.bus.read_doubleword(physical_address),
+                    FUNCT3_LBU => ctx.bus.read_byte(physical_address) as u64,
+                    FUNCT3_LHU => ctx.bus.read_halfword(physical_address) as u64,
+                    FUNCT3_LWU => ctx.bus.read_word(physical_address) as u64,
                     _ => unreachable!(),
                 }
             };
 
-            ctx.regs.write(inst.rd(), val);
+            ctx.regs.write(inst.rd(), loaded_value);
             ctx.regs.pc = pc.wrapping_add(4);
         }
 
         OP_STORE => {
-            let va = ctx.regs.read(inst.rs1()).wrapping_add(inst.imm_s() as u64);
-            let src = ctx.regs.read(inst.rs2());
-            let size: u64 = match inst.funct3() {
-                0x0 => 1,
-                0x1 => 2,
-                0x2 => 4,
-                0x3 => 8,
+            let base_address = ctx.regs.read(inst.rs1());
+            let virtual_address = base_address.wrapping_add(inst.imm_s() as u64);
+            let source_value = ctx.regs.read(inst.rs2());
+
+            let store_size: u64 = match inst.funct3() {
+                FUNCT3_SB => 1,
+                FUNCT3_SH => 2,
+                FUNCT3_SW => 4,
+                FUNCT3_SD => 8,
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
-            let page_off = va & 0xFFF;
-            if page_off + size > 0x1000 {
-                let bytes = src.to_le_bytes();
-                for i in 0..size {
-                    let bva = va.wrapping_add(i);
-                    let bpa = match ctx.mmu.translate_store(bva, effective_satp, ctx.bus) {
-                        Ok(p) => p,
-                        Err(f) => return trap_from_mmu(ctx, f),
-                    };
-                    ctx.bus.write_byte(bpa, bytes[i as usize]);
+
+            let page_offset = virtual_address & 0xFFF;
+            let crosses_page_boundary = page_offset + store_size > 0x1000;
+
+            if crosses_page_boundary {
+                let bytes = source_value.to_le_bytes();
+                for byte_index in 0..store_size {
+                    let byte_virtual_address = virtual_address.wrapping_add(byte_index);
+                    let byte_physical_address =
+                        match ctx
+                            .mmu
+                            .translate_store(byte_virtual_address, effective_satp, ctx.bus)
+                        {
+                            Ok(physical_address) => physical_address,
+                            Err(fault) => return trap_from_mmu(ctx, fault),
+                        };
+                    ctx.bus
+                        .write_byte(byte_physical_address, bytes[byte_index as usize]);
                 }
             } else {
-                let pa = match ctx.mmu.translate_store(va, effective_satp, ctx.bus) {
-                    Ok(pa) => pa,
-                    Err(f) => return trap_from_mmu(ctx, f),
-                };
+                let physical_address =
+                    match ctx
+                        .mmu
+                        .translate_store(virtual_address, effective_satp, ctx.bus)
+                    {
+                        Ok(physical_address) => physical_address,
+                        Err(fault) => return trap_from_mmu(ctx, fault),
+                    };
+
                 match inst.funct3() {
-                    0x0 => ctx.bus.write_byte(pa, src as u8),
-                    0x1 => ctx.bus.write_halfword(pa, src as u16),
-                    0x2 => ctx.bus.write_word(pa, src as u32),
-                    0x3 => ctx.bus.write_doubleword(pa, src),
+                    FUNCT3_SB => ctx.bus.write_byte(physical_address, source_value as u8),
+                    FUNCT3_SH => ctx
+                        .bus
+                        .write_halfword(physical_address, source_value as u16),
+                    FUNCT3_SW => ctx.bus.write_word(physical_address, source_value as u32),
+                    FUNCT3_SD => ctx.bus.write_doubleword(physical_address, source_value),
                     _ => unreachable!(),
                 }
             }
+
             ctx.regs.pc = pc.wrapping_add(4);
         }
 
@@ -1080,6 +1148,7 @@ fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResu
             let uimm = (((raw >> 10) & 0x7) << 3) | (((raw >> 7) & 0x7) << 6);
             let rs2 = ((raw >> 2) & 0x1f) as usize;
             let va = ctx.regs.read(2).wrapping_add(uimm as u64);
+
             if let DwStoreResult::Fault(t) =
                 cross_page_store_dw(va, ctx.regs.read(rs2), effective_satp, ctx)
             {
@@ -1098,6 +1167,7 @@ fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResu
                 DwResult::Ok(v) => v,
                 DwResult::Fault(t) => return t,
             };
+
             ctx.regs.write_f(rd, val);
             ctx.regs.pc = pc.wrapping_add(2);
         }
@@ -1107,11 +1177,13 @@ fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResu
             let rs1 = rp!((raw >> 7) as usize);
             let rs2 = rp!((raw >> 2) as usize);
             let va = ctx.regs.read(rs1).wrapping_add(uimm as u64);
+
             if let DwStoreResult::Fault(t) =
                 cross_page_store_dw(va, ctx.regs.read_f(rs2), effective_satp, ctx)
             {
                 return t;
             }
+
             ctx.regs.pc = pc.wrapping_add(2);
         }
         // C.FLDSP
@@ -1124,6 +1196,7 @@ fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResu
                 DwResult::Ok(v) => v,
                 DwResult::Fault(t) => return t,
             };
+
             ctx.regs.write_f(rd, val);
             ctx.regs.pc = pc.wrapping_add(2);
         }
