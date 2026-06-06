@@ -13,7 +13,6 @@ pub struct VmConfig<'a> {
 
 pub fn load(config: VmConfig) -> Result<(MachineBus, Hart), String> {
     let mut bus = MachineBus::new(256 * 1024 * 1024);
-    bus.uart.capture_tx.set(config.capture_tx);
     bus.attach_net();
     let mut hart = Hart::new(0x1000);
 
@@ -37,6 +36,8 @@ pub fn load(config: VmConfig) -> Result<(MachineBus, Hart), String> {
         &mut BufReader::new(GzDecoder::new(snapshot_file)),
     )
     .map_err(|e| format!("failed to restore snapshot: {e}"))?;
+
+    bus.uart.capture_tx.set(config.capture_tx);
 
     Ok((bus, hart))
 }

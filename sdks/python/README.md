@@ -1,6 +1,10 @@
 # vpod Python SDK
 
-Secure code execution sandbox powered by RISC-V and WebAssembly.
+A lightweight, portable sandbox that gives an untrusted process an instant Linux environment. It uses the RISC‑V architecture and runs entirely inside WebAssembly.
+
+- **Fast startup** — Boot in under a second.
+- **Portable** — Runs anywhere without any setup required.
+- **Isolated** — All execution state stays inside the WASM sandbox.
 
 ## Installation
 
@@ -31,27 +35,28 @@ All calls share the same running VM:
 from vpod import Sandbox
 
 with Sandbox.create() as sbx:
-    sbx.commands.run("export DB_URL=postgres://localhost/mydb")
+    sbx.commands.run("export Foo=Bar")
     sbx.commands.run("touch /tmp/data.csv")
 
-    result = sbx.commands.run("echo $DB_URL")
-    print(result.stdout)  # postgres://localhost/mydb
+    result = sbx.commands.run("echo $Foo")
+    print(result.stdout)  # Bar
 ```
 
-### Code execution
+### Python REPL
 
-Run interpreted code directly inside a session:
+Run Python code with persistent state across calls:
 
 ```python
 from vpod import Sandbox
 
 with Sandbox.create() as sbx:
-    result = sbx.code.run("print(2 + 2)")
-    print(result.text)  # 4
-
-    result = sbx.code.run("[x**2 for x in range(5)]")
-    print(result.text)  # [0, 1, 4, 9, 16]
+    sbx.code.run("import requests")
+    sbx.code.run("data = [1, 2, 3]")
+    result = sbx.code.run("print(sum(data))")
+    print(result.text)  # 6
 ```
+
+Variables and imports persist for the lifetime of the session.
 
 ### Snapshots
 
@@ -68,8 +73,17 @@ for s in snapshots.fetch_registry():
 path = snapshots.pull("alpine:latest")
 ```
 
-## Requirements
+## How it works
 
-- Python 3.10+
-- wasmtime-py 25.0+
-- platformdirs 4.0+
+A vpod runs a RISC‑V virtual machine compiled to WebAssembly. The core implements the **RV64GCV** specification:
+
+- **G (General-purpose)**: I/M/A/F/D extensions for integer, multiply/divide, atomics, and floating-point
+- **C (Compressed)**: 30% smaller code size, improving memory efficiency
+- **V (Vector)**: SIMD operations for parallel data processing
+
+The WASM component communicates with the host through WASI 0.2, providing controlled access to networking and I/O while keeping all execution state isolated inside the sandbox.
+
+## Limitations
+
+- **Emulation overhead** — No hardware acceleration in WASM. CPU-intensive workloads run slower than native.
+- **No GPU access** — CUDA, Metal, and hardware ML accelerators are not yet available.
