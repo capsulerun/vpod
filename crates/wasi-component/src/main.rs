@@ -37,7 +37,7 @@ fn main() {
     let (mut bus, mut hart) = vm::load(vm::VmConfig {
         snapshot: &snap,
         disk: disk_path.as_deref(),
-        capture_tx: false,
+        capture_tx: true,
     })
     .unwrap_or_else(|e| {
         eprintln!("{e}");

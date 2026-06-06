@@ -4,6 +4,9 @@ use wasi::clocks::monotonic_clock;
 use wasi::io::poll;
 use wasi::io::streams::{InputStream, StreamError};
 
+const KERNEL_PANIC: &[u8] = b"Kernel panic";
+const OUTPUT_HOLD_CYCLES: u32 = 3;
+
 pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
     let stdin = wasi::cli::stdin::get_stdin();
 
@@ -13,6 +16,8 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
     const IDLE_TIMEOUT_NS: u64 = 10_000_000;
 
     let mut idle_ticks = 0u32;
+    let mut pending: Vec<u8> = Vec::new();
+    let mut hold_cycles = 0u32;
 
     loop {
         let interval = if bus.net_rx_pending() {
@@ -31,13 +36,32 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
             idle_ticks = 0;
         }
 
-        flush_console(bus);
+        let bytes = bus.uart.drain_tx();
+        if !bytes.is_empty() {
+            pending.extend_from_slice(&bytes);
+            hold_cycles = 0;
+        }
+
+        if !pending.is_empty() {
+            if pending.windows(KERNEL_PANIC.len()).any(|w| w == KERNEL_PANIC) {
+                break;
+            }
+
+            hold_cycles += 1;
+            if hold_cycles > OUTPUT_HOLD_CYCLES {
+                let stdout = wasi::cli::stdout::get_stdout();
+                let _ = stdout.write(&pending);
+                let _ = stdout.flush();
+                pending.clear();
+            }
+        }
 
         if hart.is_waiting {
             idle_ticks += 1;
             hart.is_waiting = false;
 
             if !bus.has_pending_io() {
+                flush_pending(&mut pending);
                 let stdin_ready = stdin.subscribe();
                 let timeout = monotonic_clock::subscribe_duration(IDLE_TIMEOUT_NS);
                 poll::poll(&[&stdin_ready, &timeout]);
@@ -49,6 +73,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
         match hart.run(bus, interval) {
             StepResult::Ok => {}
             StepResult::Trap(cause) => {
+                flush_pending(&mut pending);
                 eprintln!(
                     "\r\n[vpod-wasi] unhandled trap {:?} at pc={:#x}",
                     cause, hart.regs.pc
@@ -57,11 +82,17 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
             }
             StepResult::Halt => break,
         }
-
-        flush_console(bus);
     }
+}
 
-    flush_console(bus);
+fn flush_pending(pending: &mut Vec<u8>) {
+    if pending.is_empty() {
+        return;
+    }
+    let stdout = wasi::cli::stdout::get_stdout();
+    let _ = stdout.write(pending);
+    let _ = stdout.flush();
+    pending.clear();
 }
 
 fn poll_stdin(bus: &mut MachineBus, stdin: &InputStream) -> bool {
@@ -81,15 +112,4 @@ fn poll_stdin(bus: &mut MachineBus, stdin: &InputStream) -> bool {
         Err(StreamError::Closed) => std::process::exit(0),
         Err(StreamError::LastOperationFailed(_)) => false,
     }
-}
-
-fn flush_console(bus: &mut MachineBus) {
-    let bytes = bus.console.take_tx_buffer();
-    if bytes.is_empty() {
-        return;
-    }
-
-    let stdout = wasi::cli::stdout::get_stdout();
-    let _ = stdout.write(&bytes);
-    let _ = stdout.flush();
 }
