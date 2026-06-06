@@ -21,7 +21,7 @@
 </div>
 
 
-## What is a vpod ?
+## What is a `vpod` ?
 
 A `vpod` is a lightweight, portable sandbox that gives an untrusted process an instant Linux environment. It uses the RISC‑V architecture and runs entirely inside WebAssembly.
 
@@ -140,7 +140,7 @@ path = snapshots.pull("alpine:latest")
 
 ## Limitations
 - **Emulation overhead** — No hardware acceleration in WASM. CPU-intensive workloads run slower than native.
-- **No GPU access** — CUDA, Metal, and hardware ML accelerators are not yet available. Support may be added in the future with WASI‑nn.
+- **No GPU access** — CUDA, Metal, and hardware ML accelerators are not yet available. Support may be added in the future with wasi-nn.
 
 ## Contributing
 
