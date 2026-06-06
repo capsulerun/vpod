@@ -21,7 +21,7 @@
 </div>
 
 
-## Overview
+## What is a vpod ?
 
 A `vpod` is a lightweight, portable sandbox that gives an untrusted process an instant Linux environment. It uses the RISC‑V architecture and runs entirely inside WebAssembly.
 
@@ -35,7 +35,7 @@ A vpod runs a RISC‑V virtual machine compiled to WebAssembly. The core impleme
 
 The WASM component communicates with the host through WASI 0.2, providing controlled access to filesystem, networking, and standard I/O while keeping all execution state (CPU registers, memory, filesystem) isolated inside the sandbox.
 
-### RV64GCV
+### `RV64GCV` Specification
 
 **G (General-purpose extensions)**
 - **I** : Base 64-bit integer instruction set.

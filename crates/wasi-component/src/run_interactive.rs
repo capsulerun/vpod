@@ -43,7 +43,10 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
         }
 
         if !pending.is_empty() {
-            if pending.windows(KERNEL_PANIC.len()).any(|w| w == KERNEL_PANIC) {
+            if pending
+                .windows(KERNEL_PANIC.len())
+                .any(|w| w == KERNEL_PANIC)
+            {
                 break;
             }
 
