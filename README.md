@@ -31,7 +31,7 @@ A `vpod` is a lightweight, portable sandbox that gives an untrusted process an i
 
 ## How it works
 
-A vpod runs a RISC‑V virtual machine compiled to WebAssembly. The core implements the RV64GCV specification. When you start a vpod, it boots from a snapshot, a saved VM state ready in under a second.
+A `vpod` runs a RISC‑V virtual machine compiled to WebAssembly, implementing the RV64GCV specification. When you start a `vpod`, it boots from a snapshot, a saved VM state ready in under a second.
 
 The WASM component communicates with the host through WASI 0.2, providing controlled access to filesystem, networking, and standard I/O while keeping all execution state (CPU registers, memory, filesystem) isolated inside the sandbox.
 
@@ -139,7 +139,7 @@ path = snapshots.pull("alpine:latest")
 ```
 
 ## Limitations
-- **Emulation overhead** — No hardware acceleration in WASM. CPU-intensive workloads run slower than native.
+- **Emulation overhead** — No hardware acceleration in the WASM component. CPU-intensive workloads may run slower than native.
 - **No GPU access** — CUDA, Metal, and hardware ML accelerators are not yet available. Support may be added in the future with wasi-nn.
 
 ## Contributing
@@ -173,7 +173,10 @@ The project uses pre-built Alpine snapshots from `registry.vpod.sh`. To build a 
 ./scripts/build-default-snapshot.sh
 ```
 
-This creates `dist/alpine-3.23.0-256mb.snap`. To use it locally, uncomment lines in `resolve_snapshot()` in `crates/vpod/src/main.rs`.
+This creates `dist/alpine-3.23.0-256mb.snap`.
+
+> [!IMPORTANT]
+> To use it locally, uncomment lines in `resolve_snapshot()` in `crates/vpod/src/main.rs`.
 
 ## License
 
