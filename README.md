@@ -2,21 +2,24 @@
 
 <h1 align="center"> <code>Vpod</code> </h1>
 
-<p align="center">
+<div align="center">
   <a href="https://github.com/capsulerun/vpod/actions/workflows/ci.yml" target="_blank">
-    <img src="https://img.shields.io/github/actions/workflow/status/capsulerun/vpod/ci.yml?branch=main&label=CI" alt="stars">
+    <img src="https://img.shields.io/github/actions/workflow/status/capsulerun/vpod/ci.yml?branch=main&label=Build" alt="Build">
   </a>
-</p>
+
+  <a href="https://riscv.org/specifications/ratified/"><img src="https://img.shields.io/badge/RISCV-RV64GCV-blue" alt="Risc-V"></a>
+  <a href="https://wasi.dev/"><img src="https://img.shields.io/badge/Wasm%2FWASI-0.2.0-654FF0?logo=webassembly&logoColor=white" alt="Wasm/WASI 0.2 Sandbox"></a>
+  <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Rust-2024_edition-orange" alt="Rust"></a>
+</div>
 
 <div align="center">
   <a href="#getting-started">Getting started</a>
   <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
   <a href="#documentation">Documentation</a>
   <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
-  <a href="#issues">Issues</a>
-  <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
-  <a href="#contributing">Contribute</a>
+  <a href="#contributing">Contributing</a>
 </div>
+
 
 ## Overview
 
@@ -41,7 +44,7 @@ The WASM component communicates with the host through WASI 0.2, providing contro
 - **F/D** : Single and double-precision floating-point, suited for scientific computing and ML inference.
 
 **C (Compressed instructions)**
-Reduces code size by roughly 30%, improving instruction fetch speed and memory efficiency. This matters when running a full Linux userspace inside a memory-constrained WASM environment.
+Reduces code size by 30%, improving instruction fetch speed and memory efficiency. This matters when running a full Linux userspace inside our memory-constrained WASM environment.
 
 **V (Vector extension)**
 Adds SIMD operations for parallel data processing. Accelerates array operations, data transformations, and numerical workloads common in AI agent execution.
@@ -136,10 +139,41 @@ path = snapshots.pull("alpine:latest")
 ```
 
 ## Limitations
-TODO
+- **Emulation overhead** — No hardware acceleration in WASM. CPU-intensive workloads run slower than native.
+- **No GPU access** — CUDA, Metal, and hardware ML accelerators are not yet available. Support may be added in the future with WASI‑nn.
 
 ## Contributing
-TODO
+
+**Prerequisites**
+- Rust (latest stable)
+- Python 3.10+
+
+**Development setup**
+```bash
+# Build WASM component
+./scripts/build-wasm.sh
+
+# Install CLI
+cargo install --path crates/vpod
+
+# Install Python SDK in dev mode
+pip install -e sdks/python[dev]
+
+# Run tests
+cargo test                              # Rust tests
+pytest sdks/python/tests/ -v            # Python unit tests
+pytest sdks/python/tests/ -v -m integration  # Integration tests (requires WASM build)
+```
+
+**Building snapshots**
+
+The project uses pre-built Alpine snapshots from `registry.vpod.sh`. To build a custom snapshot:
+
+```bash
+./scripts/build-default-snapshot.sh
+```
+
+This creates `dist/alpine-3.23.0-256mb.snap`. To use it locally, uncomment lines in `resolve_snapshot()` in `crates/vpod/src/main.rs`.
 
 ## License
 
