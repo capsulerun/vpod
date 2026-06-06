@@ -1,0 +1,154 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. 0.2.0)'
+        required: true
+        type: string
+      publish_crate:
+        description: 'Publish vpod to crates.io'
+        required: false
+        default: true
+        type: boolean
+      publish_python:
+        description: 'Publish Python SDK to PyPI'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  prepare:
+    name: Prepare – bump versions
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set.outputs.version }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: set
+        name: Capture version
+        run: echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump Cargo.toml (vpod)
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ inputs.version }}"/' crates/vpod/Cargo.toml
+
+      - name: Bump pyproject.toml (Python SDK)
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ inputs.version }}"/' sdks/python/pyproject.toml
+
+      - name: Commit version bump
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add crates/vpod/Cargo.toml sdks/python/pyproject.toml
+          git diff --cached --quiet || git commit -m "chore: release v${{ inputs.version }}"
+          git push
+
+      - name: Create Git tag
+        run: |
+          git tag "v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"
+
+  publish-crate:
+    name: Publish – crates.io (vpod)
+    needs: prepare
+    if: ${{ inputs.publish_crate }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Build WASM component (required by vpod build.rs)
+        run: cargo build --release --target wasm32-wasip2 -p wasi-component
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p vpod --allow-dirty
+
+  publish-python:
+    name: Publish – PyPI (Python SDK)
+    needs: prepare
+    if: ${{ inputs.publish_python }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Build WASM component for Python SDK
+        run: |
+          cargo build --release --target wasm32-wasip2 -p wasi-component --lib
+          cp target/wasm32-wasip2/release/vpod_wasi_lib.wasm sdks/python/vpod/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build distribution
+        working-directory: sdks/python
+        run: python -m build
+
+      - name: Publish to PyPI
+        working-directory: sdks/python
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: twine upload dist/*
+
+  github-release:
+    name: GitHub Release
+    needs: [prepare, publish-crate, publish-python]
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.prepare.outputs.version }}
+          name: v${{ needs.prepare.outputs.version }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
