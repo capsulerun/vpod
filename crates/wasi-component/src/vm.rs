@@ -34,20 +34,18 @@ fn ensure_uncompressed(snapshot_path: &Path) -> Result<std::path::PathBuf, Strin
         .map_err(|e| format!("failed to decompress snapshot: {e}"))?;
 
     let tmp = cached.with_extension("raw.tmp");
-    let mut out = std::fs::File::create(&tmp)
-        .map_err(|e| format!("failed to create cache file: {e}"))?;
+    let mut out =
+        std::fs::File::create(&tmp).map_err(|e| format!("failed to create cache file: {e}"))?;
     out.write_all(&data)
         .map_err(|e| format!("failed to write cache file: {e}"))?;
 
-    std::fs::rename(&tmp, &cached)
-        .map_err(|e| format!("failed to rename cache file: {e}"))?;
+    std::fs::rename(&tmp, &cached).map_err(|e| format!("failed to rename cache file: {e}"))?;
 
     Ok(cached)
 }
 
 fn peek_ram_size_raw(path: &Path) -> Result<u64, String> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| format!("failed to open {:?}: {e}", path))?;
+    let file = std::fs::File::open(path).map_err(|e| format!("failed to open {:?}: {e}", path))?;
 
     let mut reader = BufReader::new(file);
 
@@ -83,8 +81,8 @@ pub fn load(config: VmConfig) -> Result<(MachineBus, Hart), String> {
             .map_err(|e| format!("failed to attach disk: {e}"))?;
     }
 
-    let raw_file = std::fs::File::open(&raw_path)
-        .map_err(|e| format!("failed to open raw snapshot: {e}"))?;
+    let raw_file =
+        std::fs::File::open(&raw_path).map_err(|e| format!("failed to open raw snapshot: {e}"))?;
 
     snapshot::restore(&mut bus, &mut hart, &mut BufReader::new(raw_file))
         .map_err(|e| format!("failed to restore snapshot: {e}"))?;
