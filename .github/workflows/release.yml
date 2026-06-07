@@ -39,7 +39,9 @@ jobs:
           targets: wasm32-wasip2
 
       - name: Build WASM component (required by vpod build.rs)
-        run: cargo build --release --target wasm32-wasip2 -p wasi-component
+        run: |
+          cargo build --release --target wasm32-wasip2 -p wasi-component
+          cp target/wasm32-wasip2/release/vpod-wasi-cli.wasm crates/vpod/
 
       - name: Cache Cargo registry
         uses: actions/cache@v4
