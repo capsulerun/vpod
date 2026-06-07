@@ -11,27 +11,39 @@ pub struct VmConfig<'a> {
     pub capture_tx: bool,
 }
 
-fn peek_ram_size(snapshot_path: &Path) -> Result<u64, String> {
-    let file = std::fs::File::open(snapshot_path)
-        .map_err(|e| format!("failed to open snapshot {:?}: {e}", snapshot_path))?;
-
-    let mut reader = BufReader::new(GzDecoder::new(file));
-
-    let mut header = [0u8; 16];
-    reader
-        .read_exact(&mut header)
-        .map_err(|e| format!("failed to read snapshot header: {e}"))?;
-
-    if &header[..7] != b"CAPSULE" {
-        return Err("invalid snapshot magic".to_string());
+fn ram_size_from_filename(snapshot_path: &Path) -> Option<u64> {
+    let stem = snapshot_path.file_stem()?.to_str()?;
+    for part in stem.rsplit('-') {
+        let lower = part.to_ascii_lowercase();
+        if lower.ends_with("mb") {
+            return lower
+                .trim_end_matches("mb")
+                .parse::<u64>()
+                .ok()
+                .map(|mb| mb * 1024 * 1024);
+        }
+        if lower.ends_with("gb") {
+            return lower
+                .trim_end_matches("gb")
+                .parse::<u64>()
+                .ok()
+                .map(|gb| gb * 1024 * 1024 * 1024);
+        }
     }
+    None
+}
 
-    Ok(u64::from_le_bytes(header[8..16].try_into().unwrap()))
+fn is_gzipped(path: &Path) -> Result<bool, String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("failed to open {:?}: {e}", path))?;
+    let mut magic = [0u8; 2];
+    file.read_exact(&mut magic)
+        .map_err(|e| format!("failed to read file magic: {e}"))?;
+    Ok(magic == [0x1f, 0x8b])
 }
 
 pub fn load(config: VmConfig) -> Result<(MachineBus, Hart), String> {
-    let stored_ram_size = peek_ram_size(config.snapshot)?;
-    let ram_size = stored_ram_size - 8;
+    let ram_size = ram_size_from_filename(config.snapshot).unwrap_or(256 * 1024 * 1024);
 
     let mut bus = MachineBus::new(ram_size);
     bus.attach_net();
@@ -51,12 +63,17 @@ pub fn load(config: VmConfig) -> Result<(MachineBus, Hart), String> {
     let snapshot_file = std::fs::File::open(config.snapshot)
         .map_err(|e| format!("failed to open snapshot {:?}: {e}", config.snapshot))?;
 
-    snapshot::restore(
-        &mut bus,
-        &mut hart,
-        &mut BufReader::new(GzDecoder::new(snapshot_file)),
-    )
-    .map_err(|e| format!("failed to restore snapshot: {e}"))?;
+    if is_gzipped(config.snapshot)? {
+        snapshot::restore(
+            &mut bus,
+            &mut hart,
+            &mut BufReader::new(GzDecoder::new(snapshot_file)),
+        )
+        .map_err(|e| format!("failed to restore snapshot: {e}"))?;
+    } else {
+        snapshot::restore(&mut bus, &mut hart, &mut BufReader::new(snapshot_file))
+            .map_err(|e| format!("failed to restore snapshot: {e}"))?;
+    }
 
     bus.uart.capture_tx.set(config.capture_tx);
 

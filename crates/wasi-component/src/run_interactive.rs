@@ -11,9 +11,10 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
     let stdin = wasi::cli::stdin::get_stdin();
 
     const POLL_INTERVAL_ACTIVE: u64 = 32768;
-    const POLL_INTERVAL_IDLE: u64 = 1024;
+    const POLL_INTERVAL_IDLE: u64 = 8192;
     const POLL_INTERVAL_NET: u64 = 4096;
-    const IDLE_TIMEOUT_NS: u64 = 10_000_000;
+    const IDLE_TIMEOUT_NS: u64 = 1_000_000;
+    const IDLE_THRESHOLD: u32 = 32;
 
     let mut idle_ticks = 0u32;
     let mut pending: Vec<u8> = Vec::new();
@@ -22,7 +23,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
     loop {
         let interval = if bus.net_rx_pending() {
             POLL_INTERVAL_NET
-        } else if idle_ticks > 4 {
+        } else if idle_ticks > IDLE_THRESHOLD {
             POLL_INTERVAL_IDLE
         } else {
             POLL_INTERVAL_ACTIVE
@@ -63,7 +64,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
             idle_ticks += 1;
             hart.is_waiting = false;
 
-            if !bus.has_pending_io() {
+            if idle_ticks > IDLE_THRESHOLD && !bus.has_pending_io() {
                 flush_pending(&mut pending);
                 let stdin_ready = stdin.subscribe();
                 let timeout = monotonic_clock::subscribe_duration(IDLE_TIMEOUT_NS);

@@ -2643,6 +2643,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dirs 5.0.1",
+ "flate2",
  "hex",
  "indicatif",
  "libc",
