@@ -14,7 +14,7 @@ pub fn cache_dir() -> PathBuf {
 }
 
 pub fn snapshot_path(snap: &Snapshot) -> PathBuf {
-    cache_dir().join(format!("{}-{}.snap", snap.name, snap.tag))
+    cache_dir().join(format!("{}.snap", snap.id))
 }
 
 pub fn is_cached(snap: &Snapshot) -> bool {

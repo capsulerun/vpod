@@ -11,17 +11,9 @@ interface executor {
         exit-code: u32,
     }
 
-    /// Execute code once in a fresh VM (stateless)
     execute: func(snapshot-path: string, code: string) -> result<execution-result, string>;
 
-    /// Start a persistent REPL session, returns opaque session handle.
-    /// command: shell command to launch the REPL, e.g. "python3 -u -i 2>&1"
-    /// prompt: byte sequence marking a ready prompt, e.g. ">>> "
     session-start: func(snapshot-path: string, command: string, prompt: string) -> result<u64, string>;
-
-    /// Execute code in an existing session (stateful)
     session-exec: func(handle: u64, code: string) -> result<string, string>;
-
-    /// Close a session and free all associated VM resources
     session-close: func(handle: u64);
 }

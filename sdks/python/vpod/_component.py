@@ -1,10 +1,21 @@
+import hashlib
 from pathlib import Path
 
+from platformdirs import user_data_dir
 from wasmtime import Engine, Store, WasiConfig
 from wasmtime.component import Component, Linker
 
 _BUNDLED_WASM = Path(__file__).parent / "vpod_wasi_lib.wasm"
 _REPO_WASM = Path(__file__).parents[4] / "target" / "wasm32-wasip2" / "release" / "vpod_wasi_lib.wasm"
+
+try:
+    from importlib.metadata import version
+    _VERSION = version("vpod")
+except Exception:
+    _VERSION = "0.0.0"
+
+_engine = None
+_component = None
 
 
 def locate_wasm() -> Path:
@@ -19,13 +30,54 @@ def locate_wasm() -> Path:
     )
 
 
+def _cwasm_cache_path(wasm_path: Path) -> Path:
+    wasm_bytes = wasm_path.read_bytes()
+    digest = hashlib.sha256(wasm_bytes).hexdigest()[:16]
+    base = Path(user_data_dir()) or Path.home() / ".local" / "share"
+    cache_dir = base / "vpod"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / f"component-{_VERSION}-{digest}.cwasm"
+
+
+def _load_or_compile_component(engine: Engine, wasm_path: Path) -> Component:
+    cache_path = _cwasm_cache_path(wasm_path)
+
+    if cache_path.exists():
+        try:
+            return Component.deserialize_file(engine, str(cache_path))
+        except Exception:
+            cache_path.unlink(missing_ok=True)
+
+    component = Component.from_file(engine, str(wasm_path))
+
+    try:
+        serialized = component.serialize()
+        cache_path.write_bytes(serialized)
+    except Exception:
+        pass
+
+    return component
+
+
+def _get_or_load_component(wasm_path: Path):
+    global _engine, _component
+
+    if _engine is None:
+        _engine = Engine()
+
+    if _component is None:
+        _component = _load_or_compile_component(_engine, wasm_path)
+
+    return _engine, _component
+
+
 def load_component(wasm_path: Path, snapshot_path: Path = None):
     from . import snapshots as _snapshots
     snap_dir = str(_snapshots.cache_dir()) if snapshot_path is None else str(snapshot_path.parent)
 
-    engine = Engine()
-    store = Store(engine)
+    engine, component = _get_or_load_component(wasm_path)
 
+    store = Store(engine)
     wasi = WasiConfig()
     wasi.inherit_stdout()
     wasi.inherit_stderr()
@@ -33,7 +85,6 @@ def load_component(wasm_path: Path, snapshot_path: Path = None):
     wasi.preopen_dir(snap_dir, snap_dir)
     store.set_wasi(wasi)
 
-    component = Component.from_file(engine, str(wasm_path))
     linker = Linker(engine)
     linker.add_wasip2()
 
