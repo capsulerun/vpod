@@ -1,11 +1,8 @@
 use machine::machine_bus::MachineBus;
 use riscv_core::{Hart, StepResult};
-use wasi::clocks::monotonic_clock;
-use wasi::io::poll;
 
 const POLL_INTERVAL: u64 = 8192;
-const IDLE_TIMEOUT_NS: u64 = 10_000_000;
-const MAX_STARTUP_ITERATIONS: u64 = 500_000;
+const MAX_ITERATIONS: u64 = 500_000;
 
 pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     let mut buffer = Vec::new();
@@ -13,7 +10,7 @@ pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
 
     loop {
         iterations += 1;
-        if iterations > MAX_STARTUP_ITERATIONS {
+        if iterations > MAX_ITERATIONS {
             eprintln!("[session] timeout waiting for prompt");
             return;
         }
@@ -28,10 +25,8 @@ pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
             if buffer.windows(prompt.len()).any(|w| w == prompt) {
                 return;
             }
-        } else if hart.is_waiting && !bus.has_pending_io() {
+        } else if hart.is_waiting {
             hart.is_waiting = false;
-            let timeout = monotonic_clock::subscribe_duration(IDLE_TIMEOUT_NS);
-            poll::poll(&[&timeout]);
         }
 
         match hart.run(bus, POLL_INTERVAL) {
@@ -78,10 +73,8 @@ pub fn capture_output_until_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt
                 break;
             }
 
-            if hart.is_waiting && !bus.has_pending_io() {
+            if hart.is_waiting {
                 hart.is_waiting = false;
-                let timeout = monotonic_clock::subscribe_duration(IDLE_TIMEOUT_NS);
-                poll::poll(&[&timeout]);
             }
         }
 
