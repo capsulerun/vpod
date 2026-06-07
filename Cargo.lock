@@ -1472,7 +1472,7 @@ dependencies = [
 
 [[package]]
 name = "machine"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "log",
  "riscv-core",
@@ -1539,7 +1539,7 @@ dependencies = [
 
 [[package]]
 name = "native-cli"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "env_logger",
  "flate2",
@@ -1947,7 +1947,7 @@ dependencies = [
 
 [[package]]
 name = "riscv-core"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "env_logger",
  "log",
@@ -2638,7 +2638,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vpod"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2680,7 +2680,7 @@ dependencies = [
 
 [[package]]
 name = "wasi-component"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "flate2",
  "log",
