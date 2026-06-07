@@ -113,7 +113,8 @@ fn ensure_uncompressed(snap_path: &Path) -> Result<PathBuf> {
 
     let mut reader = BufReader::new(GzDecoder::new(file));
     let mut data = Vec::new();
-    reader.read_to_end(&mut data)
+    reader
+        .read_to_end(&mut data)
         .context("failed to decompress snapshot")?;
 
     let tmp = raw_path.with_extension("raw.tmp");

@@ -34,8 +34,8 @@ fn ram_size_from_filename(snapshot_path: &Path) -> Option<u64> {
 }
 
 fn is_gzipped(path: &Path) -> Result<bool, String> {
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| format!("failed to open {:?}: {e}", path))?;
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("failed to open {:?}: {e}", path))?;
     let mut magic = [0u8; 2];
     file.read_exact(&mut magic)
         .map_err(|e| format!("failed to read file magic: {e}"))?;
