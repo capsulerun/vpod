@@ -4,20 +4,15 @@
 
 <div align="center">
   <a href="https://github.com/capsulerun/vpod/actions/workflows/ci.yml" target="_blank">
-    <img src="https://img.shields.io/github/actions/workflow/status/capsulerun/vpod/ci.yml?branch=main&label=Build" alt="Build">
+    <img src="https://img.shields.io/github/actions/workflow/status/capsulerun/vpod/ci.yml?branch=main&label=CI&logo=github" alt="CI">
   </a>
 
-  <a href="https://riscv.org/specifications/ratified/"><img src="https://img.shields.io/badge/RISCV-RV64GCV-blue" alt="Risc-V"></a>
+  <a href="https://riscv.org/specifications/ratified/"><img src="https://img.shields.io/badge/RISCV-RV64GCV-orange?logo=RISCV" alt="Risc-V"></a>
   <a href="https://wasi.dev/"><img src="https://img.shields.io/badge/Wasm%2FWASI-0.2.0-654FF0?logo=webassembly&logoColor=white" alt="Wasm/WASI 0.2 Sandbox"></a>
-  <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Rust-2024_edition-orange" alt="Rust"></a>
-</div>
 
-<div align="center">
-  <a href="#getting-started">Getting started</a>
-  <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
-  <a href="#documentation">Documentation</a>
-  <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
-  <a href="#contributing">Contributing</a>
+[Getting Started](#getting-started) • [Documentation](#documentation) • [Issues](https://github.com/capsulerun/capsule/issues/new) • [Contributing](#contributing)
+
+
 </div>
 
 
@@ -35,7 +30,7 @@ A `vpod` runs a RISC‑V virtual machine compiled to WebAssembly, implementing t
 
 The WASM component communicates with the host through WASI 0.2, providing controlled access to filesystem, networking, and standard I/O while keeping all execution state (CPU registers, memory, filesystem) isolated inside the sandbox.
 
-### `RV64GCV` Specification
+### RV64GCV Specification
 
 **G (General-purpose extensions)**
 - **I** : Base 64-bit integer instruction set.

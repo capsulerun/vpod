@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vpod"
-version = "0.1.0"
+version = "0.0.0"
 description = "Secure code execution sandbox powered by RISC-V and WASM"
 readme = "README.md"
 requires-python = ">=3.10"

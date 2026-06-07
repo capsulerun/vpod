@@ -1,6 +1,6 @@
 [package]
 name = "vpod"
-version = "0.1.0"
+version = "0.0.0"
 edition.workspace = true
 description = "RISC-V Linux container runtime"
 license = "Apache-2.0"
