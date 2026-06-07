@@ -19,54 +19,21 @@ on:
         type: boolean
 
 jobs:
-  prepare:
-    name: Prepare – bump versions
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.set.outputs.version }}
-
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - id: set
-        name: Capture version
-        run: echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-
-      - name: Bump Cargo.toml (vpod)
-        run: |
-          sed -i 's/^version = ".*"/version = "${{ inputs.version }}"/' crates/vpod/Cargo.toml
-
-      - name: Bump pyproject.toml (Python SDK)
-        run: |
-          sed -i 's/^version = ".*"/version = "${{ inputs.version }}"/' sdks/python/pyproject.toml
-
-      - name: Commit version bump
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add crates/vpod/Cargo.toml sdks/python/pyproject.toml
-          git diff --cached --quiet || git commit -m "chore: release v${{ inputs.version }}"
-          git push
-
-      - name: Create Git tag
-        run: |
-          git tag "v${{ inputs.version }}"
-          git push origin "v${{ inputs.version }}"
-
   publish-crate:
     name: Publish – crates.io (vpod)
-    needs: prepare
     if: ${{ inputs.publish_crate }}
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          ref: v${{ needs.prepare.outputs.version }}
+
+      - name: Inject version
+        run: |
+          V="${{ inputs.version }}"
+          sed -i "s/^version = \".*\"/version = \"$V\"/" crates/vpod/Cargo.toml
+          sed -i "s/^package vpod:sandbox@[^;]*/package vpod:sandbox@$V/" \
+            crates/wasi-component/vpod.wit
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -91,15 +58,18 @@ jobs:
 
   publish-python:
     name: Publish – PyPI (Python SDK)
-    needs: prepare
     if: ${{ inputs.publish_python }}
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          ref: v${{ needs.prepare.outputs.version }}
+
+      - name: Inject version
+        run: |
+          V="${{ inputs.version }}"
+          sed -i "s/^version = \".*\"/version = \"$V\"/" sdks/python/pyproject.toml
+          sed -i "s/^__version__ = \".*\"/__version__ = \"$V\"/" sdks/python/vpod/__init__.py
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -129,26 +99,3 @@ jobs:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: twine upload dist/*
-
-  github-release:
-    name: GitHub Release
-    needs: [prepare, publish-crate, publish-python]
-    if: always() && needs.prepare.result == 'success'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          ref: v${{ needs.prepare.outputs.version }}
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.prepare.outputs.version }}
-          name: v${{ needs.prepare.outputs.version }}
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
