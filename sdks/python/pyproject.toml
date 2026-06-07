@@ -5,16 +5,34 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vpod"
 version = "0.0.0"
-description = "Secure code execution sandbox powered by RISC-V and WASM"
+description = "Lightweight, secure sandboxes for untrusted processes."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-authors = [{ name = "vpod" }]
+authors = [{ name = "Capsule" }]
+keywords = ["sandbox", "wasm", "riscv", "agent", "isolation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Emulators",
+]
 dependencies = [
     "wasmtime>=25.0.0",
     "platformdirs>=4.0",
     "certifi>=2023.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/capsulerun"
+Repository = "https://github.com/capsulerun/vpod"
+Documentation = "https://github.com/capsulerun/vpod#readme"
+"Bug Tracker" = "https://github.com/capsulerun/vpod/issues"
 
 [project.optional-dependencies]
 dev = [
