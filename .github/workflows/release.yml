@@ -32,8 +32,6 @@ jobs:
         run: |
           V="${{ inputs.version }}"
           sed -i "s/^version = \".*\"/version = \"$V\"/" crates/vpod/Cargo.toml
-          sed -i "s/^package vpod:sandbox@[^;]*/package vpod:sandbox@$V/" \
-            crates/wasi-component/vpod.wit
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
