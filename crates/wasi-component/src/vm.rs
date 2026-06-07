@@ -2,7 +2,7 @@ use flate2::read::GzDecoder;
 use machine::machine_bus::MachineBus;
 use machine::snapshot;
 use riscv_core::Hart;
-use std::io::{BufReader, Read, Write};
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 pub struct VmConfig<'a> {
@@ -11,43 +11,11 @@ pub struct VmConfig<'a> {
     pub capture_tx: bool,
 }
 
-fn uncompressed_cache_path(snapshot_path: &Path) -> std::path::PathBuf {
-    let mut cached = snapshot_path.to_path_buf();
-    cached.set_extension("raw");
-    cached
-}
-
-fn ensure_uncompressed(snapshot_path: &Path) -> Result<std::path::PathBuf, String> {
-    let cached = uncompressed_cache_path(snapshot_path);
-
-    if cached.exists() {
-        return Ok(cached);
-    }
-
+fn peek_ram_size(snapshot_path: &Path) -> Result<u64, String> {
     let file = std::fs::File::open(snapshot_path)
         .map_err(|e| format!("failed to open snapshot {:?}: {e}", snapshot_path))?;
 
     let mut reader = BufReader::new(GzDecoder::new(file));
-    let mut data = Vec::new();
-    reader
-        .read_to_end(&mut data)
-        .map_err(|e| format!("failed to decompress snapshot: {e}"))?;
-
-    let tmp = cached.with_extension("raw.tmp");
-    let mut out =
-        std::fs::File::create(&tmp).map_err(|e| format!("failed to create cache file: {e}"))?;
-    out.write_all(&data)
-        .map_err(|e| format!("failed to write cache file: {e}"))?;
-
-    std::fs::rename(&tmp, &cached).map_err(|e| format!("failed to rename cache file: {e}"))?;
-
-    Ok(cached)
-}
-
-fn peek_ram_size_raw(path: &Path) -> Result<u64, String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("failed to open {:?}: {e}", path))?;
-
-    let mut reader = BufReader::new(file);
 
     let mut header = [0u8; 16];
     reader
@@ -62,8 +30,7 @@ fn peek_ram_size_raw(path: &Path) -> Result<u64, String> {
 }
 
 pub fn load(config: VmConfig) -> Result<(MachineBus, Hart), String> {
-    let raw_path = ensure_uncompressed(config.snapshot)?;
-    let stored_ram_size = peek_ram_size_raw(&raw_path)?;
+    let stored_ram_size = peek_ram_size(config.snapshot)?;
     let ram_size = stored_ram_size - 8;
 
     let mut bus = MachineBus::new(ram_size);
@@ -81,11 +48,15 @@ pub fn load(config: VmConfig) -> Result<(MachineBus, Hart), String> {
             .map_err(|e| format!("failed to attach disk: {e}"))?;
     }
 
-    let raw_file =
-        std::fs::File::open(&raw_path).map_err(|e| format!("failed to open raw snapshot: {e}"))?;
+    let snapshot_file = std::fs::File::open(config.snapshot)
+        .map_err(|e| format!("failed to open snapshot {:?}: {e}", config.snapshot))?;
 
-    snapshot::restore(&mut bus, &mut hart, &mut BufReader::new(raw_file))
-        .map_err(|e| format!("failed to restore snapshot: {e}"))?;
+    snapshot::restore(
+        &mut bus,
+        &mut hart,
+        &mut BufReader::new(GzDecoder::new(snapshot_file)),
+    )
+    .map_err(|e| format!("failed to restore snapshot: {e}"))?;
 
     bus.uart.capture_tx.set(config.capture_tx);
 

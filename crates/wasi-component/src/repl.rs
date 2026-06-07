@@ -1,7 +1,7 @@
 use machine::machine_bus::MachineBus;
 use riscv_core::{Hart, StepResult};
 
-const POLL_INTERVAL: u64 = 65536;
+const POLL_INTERVAL: u64 = 8192;
 const MAX_ITERATIONS: u64 = 500_000;
 
 pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
