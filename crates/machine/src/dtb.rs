@@ -260,11 +260,11 @@ pub fn build(
     builder.prop_u32("reg", 0);
     builder.prop_str("status", "okay");
     builder.prop_str("compatible", "riscv");
-    builder.prop_str("riscv,isa", "rv64imafdcvsu_zicsr_zifencei");
+    builder.prop_str("riscv,isa", "rv64imafdcsu_zicsr_zifencei");
     builder.prop_strlist(
         "riscv,isa-extensions",
         &[
-            "i", "m", "a", "f", "d", "c", "v", "s", "u", "zicsr", "zifencei",
+            "i", "m", "a", "f", "d", "c", "s", "u", "zicsr", "zifencei",
         ],
     );
     builder.prop_str("mmu-type", "riscv,sv39");
