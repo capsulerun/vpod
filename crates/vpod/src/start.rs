@@ -80,12 +80,12 @@ struct RawTerminal {
 #[cfg(windows)]
 impl RawTerminal {
     fn enter() -> Option<Self> {
-        use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
         use windows_sys::Win32::System::Console::*;
 
         unsafe {
             let handle = GetStdHandle(STD_INPUT_HANDLE);
-            if handle == 0 || handle == INVALID_HANDLE_VALUE {
+            if handle.is_null() || handle == INVALID_HANDLE_VALUE {
                 return None;
             }
 
@@ -110,7 +110,7 @@ impl Drop for RawTerminal {
         use windows_sys::Win32::System::Console::*;
         unsafe {
             let handle = GetStdHandle(STD_INPUT_HANDLE);
-            if handle != 0 && handle != INVALID_HANDLE_VALUE {
+            if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
                 SetConsoleMode(handle, self.saved_mode);
             }
         }
