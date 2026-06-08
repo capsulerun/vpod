@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 mod run_interactive;
 mod run_setup;
 mod terminal;
