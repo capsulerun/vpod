@@ -1,14 +1,5 @@
-#[cfg(not(unix))]
-fn main() {
-    eprintln!("vpod-native is not supported on this platform.");
-    std::process::exit(1);
-}
-
-#[cfg(unix)]
 mod run_interactive;
-#[cfg(unix)]
 mod run_setup;
-#[cfg(unix)]
 mod terminal;
 
 use std::fs::File;
