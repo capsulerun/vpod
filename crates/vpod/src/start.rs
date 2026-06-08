@@ -94,8 +94,8 @@ impl RawTerminal {
                 return None;
             }
 
-            let raw_mode = (mode & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT))
-                | ENABLE_VIRTUAL_TERMINAL_INPUT;
+            let raw_mode =
+                (mode & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT)) | ENABLE_VIRTUAL_TERMINAL_INPUT;
 
             SetConsoleMode(handle, raw_mode);
             Some(Self { saved_mode: mode })
