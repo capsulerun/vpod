@@ -12,18 +12,8 @@ class Commands:
 
     def run(self, command: str) -> CommandResult:
         session_id = self._get_session_id()
-
-        if session_id is not None:
-            return self._run_in_session(session_id, command)
-
-        return self._run_stateless(command)
-
-    def _run_in_session(self, session_id: int, command: str) -> CommandResult:
-        output = unwrap_result(self._exports["session-exec"](session_id, command))
-        return CommandResult(stdout=output)
-
-    def _run_stateless(self, command: str) -> CommandResult:
-        result = unwrap_result(self._exports["execute"](self._snapshot_path, command))
+        exec = self._exports["session-exec"]
+        result = unwrap_result(exec(session_id, command))
         return CommandResult(
             stdout=result.stdout,
             stderr=result.stderr or "",

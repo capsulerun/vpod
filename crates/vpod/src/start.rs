@@ -1,8 +1,10 @@
 use std::fs;
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::registry::Snapshot;
 use anyhow::{Context, Result};
+use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
@@ -32,10 +34,12 @@ impl WasiView for State {
     }
 }
 
+#[cfg(unix)]
 struct RawTerminal {
     saved: libc::termios,
 }
 
+#[cfg(unix)]
 impl RawTerminal {
     fn enter() -> Option<Self> {
         if unsafe { libc::isatty(libc::STDIN_FILENO) } == 0 {
@@ -59,10 +63,57 @@ impl RawTerminal {
     }
 }
 
+#[cfg(unix)]
 impl Drop for RawTerminal {
     fn drop(&mut self) {
         unsafe {
             libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &self.saved);
+        }
+    }
+}
+
+#[cfg(windows)]
+struct RawTerminal {
+    saved_mode: u32,
+}
+
+#[cfg(windows)]
+impl RawTerminal {
+    fn enter() -> Option<Self> {
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::System::Console::*;
+
+        unsafe {
+            let handle = GetStdHandle(STD_INPUT_HANDLE);
+            if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+                return None;
+            }
+
+            let mut mode: u32 = 0;
+            if GetConsoleMode(handle, &mut mode) == 0 {
+                return None;
+            }
+
+            let raw_mode =
+                (mode & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT)) | ENABLE_VIRTUAL_TERMINAL_INPUT;
+
+            SetConsoleMode(handle, raw_mode);
+            Some(Self { saved_mode: mode })
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for RawTerminal {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::System::Console::*;
+
+        unsafe {
+            let handle = GetStdHandle(STD_INPUT_HANDLE);
+            if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
+                SetConsoleMode(handle, self.saved_mode);
+            }
         }
     }
 }
@@ -99,6 +150,31 @@ fn load_component(engine: &Engine, version: &str) -> Result<Component> {
     Ok(component)
 }
 
+fn ensure_uncompressed(snap_path: &Path) -> Result<PathBuf> {
+    let raw_path = snap_path.with_extension("raw");
+
+    if raw_path.exists() {
+        return Ok(raw_path);
+    }
+
+    let file = fs::File::open(snap_path)
+        .with_context(|| format!("failed to open snapshot {:?}", snap_path))?;
+
+    let mut reader = BufReader::new(GzDecoder::new(file));
+    let mut data = Vec::new();
+    reader
+        .read_to_end(&mut data)
+        .context("failed to decompress snapshot")?;
+
+    let tmp = raw_path.with_extension("raw.tmp");
+    let mut out = fs::File::create(&tmp).context("failed to create raw cache")?;
+    out.write_all(&data).context("failed to write raw cache")?;
+
+    fs::rename(&tmp, &raw_path).context("failed to rename raw cache")?;
+
+    Ok(raw_path)
+}
+
 pub fn run(cfg: RunConfig) -> Result<()> {
     eprint!("\x1b]0;vpod ({})\x07", cfg.snapshot.display_name());
     print_header(&cfg.snapshot);
@@ -113,6 +189,7 @@ pub fn run(cfg: RunConfig) -> Result<()> {
     // For clear loading message
     eprint!("\r\x1b[2K");
     let _raw = RawTerminal::enter();
+    #[cfg(unix)]
     unsafe {
         libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH);
     }
@@ -121,17 +198,18 @@ pub fn run(cfg: RunConfig) -> Result<()> {
     let snap_path = Path::new(&cfg.snapshot.url);
     let snap_dir = snap_path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
-    let snap_file = snap_path
+    let raw_path = ensure_uncompressed(snap_path)?;
+    let raw_file = raw_path
         .file_name()
-        .context("snapshot path has no filename")?
+        .context("raw snapshot path has no filename")?
         .to_str()
-        .context("snapshot filename is not valid UTF-8")?
+        .context("raw snapshot filename is not valid UTF-8")?
         .to_string();
 
     let wasm_args = vec![
         "vpod-wasi-cli".to_string(),
         "--snapshot-load".to_string(),
-        format!("snap/{snap_file}"),
+        format!("snap/{raw_file}"),
     ];
 
     let mut builder = WasiCtxBuilder::new();

@@ -222,6 +222,10 @@ pub fn build(
     bootargs: &str,
     initrd_start: u64,
     initrd_end: u64,
+    uart_stderr_base: u64,
+    uart_stderr_irq: u32,
+    uart_ctrl_base: u64,
+    uart_ctrl_irq: u32,
 ) -> Vec<u8> {
     let mut builder = DtbBuilder::new();
 
@@ -302,13 +306,31 @@ pub fn build(
     builder.prop_reg(plic_base, 0x0040_0000);
     builder.end_node();
 
-    // UART
+    // UART0 - stdout
     builder.begin_node(&format!("uart@{:x}", uart_base));
     builder.prop_str("compatible", "ns16550a");
     builder.prop_reg(uart_base, 0x100);
     builder.prop_u32("clock-frequency", 3_686_400);
     builder.prop_interrupt_parent(3);
     builder.prop_interrupts(uart_irq);
+    builder.end_node();
+
+    // UART1 stderr
+    builder.begin_node(&format!("uart@{:x}", uart_stderr_base));
+    builder.prop_str("compatible", "ns16550a");
+    builder.prop_reg(uart_stderr_base, 0x100);
+    builder.prop_u32("clock-frequency", 3_686_400);
+    builder.prop_interrupt_parent(3);
+    builder.prop_interrupts(uart_stderr_irq);
+    builder.end_node();
+
+    // UART2 control (+exit code)
+    builder.begin_node(&format!("uart@{:x}", uart_ctrl_base));
+    builder.prop_str("compatible", "ns16550a");
+    builder.prop_reg(uart_ctrl_base, 0x100);
+    builder.prop_u32("clock-frequency", 3_686_400);
+    builder.prop_interrupt_parent(3);
+    builder.prop_interrupts(uart_ctrl_irq);
     builder.end_node();
 
     let virtio_names = ["virtio-blk", "virtio-console", "virtio-net"];
