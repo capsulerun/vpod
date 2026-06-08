@@ -8,7 +8,6 @@ use crate::mmu::Mmu;
 use crate::system_bus::SystemBus;
 use crate::trap::StepResult;
 
-
 pub struct Hart {
     pub regs: Gpr,
     pub csr: Csr,

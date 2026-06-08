@@ -43,7 +43,6 @@ pub const MARCHID: u32 = 0xF12;
 pub const MIMPID: u32 = 0xF13;
 pub const MHARTID: u32 = 0xF14;
 
-
 // mstatus field masks for RV64
 pub const MSTATUS_SIE: u64 = 1 << 1;
 pub const MSTATUS_MIE: u64 = 1 << 3;
@@ -51,6 +50,7 @@ pub const MSTATUS_SPIE: u64 = 1 << 5;
 pub const MSTATUS_UBE: u64 = 1 << 6;
 pub const MSTATUS_MPIE: u64 = 1 << 7;
 pub const MSTATUS_SPP: u64 = 1 << 8;
+pub const MSTATUS_VS: u64 = 3 << 9;
 pub const MSTATUS_MPP: u64 = 3 << 11;
 pub const MSTATUS_FS: u64 = 3 << 13;
 pub const MSTATUS_XS: u64 = 3 << 15;
@@ -97,6 +97,7 @@ const MSTATUS_WRITE_MASK: u64 = MSTATUS_SIE
     | MSTATUS_UBE
     | MSTATUS_MPIE
     | MSTATUS_SPP
+    | MSTATUS_VS
     | MSTATUS_MPP
     | MSTATUS_FS
     | MSTATUS_XS
@@ -111,6 +112,7 @@ const SSTATUS_MASK: u64 = MSTATUS_SIE
     | MSTATUS_SPIE
     | MSTATUS_UBE
     | MSTATUS_SPP
+    | MSTATUS_VS
     | MSTATUS_FS
     | MSTATUS_XS
     | MSTATUS_SUM
@@ -278,7 +280,6 @@ impl Csr {
             0x002 => (self.fcsr >> 5) & 0x7, // frm
             0x003 => self.fcsr & 0xFF,       // fcsr
 
-
             // mhpmevent3-31
             0x323..=0x33F => self.mhpmevent[(address - 0x323) as usize],
 
@@ -361,7 +362,6 @@ impl Csr {
             0x002 => self.fcsr = (self.fcsr & !0xE0) | ((value & 0x7) << 5),
             0x003 => self.fcsr = value & 0xFF,
 
-
             // HPM events
             0x323..=0x33F => self.mhpmevent[(address - 0x323) as usize] = value,
 
@@ -388,8 +388,9 @@ impl Csr {
 
         let fs = (value >> 13) & 3;
         let xs = (value >> 15) & 3;
+        let vs = (value >> 9) & 3;
 
-        if fs == 3 || xs == 3 {
+        if fs == 3 || xs == 3 || vs == 3 {
             value |= MSTATUS_SD;
         } else {
             value &= !MSTATUS_SD;

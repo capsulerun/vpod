@@ -263,9 +263,7 @@ pub fn build(
     builder.prop_str("riscv,isa", "rv64imafdcsu_zicsr_zifencei");
     builder.prop_strlist(
         "riscv,isa-extensions",
-        &[
-            "i", "m", "a", "f", "d", "c", "s", "u", "zicsr", "zifencei",
-        ],
+        &["i", "m", "a", "f", "d", "c", "s", "u", "zicsr", "zifencei"],
     );
     builder.prop_str("mmu-type", "riscv,sv39");
     builder.prop_phandle(1);

@@ -273,6 +273,5 @@ fn restore_csr(hart: &mut Hart, reader: &mut impl Read) -> io::Result<()> {
         *value = u64::from_le_bytes(buffer);
     }
 
-
     Ok(())
 }
