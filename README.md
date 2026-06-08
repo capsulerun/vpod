@@ -153,7 +153,6 @@ pip install -e sdks/python[dev]
 
 # Run tests
 cargo test                              # Rust tests
-pytest sdks/python/tests/ -v            # Python unit tests
 pytest sdks/python/tests/ -v -m integration  # Integration tests (requires WASM build)
 ```
 
