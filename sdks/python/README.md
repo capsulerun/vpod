@@ -75,11 +75,10 @@ path = snapshots.pull("alpine:latest")
 
 ## How it works
 
-A vpod runs a RISC‑V virtual machine compiled to WebAssembly. The core implements the **RV64GCV** specification:
+A vpod runs a RISC‑V virtual machine compiled to WebAssembly. The core implements the **RV64GC** specification:
 
 - **G (General-purpose)**: I/M/A/F/D extensions for integer, multiply/divide, atomics, and floating-point
 - **C (Compressed)**: 30% smaller code size, improving memory efficiency
-- **V (Vector)**: SIMD operations for parallel data processing
 
 The WASM component communicates with the host through WASI 0.2, providing controlled access to networking and I/O while keeping all execution state isolated inside the sandbox.
 
