@@ -34,10 +34,12 @@ impl WasiView for State {
     }
 }
 
+#[cfg(unix)]
 struct RawTerminal {
     saved: libc::termios,
 }
 
+#[cfg(unix)]
 impl RawTerminal {
     fn enter() -> Option<Self> {
         if unsafe { libc::isatty(libc::STDIN_FILENO) } == 0 {
@@ -61,10 +63,49 @@ impl RawTerminal {
     }
 }
 
+#[cfg(unix)]
 impl Drop for RawTerminal {
     fn drop(&mut self) {
         unsafe {
             libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &self.saved);
+        }
+    }
+}
+
+#[cfg(windows)]
+struct RawTerminal {
+    saved_mode: u32,
+}
+
+#[cfg(windows)]
+impl RawTerminal {
+    fn enter() -> Option<Self> {
+        use windows_sys::Win32::System::Console::*;
+        unsafe {
+            let handle = GetStdHandle(STD_INPUT_HANDLE);
+            if handle == 0 || handle == u64::MAX as isize {
+                return None;
+            }
+            let mut mode: u32 = 0;
+            if GetConsoleMode(handle, &mut mode) == 0 {
+                return None;
+            }
+            let raw_mode = (mode
+                & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
+                | ENABLE_VIRTUAL_TERMINAL_INPUT;
+            SetConsoleMode(handle, raw_mode);
+            Some(Self { saved_mode: mode })
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for RawTerminal {
+    fn drop(&mut self) {
+        use windows_sys::Win32::System::Console::*;
+        unsafe {
+            let handle = GetStdHandle(STD_INPUT_HANDLE);
+            SetConsoleMode(handle, self.saved_mode);
         }
     }
 }
@@ -140,6 +181,7 @@ pub fn run(cfg: RunConfig) -> Result<()> {
     // For clear loading message
     eprint!("\r\x1b[2K");
     let _raw = RawTerminal::enter();
+    #[cfg(unix)]
     unsafe {
         libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH);
     }
