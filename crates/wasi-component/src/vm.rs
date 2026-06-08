@@ -76,6 +76,8 @@ pub fn load(config: VmConfig) -> Result<(MachineBus, Hart), String> {
     }
 
     bus.uart.capture_tx.set(config.capture_tx);
+    bus.uart_stderr.capture_tx.set(true);
+    bus.uart_ctrl.capture_tx.set(true);
 
     Ok((bus, hart))
 }

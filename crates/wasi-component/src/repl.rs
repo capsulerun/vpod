@@ -1,42 +1,48 @@
 use machine::machine_bus::MachineBus;
 use riscv_core::{Hart, StepResult};
 
-const POLL_INTERVAL: u64 = 8192;
-const MAX_ITERATIONS: u64 = 500_000;
+const STEP: u64 = 8192;
+
+pub fn shell_init(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
+    for byte in b"stty -echo\n" {
+        bus.uart.push_rx(*byte);
+    }
+    wait_for_prompt(bus, hart, prompt);
+    bus.uart.drain_tx();
+
+    let init_cmd = format!(
+        "__ec() {{ printf \"\\x$(printf %02x $1)\" >/dev/ttyS2; }}; export PS1='$(__ec $?){}'; trap '__ec $?' EXIT\n",
+        String::from_utf8_lossy(prompt)
+    );
+    for byte in init_cmd.bytes() {
+        bus.uart.push_rx(byte);
+    }
+    wait_for_prompt(bus, hart, prompt);
+    bus.uart.drain_tx();
+    bus.uart_stderr.drain_tx();
+    bus.uart_ctrl.drain_tx();
+}
 
 pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     let mut buffer = Vec::new();
-    let mut iterations: u64 = 0;
 
-    loop {
-        iterations += 1;
-        if iterations > MAX_ITERATIONS {
-            eprintln!("[session] timeout waiting for prompt");
-            return;
+    for _ in 0..500_000u32 {
+        if hart.is_waiting {
+            hart.is_waiting = false;
         }
 
-        bus.clint.advance_by_instructions(POLL_INTERVAL);
+        bus.clint.advance_by_instructions(STEP);
         bus.poll(hart);
+
+        match hart.run(bus, STEP) {
+            StepResult::Ok => {}
+            StepResult::Trap(_) | StepResult::Halt => return,
+        }
 
         let output = bus.uart.drain_tx();
         if !output.is_empty() {
             buffer.extend_from_slice(&output);
-
-            if buffer.windows(prompt.len()).any(|w| w == prompt) {
-                return;
-            }
-        } else if hart.is_waiting {
-            hart.is_waiting = false;
-        }
-
-        match hart.run(bus, POLL_INTERVAL) {
-            StepResult::Ok => {}
-            StepResult::Trap(cause) => {
-                eprintln!("[session] trap during startup: {:?}", cause);
-                return;
-            }
-            StepResult::Halt => {
-                eprintln!("[session] unexpected halt");
+            if buffer.ends_with(prompt) {
                 return;
             }
         }
@@ -45,63 +51,54 @@ pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
 
 pub fn capture_output_until_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) -> String {
     let mut output = Vec::new();
-    let mut consecutive_idle = 0u32;
-    let mut got_any_output = false;
+    let mut wfi_count = 0u32;
+    let mut got_output = false;
 
-    loop {
-        bus.clint.advance_by_instructions(POLL_INTERVAL);
+    for _ in 0..100_000u32 {
+        if hart.is_waiting {
+            hart.is_waiting = false;
+            if got_output {
+                wfi_count += 1;
+                if wfi_count >= 32 {
+                    break;
+                }
+            }
+        } else {
+            wfi_count = 0;
+        }
+
+        bus.clint.advance_by_instructions(STEP);
         bus.poll(hart);
+
+        match hart.run(bus, STEP) {
+            StepResult::Ok => {}
+            StepResult::Trap(_) | StepResult::Halt => break,
+        }
 
         let tx = bus.uart.drain_tx();
         if !tx.is_empty() {
             output.extend_from_slice(&tx);
-            consecutive_idle = 0;
-            got_any_output = true;
+            got_output = true;
+            wfi_count = 0;
 
-            if let Some(pos) = find_subsequence(&output, prompt) {
-                output.truncate(pos);
+            if output.ends_with(prompt) {
+                output.truncate(output.len() - prompt.len());
                 break;
             }
-        } else {
-            consecutive_idle += 1;
-
-            if got_any_output && consecutive_idle > 100_000 {
-                break;
-            }
-
-            if consecutive_idle > 500_000 {
-                break;
-            }
-
-            if hart.is_waiting {
-                hart.is_waiting = false;
-            }
-        }
-
-        match hart.run(bus, POLL_INTERVAL) {
-            StepResult::Ok => {}
-            StepResult::Trap(cause) => {
-                eprintln!("[session] trap: {:?}", cause);
-                break;
-            }
-            StepResult::Halt => break,
         }
     }
 
-    if let Some(pos) = output.iter().rposition(|&b| b == b'\n') {
-        output.truncate(pos + 1);
+    // Strip incomplete trailing line (noise from system after shell exit)
+    if !output.is_empty() && !output.ends_with(b"\n") {
+        if let Some(pos) = output.iter().rposition(|&b| b == b'\n') {
+            output.truncate(pos + 1);
+        } else {
+            output.clear();
+        }
     }
 
     let raw = String::from_utf8_lossy(&output);
-    let cleaned = strip_ansi(&raw);
-    match cleaned.find('\n') {
-        Some(pos) => cleaned[pos + 1..].trim_end().to_string(),
-        None => cleaned.trim_end().to_string(),
-    }
-}
-
-fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).rposition(|w| w == needle)
+    strip_ansi(&raw).trim_end().to_string()
 }
 
 fn strip_ansi(s: &str) -> String {

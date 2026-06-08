@@ -26,10 +26,12 @@ class Code:
             self._start_repl()
 
         command = f"exec({repr(code)})"
-        output = unwrap_result(
+        result = unwrap_result(
             self._exports["session-exec"](self._repl_session_id, command)
         )
-        return self._parse_output(output)
+        output = result.stdout if hasattr(result, 'stdout') else str(result)
+        stderr = result.stderr if hasattr(result, 'stderr') else ""
+        return self._parse_output(output, stderr)
 
     def _start_repl(self):
         result = self._exports["session-start"](
@@ -42,12 +44,15 @@ class Code:
             self._exports["session-close"](self._repl_session_id)
             self._repl_session_id = None
 
-    def _parse_output(self, raw: str) -> CodeExecution:
-        lines = raw.strip().splitlines()
+    def _parse_output(self, raw: str, stderr: str = "") -> CodeExecution:
+        text = raw.strip()
+        lines = text.splitlines()
         error_indicators = ("Error", "Traceback", "not found", "error:", "syntax error")
-        errors = [l for l in lines if any(ind in l for ind in error_indicators)]
+
+        all_lines = lines + stderr.strip().splitlines()
+        errors = [l for l in all_lines if any(ind in l for ind in error_indicators)]
 
         if errors:
-            return CodeExecution(text=raw, error=errors[-1], logs=lines)
+            return CodeExecution(text=text, error=errors[-1], logs=lines)
 
-        return CodeExecution(text=raw, logs=lines)
+        return CodeExecution(text=text, logs=lines)

@@ -9,8 +9,10 @@ use crate::virtio::net::VirtioNet;
 use crate::virtio::slirp::SlirpBackend;
 
 use crate::{
-    GUEST_MAC, KERNEL_OFFSET, LOW_RAM_BASE, LOW_RAM_SIZE, RAM_BASE, UART_BASE, UART_IRQ, UART_SIZE,
-    VIRTIO_BASE, VIRTIO_BLK_IRQ, VIRTIO_CONSOLE_IRQ, VIRTIO_NET_IRQ, VIRTIO_SIZE,
+    GUEST_MAC, KERNEL_OFFSET, LOW_RAM_BASE, LOW_RAM_SIZE, RAM_BASE, UART_BASE, UART_CTRL_BASE,
+    UART_CTRL_IRQ, UART_CTRL_SIZE, UART_IRQ, UART_SIZE, UART_STDERR_BASE, UART_STDERR_IRQ,
+    UART_STDERR_SIZE, VIRTIO_BASE, VIRTIO_BLK_IRQ, VIRTIO_CONSOLE_IRQ, VIRTIO_NET_IRQ,
+    VIRTIO_SIZE,
 };
 
 use riscv_core::csr::{MIP_MEIP, MIP_MSIP, MIP_MTIP, MIP_SEIP};
@@ -21,6 +23,8 @@ pub struct MachineBus {
     ram_mask: u64,
     pub low_ram: Vec<u8>,
     pub uart: Uart,
+    pub uart_stderr: Uart,
+    pub uart_ctrl: Uart,
     pub clint: Clint,
     pub plic: Plic,
     pub blk: Option<VirtioBlk>,
@@ -39,6 +43,8 @@ impl MachineBus {
             ram_mask: ram_size - 1,
             low_ram: vec![0u8; LOW_RAM_SIZE as usize],
             uart: Uart::new(),
+            uart_stderr: Uart::new(),
+            uart_ctrl: Uart::new(),
             clint: Clint::new(),
             plic: Plic::new(),
             blk: None,
@@ -89,8 +95,12 @@ impl MachineBus {
             hart.csr.mip &= !MIP_MSIP;
         }
 
-        // Update UART interrupt
+        // Update UART interrupts
         self.plic.set_irq(UART_IRQ, self.uart.irq_pending.get());
+        self.plic
+            .set_irq(UART_STDERR_IRQ, self.uart_stderr.irq_pending.get());
+        self.plic
+            .set_irq(UART_CTRL_IRQ, self.uart_ctrl.irq_pending.get());
 
         // Update VirtIO device interrupts
         if let Some(block_device) = &self.blk {
@@ -188,6 +198,18 @@ impl SystemBus for MachineBus {
             return self.uart.read_register((address - UART_BASE) as u8);
         }
 
+        if (UART_STDERR_BASE..UART_STDERR_BASE + UART_STDERR_SIZE).contains(&address) {
+            return self
+                .uart_stderr
+                .read_register((address - UART_STDERR_BASE) as u8);
+        }
+
+        if (UART_CTRL_BASE..UART_CTRL_BASE + UART_CTRL_SIZE).contains(&address) {
+            return self
+                .uart_ctrl
+                .read_register((address - UART_CTRL_BASE) as u8);
+        }
+
         if let Some(slot) = Self::virtio_device_slot(address) {
             let offset = Self::virtio_register_offset(address);
             let word_offset = offset & !3;
@@ -273,6 +295,18 @@ impl SystemBus for MachineBus {
 
         if (UART_BASE..UART_BASE + UART_SIZE).contains(&address) {
             self.uart.write_register((address - UART_BASE) as u8, value);
+            return;
+        }
+
+        if (UART_STDERR_BASE..UART_STDERR_BASE + UART_STDERR_SIZE).contains(&address) {
+            self.uart_stderr
+                .write_register((address - UART_STDERR_BASE) as u8, value);
+            return;
+        }
+
+        if (UART_CTRL_BASE..UART_CTRL_BASE + UART_CTRL_SIZE).contains(&address) {
+            self.uart_ctrl
+                .write_register((address - UART_CTRL_BASE) as u8, value);
         }
     }
 
@@ -439,6 +473,10 @@ pub fn boot(
         bootargs,
         initrd_start,
         initrd_end,
+        UART_STDERR_BASE,
+        UART_STDERR_IRQ,
+        UART_CTRL_BASE,
+        UART_CTRL_IRQ,
     );
 
     let dtb_offset = if bios.is_some() {

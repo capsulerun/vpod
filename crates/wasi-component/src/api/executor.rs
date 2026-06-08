@@ -18,23 +18,27 @@ impl Guest for Executor {
         for byte in b"/bin/sh\n" {
             bus.uart.push_rx(*byte);
         }
-
         repl::wait_for_prompt(&mut bus, &mut hart, DEFAULT_PROMPT);
         bus.uart.drain_tx();
 
-        let wrapped = format!("{code}; echo \"__EXIT:$?\"");
-        for byte in wrapped.bytes() {
+        repl::shell_init(&mut bus, &mut hart, DEFAULT_PROMPT);
+
+        let cmd = format!("{{ {code}; }} 2>/dev/ttyS1\n");
+        for byte in cmd.bytes() {
             bus.uart.push_rx(byte);
         }
-        bus.uart.push_rx(b'\n');
 
-        let raw_output = repl::capture_output_until_prompt(&mut bus, &mut hart, DEFAULT_PROMPT);
+        let stdout = repl::capture_output_until_prompt(&mut bus, &mut hart, DEFAULT_PROMPT);
 
-        let (stdout, exit_code) = parse_exit_code(&raw_output);
+        let stderr_bytes = bus.uart_stderr.drain_tx();
+        let stderr = String::from_utf8_lossy(&stderr_bytes).trim_end().to_string();
+
+        let ctrl_bytes = bus.uart_ctrl.drain_tx();
+        let exit_code = ctrl_bytes.first().copied().unwrap_or(0) as u32;
 
         Ok(ExecutionResult {
             stdout,
-            stderr: String::new(),
+            stderr,
             exit_code,
         })
     }
@@ -47,24 +51,11 @@ impl Guest for Executor {
         SESSION_MANAGER.start_session(snapshot_path, command, prompt)
     }
 
-    fn session_exec(handle: u64, code: String) -> Result<String, String> {
+    fn session_exec(handle: u64, code: String) -> Result<ExecutionResult, String> {
         SESSION_MANAGER.exec_code(handle, code)
     }
 
     fn session_close(handle: u64) {
         SESSION_MANAGER.close_session(handle);
-    }
-}
-
-fn parse_exit_code(output: &str) -> (String, u32) {
-    let marker = "__EXIT:";
-
-    if let Some(pos) = output.rfind(marker) {
-        let code_str = output[pos + marker.len()..].trim();
-        let exit_code = code_str.parse::<u32>().unwrap_or(0);
-        let stdout = output[..pos].trim_end().to_string();
-        (stdout, exit_code)
-    } else {
-        (output.to_string(), 0)
     }
 }

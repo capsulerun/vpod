@@ -31,36 +31,48 @@ class Sandbox:
 
         self._snapshot_path = str(snapshot_path)
         self._store, self._exports = load_component(wasm_path, snapshot_path)
-        self._session_id: Optional[int] = None
+        self._shell_session_id: Optional[int] = None
+        self._in_context = False
 
         self.commands = Commands(
             self._exports,
             self._snapshot_path,
-            self._get_session_id,
+            self._get_shell_session_id,
         )
 
         self.code = Code(
             self._exports,
             self._snapshot_path,
-            self._get_session_id,
+            self._get_code_session_id,
         )
 
     @classmethod
     def create(cls, snapshot: str = "alpine:latest") -> "Sandbox":
         return cls(snapshot)
 
-    def _get_session_id(self) -> Optional[int]:
-        return self._session_id
+    def _get_shell_session_id(self) -> int:
+        if self._shell_session_id is None:
+            result = self._exports["session-start"](
+                self._snapshot_path, _DEFAULT_SHELL, _DEFAULT_PROMPT
+            )
+            self._shell_session_id = _unwrap_result(result)
+        return self._shell_session_id
+
+    def _get_code_session_id(self) -> Optional[int]:
+        if not self._in_context:
+            return None
+        return self._get_shell_session_id()
 
     def __enter__(self) -> "Sandbox":
-        result = self._exports["session-start"](
-            self._snapshot_path, _DEFAULT_SHELL, _DEFAULT_PROMPT
-        )
-        self._session_id = _unwrap_result(result)
+        self._in_context = True
         return self
 
     def __exit__(self, *_) -> None:
         self.code.close()
-        if self._session_id is not None:
-            self._exports["session-close"](self._session_id)
-            self._session_id = None
+        self._in_context = False
+        if self._shell_session_id is not None:
+            self._exports["session-close"](self._shell_session_id)
+            self._shell_session_id = None
+
+    def close(self) -> None:
+        self.__exit__()

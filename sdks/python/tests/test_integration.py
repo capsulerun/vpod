@@ -165,6 +165,92 @@ def test_shell_subshell_exit_code():
         assert "42" in result.stdout
 
 
+# --- exit code tests ---
+
+def test_stateless_exit_code_nonzero():
+    sbx = Sandbox.create()
+    result = sbx.commands.run("exit 42")
+    assert result.exit_code == 42
+    assert not result.success
+
+
+def test_stateless_exit_code_zero():
+    sbx = Sandbox.create()
+    result = sbx.commands.run("true")
+    assert result.exit_code == 0
+    assert result.success
+
+
+def test_session_exit_code_nonzero():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("exit 7")
+        assert result.exit_code == 7
+        assert not result.success
+
+
+def test_session_exit_code_zero():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("true")
+        assert result.exit_code == 0
+        assert result.success
+
+
+def test_session_exit_code_command_not_found():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("notacommand_xyz")
+        assert result.exit_code != 0
+        assert not result.success
+
+
+# --- stderr tests ---
+
+def test_stateless_stderr_captured():
+    sbx = Sandbox.create()
+    result = sbx.commands.run("echo error_msg >&2")
+    assert "error_msg" in result.stderr
+    assert result.stdout == ""
+
+
+def test_stateless_stderr_not_in_stdout():
+    sbx = Sandbox.create()
+    result = sbx.commands.run("echo out_msg; echo err_msg >&2")
+    assert "out_msg" in result.stdout
+    assert "err_msg" in result.stderr
+    assert "err_msg" not in result.stdout
+    assert "out_msg" not in result.stderr
+
+
+def test_session_stderr_captured():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("echo session_error >&2")
+        assert "session_error" in result.stderr
+        assert result.stdout == ""
+
+
+def test_session_stderr_not_in_stdout():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("echo out; echo err >&2")
+        assert "out" in result.stdout
+        assert "err" in result.stderr
+        assert "err" not in result.stdout
+        assert "out" not in result.stderr
+
+
+def test_stateless_stderr_with_exit_code():
+    sbx = Sandbox.create()
+    result = sbx.commands.run("echo fail >&2; exit 2")
+    assert result.exit_code == 2
+    assert "fail" in result.stderr
+    assert result.stdout == ""
+
+
+def test_session_stderr_with_exit_code():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("echo fail >&2; exit 3")
+        assert result.exit_code == 3
+        assert "fail" in result.stderr
+
+
 def test_python_arithmetic_precision():
     with Sandbox.create() as sbx:
         result = sbx.code.run("print(0.1 + 0.2)")

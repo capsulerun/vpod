@@ -11,7 +11,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
     let stdin = wasi::cli::stdin::get_stdin();
 
     const POLL_INTERVAL_ACTIVE: u64 = 32768;
-    const POLL_INTERVAL_IDLE: u64 = 8192;
+    const POLL_INTERVAL_IDLE: u64 = 1024;
     const POLL_INTERVAL_NET: u64 = 4096;
     const IDLE_TIMEOUT_NS: u64 = 1_000_000;
     const IDLE_THRESHOLD: u32 = 32;
@@ -41,6 +41,13 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
         if !bytes.is_empty() {
             pending.extend_from_slice(&bytes);
             hold_cycles = 0;
+        }
+
+        let stderr_bytes = bus.uart_stderr.drain_tx();
+        if !stderr_bytes.is_empty() {
+            let stderr = wasi::cli::stderr::get_stderr();
+            let _ = stderr.write(&stderr_bytes);
+            let _ = stderr.flush();
         }
 
         if !pending.is_empty() {
