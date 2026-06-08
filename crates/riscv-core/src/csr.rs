@@ -43,14 +43,6 @@ pub const MARCHID: u32 = 0xF12;
 pub const MIMPID: u32 = 0xF13;
 pub const MHARTID: u32 = 0xF14;
 
-// Vector CSRs for RVV 1.0
-pub const VSTART: u32 = 0x008;
-pub const VXSAT: u32 = 0x009;
-pub const VXRM: u32 = 0x00A;
-pub const VCSR: u32 = 0x00F;
-pub const VL: u32 = 0xC20;
-pub const VTYPE: u32 = 0xC21;
-pub const VLENB: u32 = 0xC22;
 
 // mstatus field masks for RV64
 pub const MSTATUS_SIE: u64 = 1 << 1;
@@ -59,7 +51,6 @@ pub const MSTATUS_SPIE: u64 = 1 << 5;
 pub const MSTATUS_UBE: u64 = 1 << 6;
 pub const MSTATUS_MPIE: u64 = 1 << 7;
 pub const MSTATUS_SPP: u64 = 1 << 8;
-pub const MSTATUS_VS: u64 = 3 << 9;
 pub const MSTATUS_MPP: u64 = 3 << 11;
 pub const MSTATUS_FS: u64 = 3 << 13;
 pub const MSTATUS_XS: u64 = 3 << 15;
@@ -82,8 +73,6 @@ pub const MIP_STIP: u64 = 1 << 5;
 pub const MIP_MTIP: u64 = 1 << 7;
 pub const MIP_SEIP: u64 = 1 << 9;
 pub const MIP_MEIP: u64 = 1 << 11;
-
-const VECTOR_REGISTER_BYTES: u64 = 16; // VLEN=128 bits = 16
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrivMode {
@@ -108,7 +97,6 @@ const MSTATUS_WRITE_MASK: u64 = MSTATUS_SIE
     | MSTATUS_UBE
     | MSTATUS_MPIE
     | MSTATUS_SPP
-    | MSTATUS_VS
     | MSTATUS_MPP
     | MSTATUS_FS
     | MSTATUS_XS
@@ -126,8 +114,7 @@ const SSTATUS_MASK: u64 = MSTATUS_SIE
     | MSTATUS_FS
     | MSTATUS_XS
     | MSTATUS_SUM
-    | MSTATUS_MXR
-    | MSTATUS_VS;
+    | MSTATUS_MXR;
 
 // Bits writable via SIP (S-mode software interrupt)
 const SIP_WRITABLE: u64 = MIP_SSIP;
@@ -170,11 +157,6 @@ pub struct Csr {
     pub fcsr: u64,
 
     // Vector CSRs
-    pub vtype: u64,
-    pub vl: u64,
-    pub vstart: u64,
-    pub vcsr: u64,
-
     // HPM event selectors (3..31)
     pub mhpmevent: [u64; 29],
 }
@@ -227,10 +209,6 @@ impl Csr {
             instret: 0,
             time: 0,
             fcsr: 0,
-            vtype: 1 << 63,
-            vl: 0,
-            vstart: 0,
-            vcsr: 0,
             mhpmevent: [0; 29],
         }
     }
@@ -300,14 +278,6 @@ impl Csr {
             0x002 => (self.fcsr >> 5) & 0x7, // frm
             0x003 => self.fcsr & 0xFF,       // fcsr
 
-            // Vector CSRs (RVV 1.0)
-            VSTART => self.vstart,
-            VXSAT => self.vcsr & 1,
-            VXRM => (self.vcsr >> 1) & 3,
-            VCSR => self.vcsr & 0x7,
-            VL => self.vl,
-            VTYPE => self.vtype,
-            VLENB => VECTOR_REGISTER_BYTES,
 
             // mhpmevent3-31
             0x323..=0x33F => self.mhpmevent[(address - 0x323) as usize],
@@ -391,12 +361,6 @@ impl Csr {
             0x002 => self.fcsr = (self.fcsr & !0xE0) | ((value & 0x7) << 5),
             0x003 => self.fcsr = value & 0xFF,
 
-            // Vector CSRs
-            VSTART => self.vstart = value,
-            VXSAT => self.vcsr = (self.vcsr & !1) | (value & 1),
-            VXRM => self.vcsr = (self.vcsr & !0x6) | ((value & 3) << 1),
-            VCSR => self.vcsr = value & 0x7,
-            VL | VTYPE | VLENB => {}
 
             // HPM events
             0x323..=0x33F => self.mhpmevent[(address - 0x323) as usize] = value,
@@ -422,12 +386,10 @@ impl Csr {
     fn read_mstatus(&self) -> u64 {
         let mut value = self.mstatus;
 
-        // MSTATUS_SD is set if FS, XS or VS indicate dirty state
         let fs = (value >> 13) & 3;
         let xs = (value >> 15) & 3;
-        let vs = (value >> 9) & 3;
 
-        if fs == 3 || xs == 3 || vs == 3 {
+        if fs == 3 || xs == 3 {
             value |= MSTATUS_SD;
         } else {
             value &= !MSTATUS_SD;

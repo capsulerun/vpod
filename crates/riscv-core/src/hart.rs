@@ -8,8 +8,6 @@ use crate::mmu::Mmu;
 use crate::system_bus::SystemBus;
 use crate::trap::StepResult;
 
-pub const VLEN_BYTES: usize = 16;
-pub const VREG_COUNT: usize = 32;
 
 pub struct Hart {
     pub regs: Gpr,
@@ -17,7 +15,6 @@ pub struct Hart {
     pub mmu: Mmu,
     pub priv_mode: PrivMode,
     pub lr_addr: Option<u64>,
-    pub vregs: Box<[[u8; VLEN_BYTES]; VREG_COUNT]>,
     pub fetch_vpage: u64,
     pub fetch_ppage: u64,
     pub fetch_satp: u64,
@@ -35,7 +32,6 @@ impl Hart {
             mmu: Mmu::new(),
             priv_mode: PrivMode::M,
             lr_addr: None,
-            vregs: Box::new([[0u8; VLEN_BYTES]; VREG_COUNT]),
             fetch_vpage: u64::MAX,
             fetch_ppage: 0,
             fetch_satp: u64::MAX,
@@ -61,7 +57,6 @@ impl Hart {
             fetch_vpage: &mut self.fetch_vpage,
             fetch_ppage: &mut self.fetch_ppage,
             fetch_satp: &mut self.fetch_satp,
-            vregs: &mut self.vregs,
 
             icache_tags: &mut self.icache_tags,
             icache_data: &mut self.icache_data,
@@ -83,7 +78,6 @@ impl Hart {
             fetch_vpage: &mut self.fetch_vpage,
             fetch_ppage: &mut self.fetch_ppage,
             fetch_satp: &mut self.fetch_satp,
-            vregs: &mut self.vregs,
             icache_tags: &mut self.icache_tags,
             icache_data: &mut self.icache_data,
             is_waiting: &mut self.is_waiting,
