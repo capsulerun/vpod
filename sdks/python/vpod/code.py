@@ -37,7 +37,7 @@ class Code:
         result = self._exports["session-start"](
             self._snapshot_path, _PYTHON_CMD, _PYTHON_PROMPT
         )
-        self._repl_session_id = unwrap_result(result)
+        self._repl_session_id = int(unwrap_result(result))
 
     def close(self):
         if self._repl_session_id is not None:

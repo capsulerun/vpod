@@ -55,7 +55,7 @@ class Sandbox:
             result = self._exports["session-start"](
                 self._snapshot_path, _DEFAULT_SHELL, _DEFAULT_PROMPT
             )
-            self._shell_session_id = _unwrap_result(result)
+            self._shell_session_id = int(_unwrap_result(result))
         return self._shell_session_id
 
     def _get_code_session_id(self) -> Optional[int]:
