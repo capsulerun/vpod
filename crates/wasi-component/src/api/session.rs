@@ -92,8 +92,12 @@ impl SessionManager {
             session.bus.uart.push_rx(byte);
         }
 
-        let stdout =
-            repl::capture_output_until_prompt(&mut session.bus, &mut session.hart, &session.prompt);
+        let stdout = repl::capture_output_until_prompt(
+            &mut session.bus,
+            &mut session.hart,
+            &session.prompt,
+            30,
+        );
 
         let stderr_bytes = session.bus.uart_stderr.drain_tx();
         let stderr = String::from_utf8_lossy(&stderr_bytes)
