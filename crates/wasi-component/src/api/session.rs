@@ -92,14 +92,13 @@ impl SessionManager {
             session.bus.uart.push_rx(byte);
         }
 
-        let stdout = repl::capture_output_until_prompt(
-            &mut session.bus,
-            &mut session.hart,
-            &session.prompt,
-        );
+        let stdout =
+            repl::capture_output_until_prompt(&mut session.bus, &mut session.hart, &session.prompt);
 
         let stderr_bytes = session.bus.uart_stderr.drain_tx();
-        let stderr = String::from_utf8_lossy(&stderr_bytes).trim_end().to_string();
+        let stderr = String::from_utf8_lossy(&stderr_bytes)
+            .trim_end()
+            .to_string();
 
         let exit_code = if session.is_shell {
             let ctrl_bytes = session.bus.uart_ctrl.drain_tx();

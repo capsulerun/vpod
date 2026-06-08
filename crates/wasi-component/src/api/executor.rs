@@ -31,7 +31,9 @@ impl Guest for Executor {
         let stdout = repl::capture_output_until_prompt(&mut bus, &mut hart, DEFAULT_PROMPT);
 
         let stderr_bytes = bus.uart_stderr.drain_tx();
-        let stderr = String::from_utf8_lossy(&stderr_bytes).trim_end().to_string();
+        let stderr = String::from_utf8_lossy(&stderr_bytes)
+            .trim_end()
+            .to_string();
 
         let ctrl_bytes = bus.uart_ctrl.drain_tx();
         let exit_code = ctrl_bytes.first().copied().unwrap_or(0) as u32;
