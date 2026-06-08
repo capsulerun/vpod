@@ -94,9 +94,9 @@ impl RawTerminal {
                 return None;
             }
 
-            let raw_mode = (mode
-                & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
+            let raw_mode = (mode & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT))
                 | ENABLE_VIRTUAL_TERMINAL_INPUT;
+
             SetConsoleMode(handle, raw_mode);
             Some(Self { saved_mode: mode })
         }
@@ -108,6 +108,7 @@ impl Drop for RawTerminal {
     fn drop(&mut self) {
         use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
         use windows_sys::Win32::System::Console::*;
+
         unsafe {
             let handle = GetStdHandle(STD_INPUT_HANDLE);
             if !handle.is_null() && handle != INVALID_HANDLE_VALUE {

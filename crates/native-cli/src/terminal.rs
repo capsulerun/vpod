@@ -42,6 +42,7 @@ impl Drop for RawTerminal {
 
 pub fn set_nonblocking() {
     let fd = std::io::stdin().as_raw_fd();
+
     unsafe {
         let flags = libc::fcntl(fd, libc::F_GETFL, 0);
         libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
@@ -50,6 +51,7 @@ pub fn set_nonblocking() {
 
 pub fn poll_stdin(bus: &mut MachineBus, snap_path: Option<&PathBuf>, hart: &Hart) {
     let mut buf = [0u8; 64];
+
     match std::io::stdin().read(&mut buf) {
         Ok(n) if n > 0 => {
             for &b in &buf[..n] {
