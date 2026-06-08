@@ -7,7 +7,6 @@ use crate::gpr::Gpr;
 use crate::mmu::{Mmu, MmuFault};
 use crate::system_bus::SystemBus;
 use crate::trap::{StepResult, TrapCause};
-use crate::vec::exec_vec;
 
 pub const ICACHE_SIZE: usize = 4096;
 const ICACHE_TAG_SHIFT: u32 = 1 + ICACHE_SIZE.trailing_zeros();
@@ -33,7 +32,6 @@ const OP_FMADD: u32 = 0x43;
 const OP_FMSUB: u32 = 0x47;
 const OP_FNMSUB: u32 = 0x4B;
 const OP_FNMADD: u32 = 0x4F;
-const OP_VEC: u32 = 0x57;
 
 const FUNCT3_BEQ: u32 = 0x0;
 const FUNCT3_BNE: u32 = 0x1;
@@ -65,7 +63,6 @@ pub struct ExecContext<'a, B: SystemBus> {
     pub fetch_vpage: &'a mut u64,
     pub fetch_ppage: &'a mut u64,
     pub fetch_satp: &'a mut u64,
-    pub vregs: &'a mut Box<[[u8; crate::hart::VLEN_BYTES]; crate::hart::VREG_COUNT]>,
 
     pub icache_tags: &'a mut Box<[u64; ICACHE_SIZE]>,
     pub icache_data: &'a mut Box<[u32; ICACHE_SIZE]>,
@@ -553,7 +550,6 @@ fn exec_full<B: SystemBus>(
         OP_STORE_FP => return store_fp(ctx, inst, raw, pc),
         OP_OP_FP => return op_fp(ctx, inst, raw, pc),
         OP_FMADD | OP_FMSUB | OP_FNMSUB | OP_FNMADD => return fma(ctx, inst, raw, pc),
-        OP_VEC => return exec_vec(ctx, raw, pc),
 
         _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
     }
@@ -1388,10 +1384,6 @@ fn load_fp<B: SystemBus>(
     raw: u32,
     pc: u64,
 ) -> StepResult {
-    if matches!(inst.funct3(), 0 | 5 | 6 | 7) {
-        return exec_vec(ctx, raw, pc);
-    }
-
     if let Some(t) = check_fs(ctx, raw) {
         return t;
     }
@@ -1443,10 +1435,6 @@ fn store_fp<B: SystemBus>(
     raw: u32,
     pc: u64,
 ) -> StepResult {
-    if matches!(inst.funct3(), 0 | 5 | 6 | 7) {
-        return exec_vec(ctx, raw, pc);
-    }
-
     if let Some(t) = check_fs(ctx, raw) {
         return t;
     }

@@ -6,8 +6,8 @@ use riscv_core::csr::PrivMode;
 use crate::LOW_RAM_SIZE;
 use crate::machine_bus::MachineBus;
 
-const MAGIC: &[u8; 7] = b"CAPSULE";
-const VERSION: u8 = 3;
+const MAGIC: &[u8; 4] = b"VPOD";
+const VERSION: u8 = 1;
 
 pub fn save(bus: &MachineBus, hart: &Hart, writer: &mut impl Write) -> io::Result<()> {
     writer.write_all(MAGIC)?;
@@ -35,7 +35,7 @@ pub fn save(bus: &MachineBus, hart: &Hart, writer: &mut impl Write) -> io::Resul
 }
 
 pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) -> io::Result<()> {
-    let mut magic = [0u8; 7];
+    let mut magic = [0u8; 4];
     reader.read_exact(&mut magic)?;
 
     if &magic != MAGIC {
@@ -207,10 +207,6 @@ fn save_csr(hart: &Hart, writer: &mut impl Write) -> io::Result<()> {
     write_u64!(csr_state.instret);
     write_u64!(csr_state.time);
     write_u64!(csr_state.fcsr);
-    write_u64!(csr_state.vtype);
-    write_u64!(csr_state.vl);
-    write_u64!(csr_state.vstart);
-    write_u64!(csr_state.vcsr);
 
     for value in &csr_state.pmpcfg {
         write_u64!(value);
@@ -222,9 +218,6 @@ fn save_csr(hart: &Hart, writer: &mut impl Write) -> io::Result<()> {
         write_u64!(value);
     }
 
-    for vreg in hart.vregs.iter() {
-        writer.write_all(vreg)?;
-    }
     Ok(())
 }
 
@@ -264,10 +257,6 @@ fn restore_csr(hart: &mut Hart, reader: &mut impl Read) -> io::Result<()> {
     read_u64!(csr_state.instret);
     read_u64!(csr_state.time);
     read_u64!(csr_state.fcsr);
-    read_u64!(csr_state.vtype);
-    read_u64!(csr_state.vl);
-    read_u64!(csr_state.vstart);
-    read_u64!(csr_state.vcsr);
 
     for value in csr_state.pmpcfg.iter_mut() {
         reader.read_exact(&mut buffer)?;
@@ -282,10 +271,6 @@ fn restore_csr(hart: &mut Hart, reader: &mut impl Read) -> io::Result<()> {
     for value in csr_state.mhpmevent.iter_mut() {
         reader.read_exact(&mut buffer)?;
         *value = u64::from_le_bytes(buffer);
-    }
-
-    for vreg in hart.vregs.iter_mut() {
-        reader.read_exact(vreg)?;
     }
 
     Ok(())

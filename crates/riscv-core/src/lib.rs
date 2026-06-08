@@ -7,7 +7,6 @@ pub mod hart;
 pub mod mmu;
 pub mod system_bus;
 pub mod trap;
-pub mod vec;
 
 pub use csr::{Csr, PrivMode};
 pub use hart::Hart;

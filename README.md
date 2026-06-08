@@ -7,10 +7,10 @@
     <img src="https://img.shields.io/github/actions/workflow/status/capsulerun/vpod/ci.yml?branch=main&label=CI&logo=github" alt="CI">
   </a>
 
-  <a href="https://riscv.org/specifications/ratified/"><img src="https://img.shields.io/badge/RISCV-RV64GCV-orange?logo=RISCV" alt="Risc-V"></a>
+  <a href="https://riscv.org/specifications/ratified/"><img src="https://img.shields.io/badge/RISCV-RV64GC-orange?logo=RISCV" alt="Risc-V"></a>
   <a href="https://wasi.dev/"><img src="https://img.shields.io/badge/Wasm%2FWASI-0.2.0-654FF0?logo=webassembly&logoColor=white" alt="Wasm/WASI 0.2 Sandbox"></a>
 
-[Getting Started](#getting-started) • [Documentation](#documentation) • [Issues](https://github.com/capsulerun/capsule/issues/new) • [Contributing](#contributing)
+[Getting Started](#getting-started) • [Documentation](#documentation) • [Issues](https://github.com/capsulerun/vpod/issues/new) • [Contributing](#contributing)
 
 
 </div>
@@ -26,11 +26,11 @@ A `vpod` is a lightweight, portable sandbox that gives an untrusted process an i
 
 ## How it works
 
-A `vpod` runs a RISC‑V virtual machine compiled to WebAssembly, implementing the RV64GCV specification. When you start a `vpod`, it boots from a snapshot, a saved VM state ready in under a second.
+A `vpod` runs a RISC‑V virtual machine compiled to WebAssembly, implementing the RV64GC specification. When you start a `vpod`, it boots from a snapshot, a saved VM state ready in under a second.
 
 The WASM component communicates with the host through WASI 0.2, providing controlled access to filesystem, networking, and standard I/O while keeping all execution state (CPU registers, memory, filesystem) isolated inside the sandbox.
 
-### RV64GCV Specification
+### RV64GC Specification
 
 **G (General-purpose extensions)**
 - **I** : Base 64-bit integer instruction set.
@@ -40,9 +40,6 @@ The WASM component communicates with the host through WASI 0.2, providing contro
 
 **C (Compressed instructions)**
 Reduces code size by 30%, improving instruction fetch speed and memory efficiency. This matters when running a full Linux userspace inside our memory-constrained WASM environment.
-
-**V (Vector extension)**
-Adds SIMD operations for parallel data processing. Accelerates array operations, data transformations, and numerical workloads common in AI agent execution.
 
 ## Getting started
 
