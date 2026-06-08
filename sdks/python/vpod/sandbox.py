@@ -29,7 +29,7 @@ class Sandbox:
         snapshot_path = snapshots.pull(snapshot)
         wasm_path = locate_wasm()
 
-        self._snapshot_path = str(snapshot_path)
+        self._snapshot_path = snapshot_path.as_posix()
         self._store, self._exports = load_component(wasm_path, snapshot_path)
         self._shell_session_id: Optional[int] = None
         self._in_context = False
