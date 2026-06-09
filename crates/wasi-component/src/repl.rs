@@ -7,6 +7,9 @@ const STEP: u64 = 8192;
 
 const NET_YIELD_NS: u64 = 5_000_000; // 5 ms
 
+// TO TEST : the time UART must be quiet after last output before declare the command
+const QUIET_PERIOD_NS: u64 = 150_000_000; // 150 ms
+
 pub fn shell_init(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     for byte in b"stty -echo\n" {
         bus.uart.push_rx(*byte);
@@ -62,30 +65,30 @@ pub fn capture_output_until_prompt(
     let deadline = monotonic_clock::now() + timeout_secs * 1_000_000_000;
 
     let mut output = Vec::new();
-    let mut wfi_count = 0u32;
+    let mut last_output_ns = monotonic_clock::now();
     let mut got_output = false;
 
     loop {
-        if monotonic_clock::now() >= deadline {
+        let now = monotonic_clock::now();
+        if now >= deadline {
             break;
         }
 
         if hart.is_waiting {
             hart.is_waiting = false;
 
-            if got_output {
-                wfi_count += 1;
-                if wfi_count >= 32 && !bus.has_pending_io() {
-                    break;
-                }
-            }
-
             if !bus.has_pending_io() {
                 let timeout = monotonic_clock::subscribe_duration(NET_YIELD_NS);
                 poll::poll(&[&timeout]);
+
+                if got_output
+                    && !bus.net_rx_pending()
+                    && !bus.net_has_active_connections()
+                    && monotonic_clock::now().saturating_sub(last_output_ns) >= QUIET_PERIOD_NS
+                {
+                    break;
+                }
             }
-        } else {
-            wfi_count = 0;
         }
 
         bus.clint.advance_by_instructions(STEP);
@@ -100,7 +103,7 @@ pub fn capture_output_until_prompt(
         if !tx.is_empty() {
             output.extend_from_slice(&tx);
             got_output = true;
-            wfi_count = 0;
+            last_output_ns = monotonic_clock::now();
 
             if output.ends_with(prompt) {
                 output.truncate(output.len() - prompt.len());

@@ -14,6 +14,7 @@ pub trait NetworkBackend {
     fn send(&mut self, frame: &[u8]);
     fn recv(&mut self) -> Option<Vec<u8>>;
     fn has_rx(&self) -> bool;
+    fn has_active_connections(&self) -> bool;
 }
 
 pub struct VirtioNet<B: NetworkBackend> {
@@ -38,6 +39,10 @@ impl<B: NetworkBackend> VirtioNet<B> {
 
     pub fn rx_pending(&self) -> bool {
         !self.rx_hold.is_empty() || self.backend.has_rx()
+    }
+
+    pub fn has_active_connections(&self) -> bool {
+        self.backend.has_active_connections()
     }
 
     pub fn notify(&mut self, queue_idx: usize, ram: &mut RamView) {

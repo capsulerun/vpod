@@ -715,6 +715,12 @@ impl NetworkBackend for SlirpBackend {
         }
         false
     }
+
+    fn has_active_connections(&self) -> bool {
+        self.tcp_conns
+            .values()
+            .any(|c| matches!(c.state, TcpState::Established | TcpState::FinWait))
+    }
 }
 
 fn would_block(e: &std::io::Error) -> bool {
