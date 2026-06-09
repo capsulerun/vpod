@@ -81,7 +81,6 @@ pub fn capture_output_until_prompt(
                 let timeout = monotonic_clock::subscribe_duration(NET_YIELD_NS);
                 poll::poll(&[&timeout]);
 
-
                 if got_output
                     && !bus.net_rx_pending()
                     && !bus.net_has_active_connections()
