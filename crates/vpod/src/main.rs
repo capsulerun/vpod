@@ -8,7 +8,10 @@ use clap::{Parser, Subcommand};
 use registry::DEFAULT_REGISTRY;
 
 #[derive(Parser)]
-#[command(name = "vpod", about = "Lightweight, secure sandboxes for untrusted processes.")]
+#[command(
+    name = "vpod",
+    about = "Lightweight, secure sandboxes for untrusted processes."
+)]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
