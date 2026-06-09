@@ -5,7 +5,7 @@ use wasi::io::poll;
 
 const STEP: u64 = 8192;
 
-const NET_YIELD_NS: u64 = 5_000_000; // 5 ms  idle waiting on i/O
+const NET_YIELD_NS: u64 = 5_000_000; // 5 ms
 
 pub fn shell_init(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     for byte in b"stty -echo\n" {
@@ -77,7 +77,8 @@ pub fn capture_output_until_prompt(
                 let timeout = monotonic_clock::subscribe_duration(NET_YIELD_NS);
                 poll::poll(&[&timeout]);
 
-                if got_output && !bus.net_rx_pending() {
+
+                if got_output && !bus.net_rx_pending() && !bus.net_has_active_connections() {
                     wfi_count += 1;
                     if wfi_count >= 32 {
                         break;

@@ -129,6 +129,12 @@ impl MachineBus {
         self.net.as_ref().is_some_and(|n| n.rx_pending())
     }
 
+    pub fn net_has_active_connections(&self) -> bool {
+        self.net
+            .as_ref()
+            .is_some_and(|n| n.has_active_connections())
+    }
+
     pub fn has_pending_io(&self) -> bool {
         self.uart.rx_pending() || self.net_rx_pending()
     }
