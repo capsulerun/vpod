@@ -3,6 +3,7 @@ from pathlib import Path
 
 from platformdirs import user_data_dir
 from wasmtime import Engine, Store, WasiConfig
+from wasmtime._bindings import wasi_config_inherit_network
 from wasmtime.component import Component, Linker
 
 _BUNDLED_WASM = Path(__file__).parent / "vpod_wasi_lib.wasm"
@@ -36,6 +37,7 @@ def _cwasm_cache_path(wasm_path: Path) -> Path:
     base = Path(user_data_dir()) or Path.home() / ".local" / "share"
     cache_dir = base / "vpod"
     cache_dir.mkdir(parents=True, exist_ok=True)
+
     return cache_dir / f"component-{_VERSION}-{digest}.cwasm"
 
 
@@ -83,6 +85,7 @@ def load_component(wasm_path: Path, snapshot_path: Path = None):
     wasi.inherit_stderr()
     wasi.inherit_stdin()
     wasi.preopen_dir(snap_dir, snap_dir)
+    wasi_config_inherit_network(wasi.ptr())
     store.set_wasi(wasi)
 
     linker = Linker(engine)

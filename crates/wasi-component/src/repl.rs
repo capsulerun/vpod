@@ -1,7 +1,11 @@
 use machine::machine_bus::MachineBus;
 use riscv_core::{Hart, StepResult};
+use wasi::clocks::monotonic_clock;
+use wasi::io::poll;
 
 const STEP: u64 = 8192;
+
+const NET_YIELD_NS: u64 = 5_000_000; // 5 ms
 
 pub fn shell_init(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     for byte in b"stty -echo\n" {
@@ -49,19 +53,36 @@ pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     }
 }
 
-pub fn capture_output_until_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) -> String {
+pub fn capture_output_until_prompt(
+    bus: &mut MachineBus,
+    hart: &mut Hart,
+    prompt: &[u8],
+    timeout_secs: u64,
+) -> String {
+    let deadline = monotonic_clock::now() + timeout_secs * 1_000_000_000;
+
     let mut output = Vec::new();
     let mut wfi_count = 0u32;
     let mut got_output = false;
 
-    for _ in 0..100_000u32 {
+    loop {
+        if monotonic_clock::now() >= deadline {
+            break;
+        }
+
         if hart.is_waiting {
             hart.is_waiting = false;
+
             if got_output {
                 wfi_count += 1;
-                if wfi_count >= 32 {
+                if wfi_count >= 32 && !bus.has_pending_io() {
                     break;
                 }
+            }
+
+            if !bus.has_pending_io() {
+                let timeout = monotonic_clock::subscribe_duration(NET_YIELD_NS);
+                poll::poll(&[&timeout]);
             }
         } else {
             wfi_count = 0;
@@ -88,7 +109,6 @@ pub fn capture_output_until_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt
         }
     }
 
-    // Strip incomplete trailing line (noise from system after shell exit)
     if !output.is_empty() && !output.ends_with(b"\n") {
         if let Some(pos) = output.iter().rposition(|&b| b == b'\n') {
             output.truncate(pos + 1);
