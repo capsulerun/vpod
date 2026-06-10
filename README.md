@@ -41,6 +41,9 @@ The WASM component communicates with the host through WASI 0.2, providing contro
 **C (Compressed instructions)**
 Reduces code size by 30%, improving instruction fetch speed and memory efficiency. This matters when running a full Linux userspace inside our memory-constrained WASM environment.
 
+> [!NOTE]
+> The V (vector) extension is intentionally omitted. RVV instructions would execute as emulated RISC-V, there is no SIMD passthrough to the host CPU. Adding V would increase emulation overhead without performance benefit for vectorized workloads like `NumPy` or `PyTorch` for example.
+
 ## Getting started
 
 ### CLI
@@ -85,7 +88,7 @@ with Sandbox.create() as sandbox:
     print(result.text)  # 6
 ```
 
-> [!NOTE]
+> [!IMPORTANT]
 > The first call to `Sandbox.create()` downloads the default snapshot (`alpine`) and caches it locally.
 
 ## Documentation
