@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 import json
 import shutil
@@ -29,12 +30,14 @@ def pull(name: str = "alpine:latest") -> Path:
     snapshot = resolve_snapshot(registry, name)
 
     dest = cache_dir() / f"{snapshot['id']}.snap"
+    meta = dest.with_suffix(".meta")
 
-    if dest.exists() and _file_sha256(dest) == snapshot["sha256"]:
+    if dest.exists() and meta.exists() and meta.read_text().strip() == snapshot["sha256"]:
         return dest
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    _download_to(snapshot["url"], dest, snapshot["sha256"])
+    _download_and_decompress(snapshot["url"], dest, snapshot["sha256"])
+    meta.write_text(snapshot["sha256"])
 
     return dest
 
@@ -78,8 +81,9 @@ def resolve_snapshot(registry: list[dict], name: str) -> dict:
     raise ValueError(f"Snapshot '{name}' not found. Available: {available}")
 
 
-def _download_to(url: str, dest: Path, expected_sha256: str) -> None:
-    tmp = dest.with_suffix(".tmp")
+def _download_and_decompress(url: str, dest: Path, expected_sha256: str) -> None:
+    tmp_gz = dest.with_suffix(".tmp.gz")
+    tmp_raw = dest.with_suffix(".tmp")
     try:
         request = urllib.request.Request(
             url,
@@ -87,19 +91,23 @@ def _download_to(url: str, dest: Path, expected_sha256: str) -> None:
         )
         context = _create_ssl_context()
         with urllib.request.urlopen(request, timeout=60, context=context) as response:
-            with open(tmp, "wb") as f:
+            with open(tmp_gz, "wb") as f:
                 shutil.copyfileobj(response, f)
 
-        actual_sha256 = _file_sha256(tmp)
+        actual_sha256 = _file_sha256(tmp_gz)
         if actual_sha256 != expected_sha256:
-            tmp.unlink(missing_ok=True)
             raise ValueError(
                 f"Checksum mismatch: expected {expected_sha256}, got {actual_sha256}"
             )
 
-        shutil.move(tmp, dest)
+        with gzip.open(tmp_gz, "rb") as f_in, open(tmp_raw, "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+
+        tmp_gz.unlink()
+        shutil.move(tmp_raw, dest)
     except Exception:
-        tmp.unlink(missing_ok=True)
+        tmp_gz.unlink(missing_ok=True)
+        tmp_raw.unlink(missing_ok=True)
         raise
 
 
