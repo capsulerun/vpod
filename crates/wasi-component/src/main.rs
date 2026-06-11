@@ -34,7 +34,7 @@ fn main() {
         usage();
     });
 
-    let (mut bus, mut hart) = vm::load(vm::VmConfig {
+    let (mut bus, mut hart, _flags) = vm::load(vm::VmConfig {
         snapshot: &snap,
         disk: disk_path.as_deref(),
         capture_tx: true,

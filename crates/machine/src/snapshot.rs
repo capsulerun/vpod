@@ -7,11 +7,15 @@ use crate::LOW_RAM_SIZE;
 use crate::machine_bus::MachineBus;
 
 const MAGIC: &[u8; 4] = b"VPOD";
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 
-pub fn save(bus: &MachineBus, hart: &Hart, writer: &mut impl Write) -> io::Result<()> {
+pub const FLAG_SHELL_READY: u8 = 1 << 0;
+
+pub fn save(bus: &MachineBus, hart: &Hart, writer: &mut impl Write, flags: impl Into<Option<u8>>) -> io::Result<()> {
+    let flags = flags.into().unwrap_or(0);
     writer.write_all(MAGIC)?;
     writer.write_all(&[VERSION])?;
+    writer.write_all(&[flags])?;
 
     let ram_size = bus.ram_size();
     writer.write_all(&ram_size.to_le_bytes())?;
@@ -34,7 +38,7 @@ pub fn save(bus: &MachineBus, hart: &Hart, writer: &mut impl Write) -> io::Resul
     Ok(())
 }
 
-pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) -> io::Result<()> {
+pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) -> io::Result<u8> {
     let mut magic = [0u8; 4];
     reader.read_exact(&mut magic)?;
 
@@ -48,12 +52,21 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
     let mut version = [0u8; 1];
     reader.read_exact(&mut version)?;
 
-    if version[0] != VERSION {
+    if version[0] > VERSION {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("unsupported snapshot version {}", version[0]),
         ));
     }
+
+    let flags = if version[0] >= 2 {
+        let mut flag = [0u8; 1];
+
+        reader.read_exact(&mut flag)?;
+        flag[0]
+    } else {
+        0
+    };
 
     let mut buffer_u64 = [0u8; 8];
     reader.read_exact(&mut buffer_u64)?;
@@ -94,7 +107,7 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
         }
     }
 
-    Ok(())
+    Ok(flags)
 }
 
 fn save_hart(hart: &Hart, writer: &mut impl Write) -> io::Result<()> {
