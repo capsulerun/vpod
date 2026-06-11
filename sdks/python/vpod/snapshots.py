@@ -9,7 +9,7 @@ from pathlib import Path
 import certifi
 import platformdirs
 
-REGISTRY_URL = "https://registry.vpod.sh/v1/snapshots.json"
+REGISTRY_URL = os.environ.get("VPOD_REGISTRY", "https://registry.vpod.sh/v1/snapshots.json")
 
 
 def _create_ssl_context():
