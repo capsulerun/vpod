@@ -60,7 +60,10 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
     if version[0] != VERSION {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("unsupported snapshot version {} (expected {})", version[0], VERSION),
+            format!(
+                "unsupported snapshot version {} (expected {})",
+                version[0], VERSION
+            ),
         ));
     }
 

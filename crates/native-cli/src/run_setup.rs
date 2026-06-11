@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use machine::machine_bus::MachineBus;
+use machine::snapshot::FLAG_SHELL_READY;
 use riscv_core::{Hart, StepResult};
 
 pub fn run(
@@ -47,8 +48,10 @@ pub fn run(
         let tail = &output[output.len().saturating_sub(128)..];
         let has_prompt = tail.contains("\n~ # ")
             || tail.contains("\n/ # ")
+            || tail.contains("\n# ")
             || tail.starts_with("~ # ")
-            || tail.starts_with("/ # ");
+            || tail.starts_with("/ # ")
+            || tail.starts_with("# ");
 
         if has_prompt {
             if !sent {
@@ -93,8 +96,57 @@ pub fn run(
         }
     }
 
+    if snap_flags & FLAG_SHELL_READY != 0 {
+        eprintln!("[vpod-setup] running shell_init for warm snapshot...");
+        shell_init(bus, hart);
+    }
+
     if let Some(path) = snap_save {
         super::save_snapshot(bus, hart, path, snap_flags);
     }
     eprintln!("[vpod-setup] done.");
+}
+
+const PROMPT: &[u8] = b"# ";
+
+fn shell_init(bus: &mut MachineBus, hart: &mut Hart) {
+    for byte in b"stty -echo\n" {
+        bus.uart.push_rx(*byte);
+    }
+    wait_for_prompt(bus, hart);
+    bus.uart.drain_tx();
+
+    let init_cmd = format!(
+        "__ec() {{ printf \"\\x$(printf %02x $1)\" >/dev/ttyS2; }}; export PS1='$(__ec $?){}'; trap '__ec $?' EXIT\n",
+        String::from_utf8_lossy(PROMPT)
+    );
+    for byte in init_cmd.bytes() {
+        bus.uart.push_rx(byte);
+    }
+    wait_for_prompt(bus, hart);
+    bus.uart.drain_tx();
+    bus.uart_stderr.drain_tx();
+    bus.uart_ctrl.drain_tx();
+}
+
+fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart) {
+    let mut buffer = Vec::new();
+    for _ in 0..500_000u32 {
+        if hart.is_waiting {
+            hart.is_waiting = false;
+        }
+        bus.clint.advance_by_instructions(8192);
+        bus.poll(hart);
+        match hart.run(bus, 8192) {
+            StepResult::Ok => {}
+            StepResult::Trap(_) | StepResult::Halt => return,
+        }
+        let output = bus.uart.drain_tx();
+        if !output.is_empty() {
+            buffer.extend_from_slice(&output);
+            if buffer.ends_with(PROMPT) {
+                return;
+            }
+        }
+    }
 }

@@ -201,8 +201,7 @@ echo "── Booting guest to pre-install ca-certificates + python3..."
     --bootargs "$BOOTARGS" \
     --net \
     --setup "date -s '$(date -u '+%Y-%m-%d %H:%M:%S')'; sed -i 's|https://|http://|g' /etc/apk/repositories; apk update --allow-untrusted; apk add --allow-untrusted ca-certificates python3 py3-pip; sed -i 's|http://|https://|g' /etc/apk/repositories; sync" \
-    --setup "stty -echo" \
-    --setup "export PS1='\$(__ec \$?)# '; __ec() { printf \"\\x\$(printf %02x \$1)\" >/dev/ttyS2; }; trap '__ec \$?' EXIT" \
+    --setup "HISTFILE=/dev/null HISTSIZE=0 exec sh" \
     --snapshot-save "$SNAP" \
     --snapshot-warm
 
