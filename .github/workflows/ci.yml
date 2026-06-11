@@ -98,5 +98,7 @@ jobs:
 
       - name: Run integration tests
         working-directory: sdks/python
+        env:
+          VPOD_REGISTRY: https://registry.vpod.sh/tests/v1/snapshots.json
         run: pytest tests/ -v -m integration
 

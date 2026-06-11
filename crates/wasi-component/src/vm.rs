@@ -1,4 +1,4 @@
-use flate2::read::GzDecoder;
+use lz4_flex::frame::FrameDecoder;
 use machine::machine_bus::MachineBus;
 use machine::snapshot;
 use riscv_core::Hart;
@@ -33,16 +33,26 @@ fn ram_size_from_filename(snapshot_path: &Path) -> Option<u64> {
     None
 }
 
-fn is_gzipped(path: &Path) -> Result<bool, String> {
-    let mut file =
-        std::fs::File::open(path).map_err(|e| format!("failed to open {:?}: {e}", path))?;
-    let mut magic = [0u8; 2];
-    file.read_exact(&mut magic)
-        .map_err(|e| format!("failed to read file magic: {e}"))?;
-    Ok(magic == [0x1f, 0x8b])
+enum Compression {
+    Lz4,
+    Raw,
 }
 
-pub fn load(config: VmConfig) -> Result<(MachineBus, Hart), String> {
+fn detect_compression(path: &Path) -> Result<Compression, String> {
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("failed to open {:?}: {e}", path))?;
+    let mut magic = [0u8; 4];
+    let n = file
+        .read(&mut magic)
+        .map_err(|e| format!("failed to read file magic: {e}"))?;
+    if n >= 4 && magic == [0x04, 0x22, 0x4D, 0x18] {
+        Ok(Compression::Lz4)
+    } else {
+        Ok(Compression::Raw)
+    }
+}
+
+pub fn load(config: VmConfig) -> Result<(MachineBus, Hart, u8), String> {
     let ram_size = ram_size_from_filename(config.snapshot).unwrap_or(256 * 1024 * 1024);
 
     let mut bus = MachineBus::new(ram_size);
@@ -63,21 +73,21 @@ pub fn load(config: VmConfig) -> Result<(MachineBus, Hart), String> {
     let snapshot_file = std::fs::File::open(config.snapshot)
         .map_err(|e| format!("failed to open snapshot {:?}: {e}", config.snapshot))?;
 
-    if is_gzipped(config.snapshot)? {
-        snapshot::restore(
+    let flags = match detect_compression(config.snapshot)? {
+        Compression::Lz4 => snapshot::restore(
             &mut bus,
             &mut hart,
-            &mut BufReader::new(GzDecoder::new(snapshot_file)),
-        )
-        .map_err(|e| format!("failed to restore snapshot: {e}"))?;
-    } else {
-        snapshot::restore(&mut bus, &mut hart, &mut BufReader::new(snapshot_file))
-            .map_err(|e| format!("failed to restore snapshot: {e}"))?;
+            &mut BufReader::new(FrameDecoder::new(snapshot_file)),
+        ),
+        Compression::Raw => {
+            snapshot::restore(&mut bus, &mut hart, &mut BufReader::new(snapshot_file))
+        }
     }
+    .map_err(|e| format!("failed to restore snapshot: {e}"))?;
 
     bus.uart.capture_tx.set(config.capture_tx);
     bus.uart_stderr.capture_tx.set(true);
     bus.uart_ctrl.capture_tx.set(true);
 
-    Ok((bus, hart))
+    Ok((bus, hart, flags))
 }

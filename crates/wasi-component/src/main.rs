@@ -34,7 +34,7 @@ fn main() {
         usage();
     });
 
-    let (mut bus, mut hart) = vm::load(vm::VmConfig {
+    let (mut bus, mut hart, flags) = vm::load(vm::VmConfig {
         snapshot: &snap,
         disk: disk_path.as_deref(),
         capture_tx: true,
@@ -43,6 +43,12 @@ fn main() {
         eprintln!("{e}");
         std::process::exit(1);
     });
+
+    if flags & machine::snapshot::FLAG_SHELL_READY != 0 {
+        for &b in b"stty echo; export PS1='\\w # '; trap - EXIT\n" {
+            bus.uart.push_rx(b);
+        }
+    }
 
     run_interactive::run(&mut bus, &mut hart);
 }

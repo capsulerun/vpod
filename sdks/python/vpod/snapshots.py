@@ -2,13 +2,14 @@ import hashlib
 import json
 import shutil
 import ssl
+import os
 import urllib.request
 from pathlib import Path
 
 import certifi
 import platformdirs
 
-REGISTRY_URL = "https://registry.vpod.sh/v1/snapshots.json"
+REGISTRY_URL = os.environ.get("VPOD_REGISTRY", "https://registry.vpod.sh/v1/snapshots.json")
 
 
 def _create_ssl_context():
@@ -25,16 +26,24 @@ def pull(name: str = "alpine:latest") -> Path:
     """
     Downloads from the registry if not already cached.
     """
+    override_path = os.environ.get("VPOD_SNAPSHOT")
+    if override_path:
+        custom_path = Path(override_path)
+        if custom_path.exists():
+            return custom_path
+
     registry = fetch_registry()
     snapshot = resolve_snapshot(registry, name)
 
     dest = cache_dir() / f"{snapshot['id']}.snap"
+    meta = dest.with_suffix(".meta")
 
-    if dest.exists() and _file_sha256(dest) == snapshot["sha256"]:
+    if dest.exists() and meta.exists() and meta.read_text().strip() == snapshot["sha256"]:
         return dest
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    _download_to(snapshot["url"], dest, snapshot["sha256"])
+    _download_and_decompress(snapshot["url"], dest, snapshot["sha256"])
+    meta.write_text(snapshot["sha256"])
 
     return dest
 
@@ -78,8 +87,9 @@ def resolve_snapshot(registry: list[dict], name: str) -> dict:
     raise ValueError(f"Snapshot '{name}' not found. Available: {available}")
 
 
-def _download_to(url: str, dest: Path, expected_sha256: str) -> None:
-    tmp = dest.with_suffix(".tmp")
+def _download_and_decompress(url: str, dest: Path, expected_sha256: str) -> None:
+    tmp_compressed = dest.with_suffix(".tmp.dl")
+    tmp_raw = dest.with_suffix(".tmp")
     try:
         request = urllib.request.Request(
             url,
@@ -87,20 +97,34 @@ def _download_to(url: str, dest: Path, expected_sha256: str) -> None:
         )
         context = _create_ssl_context()
         with urllib.request.urlopen(request, timeout=60, context=context) as response:
-            with open(tmp, "wb") as f:
+            with open(tmp_compressed, "wb") as f:
                 shutil.copyfileobj(response, f)
 
-        actual_sha256 = _file_sha256(tmp)
+        actual_sha256 = _file_sha256(tmp_compressed)
         if actual_sha256 != expected_sha256:
-            tmp.unlink(missing_ok=True)
             raise ValueError(
                 f"Checksum mismatch: expected {expected_sha256}, got {actual_sha256}"
             )
 
-        shutil.move(tmp, dest)
+        _decompress_file(tmp_compressed, tmp_raw)
+        tmp_compressed.unlink()
+        shutil.move(tmp_raw, dest)
     except Exception:
-        tmp.unlink(missing_ok=True)
+        tmp_compressed.unlink(missing_ok=True)
+        tmp_raw.unlink(missing_ok=True)
         raise
+
+
+def _decompress_file(src: Path, dst: Path) -> None:
+    with open(src, "rb") as f:
+        magic = f.read(4)
+
+    if magic == b"\x04\x22\x4d\x18":
+        import lz4.frame
+        with lz4.frame.open(str(src), "rb") as f_in, open(dst, "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+    else:
+        shutil.copy2(src, dst)
 
 
 def _file_sha256(path: Path) -> str:

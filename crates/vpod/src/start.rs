@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use crate::registry::Snapshot;
 use anyhow::{Context, Result};
-use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
@@ -160,11 +159,23 @@ fn ensure_uncompressed(snap_path: &Path) -> Result<PathBuf> {
     let file = fs::File::open(snap_path)
         .with_context(|| format!("failed to open snapshot {:?}", snap_path))?;
 
-    let mut reader = BufReader::new(GzDecoder::new(file));
-    let mut data = Vec::new();
+    let mut magic = [0u8; 4];
+    let mut reader = BufReader::new(file);
     reader
-        .read_to_end(&mut data)
-        .context("failed to decompress snapshot")?;
+        .read_exact(&mut magic)
+        .context("failed to read snapshot magic")?;
+    drop(reader);
+
+    let file = fs::File::open(snap_path)?;
+    let mut data = Vec::new();
+
+    if magic == [0x04, 0x22, 0x4D, 0x18] {
+        BufReader::new(lz4_flex::frame::FrameDecoder::new(file))
+            .read_to_end(&mut data)
+            .context("failed to decompress lz4 snapshot")?;
+    } else {
+        return Ok(snap_path.to_path_buf());
+    }
 
     let tmp = raw_path.with_extension("raw.tmp");
     let mut out = fs::File::create(&tmp).context("failed to create raw cache")?;
@@ -189,11 +200,11 @@ pub fn run(cfg: RunConfig) -> Result<()> {
     // For clear loading message
     eprint!("\r\x1b[2K");
     let _raw = RawTerminal::enter();
+
     #[cfg(unix)]
     unsafe {
         libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH);
     }
-    eprint!("\r~ # ");
 
     let snap_path = Path::new(&cfg.snapshot.url);
     let snap_dir = snap_path.parent().unwrap_or(Path::new(".")).to_path_buf();

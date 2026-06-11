@@ -17,5 +17,5 @@ machine = { path = "../machine" }
 riscv-core = { path = "../riscv-core" }
 log = "0.4"
 wasi = "0.14.7"
-flate2 = "1"
+lz4_flex = "0.13.1"
 wit-bindgen = "0.57"
