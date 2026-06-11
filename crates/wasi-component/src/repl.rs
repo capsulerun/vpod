@@ -75,10 +75,6 @@ pub fn capture_output_impl(
             break;
         }
 
-        if stop_on_ctrl && !bus.uart_ctrl.tx_is_empty() {
-            break;
-        }
-
         if hart.is_waiting {
             hart.is_waiting = false;
 
@@ -102,6 +98,10 @@ pub fn capture_output_impl(
         match hart.run(bus, STEP) {
             StepResult::Ok => {}
             StepResult::Trap(_) | StepResult::Halt => break,
+        }
+
+        if stop_on_ctrl && !bus.uart_ctrl.tx_is_empty() {
+            break;
         }
 
         let tx = bus.uart.drain_tx();

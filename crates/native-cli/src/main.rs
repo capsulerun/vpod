@@ -131,7 +131,7 @@ fn main() {
         bus.attach_net();
     }
 
-    if let Some(ref snap) = snap_load {
+    let restored_flags = if let Some(ref snap) = snap_load {
         let mut snap_file = std::fs::File::open(snap).unwrap_or_else(|e| {
             eprintln!("failed to open snapshot {:?}: {e}", snap);
             std::process::exit(1);
@@ -148,7 +148,7 @@ fn main() {
             std::process::exit(1);
         });
 
-        let _flags = if magic == [0x04, 0x22, 0x4D, 0x18] {
+        let flags = if magic == [0x04, 0x22, 0x4D, 0x18] {
             snapshot::restore(
                 &mut bus,
                 &mut hart,
@@ -166,6 +166,7 @@ fn main() {
             "[vpod] restored from snapshot {:?} | disk {:?}",
             snap, disk_path
         );
+        flags
     } else {
         let kpath = kernel_path.as_ref().unwrap_or_else(|| {
             eprintln!("kernel path required (or use --snapshot-load)");
@@ -188,7 +189,8 @@ fn main() {
             "[vpod] booting {:?} | bios {:?} | initrd {:?} | RAM {}MB | disk {:?}",
             kpath, bios_path, initrd_path, ram_mb, disk_path
         );
-    }
+        0
+    };
 
     let snap_flags = if snap_warm {
         snapshot::FLAG_SHELL_READY
@@ -211,6 +213,7 @@ fn main() {
             snap_save.as_ref(),
             trace_insns,
             snap_flags,
+            restored_flags,
         );
     }
 }

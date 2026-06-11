@@ -14,6 +14,7 @@ pub fn run(
     snap_save: Option<&PathBuf>,
     trace_insns: u64,
     snap_flags: u8,
+    restored_flags: u8,
 ) {
     if snap_save.is_some() {
         eprintln!("[vpod] Press Ctrl-S to save snapshot. Press Ctrl-C to exit.");
@@ -24,6 +25,12 @@ pub fn run(
     if trace_insns > 0 {
         run_trace(bus, hart, trace_insns);
         return;
+    }
+
+    if restored_flags & machine::snapshot::FLAG_SHELL_READY != 0 {
+        for &b in b"stty echo; export PS1='\\w # '; trap - EXIT\n" {
+            bus.uart.push_rx(b);
+        }
     }
 
     let _raw = terminal::RawTerminal::enter();

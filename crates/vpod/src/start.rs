@@ -200,11 +200,11 @@ pub fn run(cfg: RunConfig) -> Result<()> {
     // For clear loading message
     eprint!("\r\x1b[2K");
     let _raw = RawTerminal::enter();
+
     #[cfg(unix)]
     unsafe {
         libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH);
     }
-    eprint!("\r~ # ");
 
     let snap_path = Path::new(&cfg.snapshot.url);
     let snap_dir = snap_path.parent().unwrap_or(Path::new(".")).to_path_buf();
