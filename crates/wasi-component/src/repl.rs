@@ -130,6 +130,11 @@ pub fn capture_output_impl(
                 let extra = bus.uart.drain_tx();
                 if !extra.is_empty() {
                     output.extend_from_slice(&extra);
+
+                    if output.ends_with(prompt) {
+                        output.truncate(output.len() - prompt.len());
+                        break;
+                    }
                 }
             }
             break;
