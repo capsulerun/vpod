@@ -118,14 +118,15 @@ pub fn capture_output_impl(
         }
 
         if stop_on_ctrl && !bus.uart_ctrl.tx_is_empty() {
-            // Run extra steps to flush any pending tty output
             for _ in 0..64 {
                 bus.clint.advance_by_instructions(STEP);
                 bus.poll(hart);
+
                 match hart.run(bus, STEP) {
                     StepResult::Ok => {}
                     StepResult::Trap(_) | StepResult::Halt => break,
                 }
+
                 let extra = bus.uart.drain_tx();
                 if !extra.is_empty() {
                     output.extend_from_slice(&extra);
@@ -152,17 +153,25 @@ pub fn capture_output_impl(
     }
 }
 
+// TODO: evaluate if it's possible to refactor to a solution that filter directly the kernel log on the uart
 fn strip_kernel_log(s: &str) -> String {
     s.lines()
         .filter(|line| {
             let t = line.trim_start();
-            !(t.starts_with('[') && t.contains("] ") && {
-                let after = &t[1..];
-                after
-                    .find(']')
-                    .map(|i| after[..i].trim().bytes().all(|b| b.is_ascii_digit() || b == b'.'))
-                    .unwrap_or(false)
-            }) && !t.starts_with("---[")
+
+            !(t.starts_with("---[")
+                || t.starts_with('[') && t.contains("] ") && {
+                    let after = &t[1..];
+                    after
+                        .find(']')
+                        .map(|i| {
+                            after[..i]
+                                .trim()
+                                .bytes()
+                                .all(|b| b.is_ascii_digit() || b == b'.')
+                        })
+                        .unwrap_or(false)
+                })
         })
         .collect::<Vec<_>>()
         .join("\n")
