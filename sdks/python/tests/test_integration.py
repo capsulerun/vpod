@@ -239,6 +239,7 @@ def test_session_stderr_not_in_stdout():
 def test_stateless_stderr_with_exit_code():
     sbx = Sandbox.create()
     result = sbx.commands.run("echo fail >&2; exit 2")
+
     assert result.exit_code == 2
     assert "fail" in result.stderr
     assert result.stdout == ""

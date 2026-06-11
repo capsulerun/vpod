@@ -56,11 +56,12 @@ pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     }
 }
 
-pub fn capture_output_until_prompt(
+pub fn capture_output_impl(
     bus: &mut MachineBus,
     hart: &mut Hart,
     prompt: &[u8],
     timeout_secs: u64,
+    stop_on_ctrl: bool,
 ) -> String {
     let deadline = monotonic_clock::now() + timeout_secs * 1_000_000_000;
 
@@ -71,6 +72,10 @@ pub fn capture_output_until_prompt(
     loop {
         let now = monotonic_clock::now();
         if now >= deadline {
+            break;
+        }
+
+        if stop_on_ctrl && !bus.uart_ctrl.tx_is_empty() {
             break;
         }
 

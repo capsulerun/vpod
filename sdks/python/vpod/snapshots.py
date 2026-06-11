@@ -2,6 +2,7 @@ import hashlib
 import json
 import shutil
 import ssl
+import os
 import urllib.request
 from pathlib import Path
 
@@ -25,6 +26,12 @@ def pull(name: str = "alpine:latest") -> Path:
     """
     Downloads from the registry if not already cached.
     """
+    override_path = os.environ.get("VPOD_SNAPSHOT")
+    if override_path:
+        custom_path = Path(override_path)
+        if custom_path.exists():
+            return custom_path
+
     registry = fetch_registry()
     snapshot = resolve_snapshot(registry, name)
 
