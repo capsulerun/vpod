@@ -11,7 +11,12 @@ const VERSION: u8 = 2;
 
 pub const FLAG_SHELL_READY: u8 = 1 << 0;
 
-pub fn save(bus: &MachineBus, hart: &Hart, writer: &mut impl Write, flags: impl Into<Option<u8>>) -> io::Result<()> {
+pub fn save(
+    bus: &MachineBus,
+    hart: &Hart,
+    writer: &mut impl Write,
+    flags: impl Into<Option<u8>>,
+) -> io::Result<()> {
     let flags = flags.into().unwrap_or(0);
     writer.write_all(MAGIC)?;
     writer.write_all(&[VERSION])?;

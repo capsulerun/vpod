@@ -26,6 +26,7 @@ dependencies = [
     "wasmtime>=25.0.0",
     "platformdirs>=4.0",
     "certifi>=2023.0.0",
+    "lz4>=4.4.5",
 ]
 
 [project.urls]

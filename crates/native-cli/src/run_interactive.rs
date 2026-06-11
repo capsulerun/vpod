@@ -8,7 +8,13 @@ use riscv_core::{Hart, StepResult};
 
 use crate::terminal;
 
-pub fn run(bus: &mut MachineBus, hart: &mut Hart, snap_save: Option<&PathBuf>, trace_insns: u64) {
+pub fn run(
+    bus: &mut MachineBus,
+    hart: &mut Hart,
+    snap_save: Option<&PathBuf>,
+    trace_insns: u64,
+    snap_flags: u8,
+) {
     if snap_save.is_some() {
         eprintln!("[vpod] Press Ctrl-S to save snapshot. Press Ctrl-C to exit.");
     } else {
@@ -37,7 +43,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, snap_save: Option<&PathBuf>, t
         };
         bus.clint.advance_by_instructions(interval);
         bus.poll(hart);
-        terminal::poll_stdin(bus, snap_save, hart);
+        terminal::poll_stdin(bus, snap_save, hart, snap_flags);
 
         bus.flush_console_to_stdout();
         match hart.run(bus, interval) {

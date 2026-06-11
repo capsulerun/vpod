@@ -49,7 +49,7 @@ pub fn set_nonblocking() {
     }
 }
 
-pub fn poll_stdin(bus: &mut MachineBus, snap_path: Option<&PathBuf>, hart: &Hart) {
+pub fn poll_stdin(bus: &mut MachineBus, snap_path: Option<&PathBuf>, hart: &Hart, snap_flags: u8) {
     let mut buf = [0u8; 64];
 
     match std::io::stdin().read(&mut buf) {
@@ -62,7 +62,7 @@ pub fn poll_stdin(bus: &mut MachineBus, snap_path: Option<&PathBuf>, hart: &Hart
                     }
                     0x13 => {
                         if let Some(path) = snap_path {
-                            super::save_snapshot(bus, hart, path);
+                            super::save_snapshot(bus, hart, path, snap_flags);
                         }
                     }
                     _ => bus.uart.push_rx(b),

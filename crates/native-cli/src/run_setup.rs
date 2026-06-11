@@ -3,7 +3,13 @@ use std::path::PathBuf;
 use machine::machine_bus::MachineBus;
 use riscv_core::{Hart, StepResult};
 
-pub fn run(bus: &mut MachineBus, hart: &mut Hart, cmds: &[String], snap_save: Option<&PathBuf>) {
+pub fn run(
+    bus: &mut MachineBus,
+    hart: &mut Hart,
+    cmds: &[String],
+    snap_save: Option<&PathBuf>,
+    snap_flags: u8,
+) {
     eprintln!("[vpod] setup booting guest, waiting for shell prompt...");
     bus.uart.capture_tx.set(true);
 
@@ -88,7 +94,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart, cmds: &[String], snap_save: Op
     }
 
     if let Some(path) = snap_save {
-        super::save_snapshot(bus, hart, path);
+        super::save_snapshot(bus, hart, path, snap_flags);
     }
     eprintln!("[vpod-setup] done.");
 }

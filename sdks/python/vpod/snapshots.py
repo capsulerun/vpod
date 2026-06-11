@@ -1,4 +1,3 @@
-import gzip
 import hashlib
 import json
 import shutil
@@ -82,7 +81,7 @@ def resolve_snapshot(registry: list[dict], name: str) -> dict:
 
 
 def _download_and_decompress(url: str, dest: Path, expected_sha256: str) -> None:
-    tmp_gz = dest.with_suffix(".tmp.gz")
+    tmp_compressed = dest.with_suffix(".tmp.dl")
     tmp_raw = dest.with_suffix(".tmp")
     try:
         request = urllib.request.Request(
@@ -91,24 +90,34 @@ def _download_and_decompress(url: str, dest: Path, expected_sha256: str) -> None
         )
         context = _create_ssl_context()
         with urllib.request.urlopen(request, timeout=60, context=context) as response:
-            with open(tmp_gz, "wb") as f:
+            with open(tmp_compressed, "wb") as f:
                 shutil.copyfileobj(response, f)
 
-        actual_sha256 = _file_sha256(tmp_gz)
+        actual_sha256 = _file_sha256(tmp_compressed)
         if actual_sha256 != expected_sha256:
             raise ValueError(
                 f"Checksum mismatch: expected {expected_sha256}, got {actual_sha256}"
             )
 
-        with gzip.open(tmp_gz, "rb") as f_in, open(tmp_raw, "wb") as f_out:
-            shutil.copyfileobj(f_in, f_out)
-
-        tmp_gz.unlink()
+        _decompress_file(tmp_compressed, tmp_raw)
+        tmp_compressed.unlink()
         shutil.move(tmp_raw, dest)
     except Exception:
-        tmp_gz.unlink(missing_ok=True)
+        tmp_compressed.unlink(missing_ok=True)
         tmp_raw.unlink(missing_ok=True)
         raise
+
+
+def _decompress_file(src: Path, dst: Path) -> None:
+    with open(src, "rb") as f:
+        magic = f.read(4)
+
+    if magic == b"\x04\x22\x4d\x18":
+        import lz4.frame
+        with lz4.frame.open(str(src), "rb") as f_in, open(dst, "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+    else:
+        shutil.copy2(src, dst)
 
 
 def _file_sha256(path: Path) -> str:

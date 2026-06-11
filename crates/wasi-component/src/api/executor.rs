@@ -9,19 +9,22 @@ pub struct Executor;
 
 impl Guest for Executor {
     fn execute(snapshot_path: String, code: String) -> Result<ExecutionResult, String> {
-        let (mut bus, mut hart) = vm::load(vm::VmConfig {
+        let (mut bus, mut hart, flags) = vm::load(vm::VmConfig {
             snapshot: snapshot_path.as_ref(),
             disk: None,
             capture_tx: true,
         })?;
 
-        for byte in b"/bin/sh\n" {
-            bus.uart.push_rx(*byte);
-        }
-        repl::wait_for_prompt(&mut bus, &mut hart, DEFAULT_PROMPT);
-        bus.uart.drain_tx();
+        let shell_ready = flags & machine::snapshot::FLAG_SHELL_READY != 0;
+        if !shell_ready {
+            for byte in b"/bin/sh\n" {
+                bus.uart.push_rx(*byte);
+            }
+            repl::wait_for_prompt(&mut bus, &mut hart, DEFAULT_PROMPT);
+            bus.uart.drain_tx();
 
-        repl::shell_init(&mut bus, &mut hart, DEFAULT_PROMPT);
+            repl::shell_init(&mut bus, &mut hart, DEFAULT_PROMPT);
+        }
 
         let cmd = format!("{{ {code}; }} 2>/dev/ttyS1\n");
         for byte in cmd.bytes() {

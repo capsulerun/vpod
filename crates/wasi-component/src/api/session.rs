@@ -33,7 +33,7 @@ impl SessionManager {
         command: String,
         prompt: String,
     ) -> Result<u64, String> {
-        let (mut bus, mut hart) = crate::vm::load(crate::vm::VmConfig {
+        let (mut bus, mut hart, flags) = crate::vm::load(crate::vm::VmConfig {
             snapshot: snapshot_path.as_ref(),
             disk: None,
             capture_tx: true,
@@ -41,15 +41,20 @@ impl SessionManager {
 
         let prompt_bytes = prompt.into_bytes();
         let is_shell = command == "/bin/sh" || command == "sh" || command == "/bin/ash";
+        let shell_ready = flags & machine::snapshot::FLAG_SHELL_READY != 0;
 
         if is_shell {
-            for byte in command.bytes() {
-                bus.uart.push_rx(byte);
+            if !shell_ready {
+                for byte in command.bytes() {
+                    bus.uart.push_rx(byte);
+                }
+
+                bus.uart.push_rx(b'\n');
+                repl::wait_for_prompt(&mut bus, &mut hart, &prompt_bytes);
+
+                bus.uart.drain_tx();
+                repl::shell_init(&mut bus, &mut hart, &prompt_bytes);
             }
-            bus.uart.push_rx(b'\n');
-            repl::wait_for_prompt(&mut bus, &mut hart, &prompt_bytes);
-            bus.uart.drain_tx();
-            repl::shell_init(&mut bus, &mut hart, &prompt_bytes);
         } else {
             let launch = format!("stty -echo; {command}\n");
             for byte in launch.bytes() {
