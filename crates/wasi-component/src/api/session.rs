@@ -102,7 +102,7 @@ impl SessionManager {
             &mut session.hart,
             &session.prompt,
             30,
-            false,
+            session.is_shell,
         );
 
         let stderr_bytes = session.bus.uart_stderr.drain_tx();

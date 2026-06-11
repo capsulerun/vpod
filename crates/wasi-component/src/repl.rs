@@ -97,11 +97,12 @@ pub fn capture_output_impl(
 
         match hart.run(bus, STEP) {
             StepResult::Ok => {}
-            StepResult::Trap(_) | StepResult::Halt => break,
-        }
-
-        if stop_on_ctrl && !bus.uart_ctrl.tx_is_empty() {
-            break;
+            StepResult::Trap(_) | StepResult::Halt => {
+                if stop_on_ctrl && !bus.uart_ctrl.tx_is_empty() {
+                    bus.uart.drain_tx();
+                }
+                break;
+            }
         }
 
         let tx = bus.uart.drain_tx();
@@ -115,6 +116,23 @@ pub fn capture_output_impl(
                 break;
             }
         }
+
+        if stop_on_ctrl && !bus.uart_ctrl.tx_is_empty() {
+            // Run extra steps to flush any pending tty output
+            for _ in 0..64 {
+                bus.clint.advance_by_instructions(STEP);
+                bus.poll(hart);
+                match hart.run(bus, STEP) {
+                    StepResult::Ok => {}
+                    StepResult::Trap(_) | StepResult::Halt => break,
+                }
+                let extra = bus.uart.drain_tx();
+                if !extra.is_empty() {
+                    output.extend_from_slice(&extra);
+                }
+            }
+            break;
+        }
     }
 
     if !output.is_empty() && !output.ends_with(b"\n") {
@@ -126,7 +144,28 @@ pub fn capture_output_impl(
     }
 
     let raw = String::from_utf8_lossy(&output);
-    strip_ansi(&raw).trim_end().to_string()
+    let cleaned = strip_ansi(&raw);
+    if !bus.uart_ctrl.tx_is_empty() {
+        strip_kernel_log(&cleaned).trim_end().to_string()
+    } else {
+        cleaned.trim_end().to_string()
+    }
+}
+
+fn strip_kernel_log(s: &str) -> String {
+    s.lines()
+        .filter(|line| {
+            let t = line.trim_start();
+            !(t.starts_with('[') && t.contains("] ") && {
+                let after = &t[1..];
+                after
+                    .find(']')
+                    .map(|i| after[..i].trim().bytes().all(|b| b.is_ascii_digit() || b == b'.'))
+                    .unwrap_or(false)
+            }) && !t.starts_with("---[")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn strip_ansi(s: &str) -> String {
