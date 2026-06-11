@@ -7,7 +7,7 @@ use crate::LOW_RAM_SIZE;
 use crate::machine_bus::MachineBus;
 
 const MAGIC: &[u8; 4] = b"VPOD";
-const VERSION: u8 = 2;
+const VERSION: u8 = 1;
 
 pub const FLAG_SHELL_READY: u8 = 1 << 0;
 
@@ -57,21 +57,15 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
     let mut version = [0u8; 1];
     reader.read_exact(&mut version)?;
 
-    if version[0] > VERSION {
+    if version[0] != VERSION {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("unsupported snapshot version {}", version[0]),
+            format!("unsupported snapshot version {} (expected {})", version[0], VERSION),
         ));
     }
 
-    let flags = if version[0] >= 2 {
-        let mut flag = [0u8; 1];
-
-        reader.read_exact(&mut flag)?;
-        flag[0]
-    } else {
-        0
-    };
+    let mut flags = [0u8; 1];
+    reader.read_exact(&mut flags)?;
 
     let mut buffer_u64 = [0u8; 8];
     reader.read_exact(&mut buffer_u64)?;
@@ -112,7 +106,7 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
         }
     }
 
-    Ok(flags)
+    Ok(flags[0])
 }
 
 fn save_hart(hart: &Hart, writer: &mut impl Write) -> io::Result<()> {
