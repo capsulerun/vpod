@@ -61,12 +61,10 @@ echo "   OK"
 
 mkdir -p "$ROOT/dist" "$ALPINE_DIR"
 
-if [ ! -f "$VPOD" ]; then
-    echo "── Building vpod..."
-    (cd "$ROOT" && cargo build --release --bin vpod-native)
-else
-    echo "── vpod already built, skipping."
-fi
+
+echo "── Building vpod..."
+(cd "$ROOT" && cargo build --release --bin vpod-native)
+
 
 # Download pre-built OpenSBI fw_jump.bin
 if [ ! -f "$OPENSBI_FW" ]; then

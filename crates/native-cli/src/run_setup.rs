@@ -44,7 +44,7 @@ pub fn run(
 }
 
 fn shell_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
-    push_line(bus, b"stty -echo");
+    push_line(bus, b"stty -echo; rm -f ~/.ash_history; HISTFILE=/dev/null HISTSIZE=0 exec sh");
     wait_for_prompt(bus, hart, false);
     drain_all(bus);
 
