@@ -133,6 +133,7 @@ mount -t sysfs    sysfs    /sys
 mount -t devtmpfs devtmpfs /dev
 mount -t tmpfs    tmpfs    /tmp
 
+hostname vpod
 ip link set lo up 2>/dev/null || true
 
 modprobe virtio_mmio 2>/dev/null || true
