@@ -17,7 +17,7 @@
 
 ## What is a `vpod` ?
 
-A `vpod` is a lightweight, portable sandbox that gives an untrusted process an instant Linux environmenwt. It uses a RISC‑V architecture and runs entirely inside WebAssembly.
+A `vpod` is a lightweight, portable sandbox that gives an untrusted process an instant Linux environment. It uses a RISC‑V architecture and runs entirely inside WebAssembly.
 
 - **Fast startup** : Boot in under a second.
 - **Portable** : Runs anywhere without any setup required.
