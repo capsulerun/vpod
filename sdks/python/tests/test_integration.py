@@ -272,7 +272,7 @@ def test_shell_working_directory():
 
 def test_network_http_wget():
     with Sandbox.create() as sbx:
-        result = sbx.commands.run("wget -q -O- https://kfuckkfmkyxe0l-tests.vpod.sh")
+        result = sbx.commands.run("wget -q -O- https://kfuckkfmkyxe0l-tests.vpod.sh && echo")
         assert result.success
         assert "VPOD_TEST_OK" in result.stdout
 
@@ -286,7 +286,13 @@ def test_network_dns_resolves():
 def test_network_python_requests():
     with Sandbox.create() as sbx:
         sbx.code.run("import urllib.request")
-        sbx.code.run("body = urllib.request.urlopen('https://kfuckkfmkyxe0l-tests.vpod.sh').read().decode()")
+        sbx.code.run(
+            "req = urllib.request.Request(\n"
+            "    'https://kfuckkfmkyxe0l-tests.vpod.sh',\n"
+            "    headers={'User-Agent': 'vpod-test/1.0'},\n"
+            ")\n"
+            "body = urllib.request.urlopen(req).read().decode()"
+        )
         result = sbx.code.run("print('ok' if 'VPOD_TEST_OK' in body else 'fail')")
         assert result.success
         assert result.text.strip() == "ok"
@@ -294,8 +300,8 @@ def test_network_python_requests():
 
 def test_network_isolation_between_sandboxes():
     with Sandbox.create() as sbx1, Sandbox.create() as sbx2:
-        r1 = sbx1.commands.run("wget -q -O- https://kfuckkfmkyxe0l-tests.vpod.sh")
-        r2 = sbx2.commands.run("wget -q -O- https://kfuckkfmkyxe0l-tests.vpod.sh")
+        r1 = sbx1.commands.run("wget -q -O- https://kfuckkfmkyxe0l-tests.vpod.sh && echo")
+        r2 = sbx2.commands.run("wget -q -O- https://kfuckkfmkyxe0l-tests.vpod.sh && echo")
 
     assert r1.success and "VPOD_TEST_OK" in r1.stdout
     assert r2.success and "VPOD_TEST_OK" in r2.stdout
