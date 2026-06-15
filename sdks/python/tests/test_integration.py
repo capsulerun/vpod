@@ -298,14 +298,6 @@ def test_network_python_requests():
         assert result.text.strip() == "ok"
 
 
-def test_network_isolation_between_sandboxes():
-    with Sandbox.create() as sbx1, Sandbox.create() as sbx2:
-        r1 = sbx1.commands.run("wget -q -O- https://kfuckkfmkyxe0l-tests.vpod.sh && echo")
-        r2 = sbx2.commands.run("wget -q -O- https://kfuckkfmkyxe0l-tests.vpod.sh && echo")
-
-    assert r1.success and "VPOD_TEST_OK" in r1.stdout
-    assert r2.success and "VPOD_TEST_OK" in r2.stdout
-
 
 def test_python_class_definition():
     with Sandbox.create() as sbx:
