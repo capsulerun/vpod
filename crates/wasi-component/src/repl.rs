@@ -98,9 +98,8 @@ pub fn capture_output_impl(
         match hart.run(bus, STEP) {
             StepResult::Ok => {}
             StepResult::Trap(_) | StepResult::Halt => {
-                let remaining = bus.uart.drain_tx();
-                if !remaining.is_empty() {
-                    output.extend_from_slice(&remaining);
+                if stop_on_ctrl && !bus.uart_ctrl.tx_is_empty() {
+                    bus.uart.drain_tx();
                 }
                 break;
             }
@@ -142,10 +141,12 @@ pub fn capture_output_impl(
         }
     }
 
-    // Strip a trailing partial prompt that didn't get detected (e.g. stop_on_ctrl path).
-    // Only remove the prompt bytes themselves, never truncate actual command output.
-    if output.ends_with(prompt) {
-        output.truncate(output.len() - prompt.len());
+    if !output.is_empty() && !output.ends_with(b"\n") {
+        if let Some(pos) = output.iter().rposition(|&b| b == b'\n') {
+            output.truncate(pos + 1);
+        } else {
+            output.clear();
+        }
     }
 
     let raw = String::from_utf8_lossy(&output);
