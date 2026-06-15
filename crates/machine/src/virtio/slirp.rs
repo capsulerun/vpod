@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream, UdpSocket};
+// use std::time::Instant;
 
 #[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
@@ -289,7 +290,17 @@ impl SlirpBackend {
 
     fn poll_dns(&mut self) {
         let mut ready = Vec::new();
+
+        // #[cfg(not(target_family = "wasm"))]
+        // let mut expired = Vec::new();
+
         for (i, req) in self.dns_pending.iter().enumerate() {
+            // #[cfg(not(target_family = "wasm"))]
+            // if req.created.elapsed() > Duration::from_secs(5) {
+            //     expired.push(i);
+            //     continue;
+            // }
+
             let mut buf = [0u8; 2048];
 
             if let Ok((n, _)) = req.sock.recv_from(&mut buf) {
@@ -304,6 +315,11 @@ impl SlirpBackend {
                 ready.push(i);
             }
         }
+
+        // #[cfg(not(target_family = "wasm"))]
+        // for i in expired.into_iter().rev() {
+        //     self.dns_pending.swap_remove(i);
+        // }
 
         for i in ready.into_iter().rev() {
             self.dns_pending.swap_remove(i);
@@ -408,13 +424,34 @@ impl SlirpBackend {
 
             if let Ok(sock) = UdpSocket::bind("0.0.0.0:0") {
                 sock.set_nonblocking(true).ok();
-                let dst = SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 53);
-                if sock.send_to(data, dst).is_ok() {
+
+                let dns_servers = [
+                    (1, 1, 1, 1),        // Cloudflare DNS
+                    (8, 8, 8, 8),        // Google DNS
+                    (208, 67, 222, 222), // OpenDNS
+                ];
+
+                let mut sent = false;
+                for server in dns_servers.iter() {
+                    let socket_addr = SocketAddrV4::new(
+                        Ipv4Addr::new(server.0, server.1, server.2, server.3),
+                        53,
+                    );
+
+                    if sock.send_to(data, socket_addr).is_ok() {
+                        sent = true;
+                        break;
+                    }
+                }
+
+                if sent {
                     self.dns_pending.push(DnsPending {
                         sock,
                         guest_mac,
                         src_ip,
                         src_port,
+                        // #[cfg(not(target_family = "wasm"))]
+                        // created: std::time::Instant::now(),
                     });
                 }
             }
@@ -431,6 +468,7 @@ impl SlirpBackend {
         let conn = self.udp_conns.entry(key.clone()).or_insert_with(|| {
             let sock = UdpSocket::bind("0.0.0.0:0").expect("udp bind");
             sock.set_nonblocking(true).ok();
+
             UdpConn {
                 sock,
                 guest_mac: src_mac,
