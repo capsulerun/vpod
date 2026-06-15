@@ -285,15 +285,15 @@ def test_network_dns_resolves():
 
 def test_network_python_requests():
     with Sandbox.create() as sbx:
-        sbx.code.run("import urllib.request")
-        sbx.code.run(
+        result = sbx.code.run(
+            "import urllib.request\n"
             "req = urllib.request.Request(\n"
             "    'https://kfuckkfmkyxe0l-tests.vpod.sh',\n"
             "    headers={'User-Agent': 'vpod-test/1.0'},\n"
             ")\n"
-            "body = urllib.request.urlopen(req).read().decode()"
+            "body = urllib.request.urlopen(req).read().decode()\n"
+            "print('ok' if 'VPOD_TEST_OK' in body else 'fail')"
         )
-        result = sbx.code.run("print('ok' if 'VPOD_TEST_OK' in body else 'fail')")
         assert result.success
         assert result.text.strip() == "ok"
 
