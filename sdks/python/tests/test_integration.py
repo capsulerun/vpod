@@ -291,11 +291,11 @@ def test_network_python_requests():
             "    'https://kfuckkfmkyxe0l-tests.vpod.sh',\n"
             "    headers={'User-Agent': 'vpod-test/1.0'},\n"
             ")\n"
-            "body = urllib.request.urlopen(req).read().decode()\n"
-            "print('ok' if 'VPOD_TEST_OK' in body else 'fail')"
+            "body = urllib.request.urlopen(req, timeout=10).read().decode()\n"
+            "print('ok' if 'VPOD_TEST_OK' in body else body)"
         )
-        assert result.success
-        assert result.text.strip() == "ok"
+        assert result.success, result.text
+        assert result.text.strip() == "ok", result.text
 
 
 
