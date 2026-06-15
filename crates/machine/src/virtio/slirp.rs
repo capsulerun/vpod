@@ -295,7 +295,6 @@ impl SlirpBackend {
         // let mut expired = Vec::new();
 
         for (i, req) in self.dns_pending.iter().enumerate() {
-
             // #[cfg(not(target_family = "wasm"))]
             // if req.created.elapsed() > Duration::from_secs(5) {
             //     expired.push(i);
@@ -325,7 +324,6 @@ impl SlirpBackend {
         for i in ready.into_iter().rev() {
             self.dns_pending.swap_remove(i);
         }
-
     }
 
     fn handle_arp(&mut self, frame: &[u8]) {
@@ -428,14 +426,17 @@ impl SlirpBackend {
                 sock.set_nonblocking(true).ok();
 
                 let dns_servers = [
-                    (1, 1, 1, 1), // Cloudflare DNS
-                    (8, 8, 8, 8), // Google DNS
+                    (1, 1, 1, 1),        // Cloudflare DNS
+                    (8, 8, 8, 8),        // Google DNS
                     (208, 67, 222, 222), // OpenDNS
                 ];
 
                 let mut sent = false;
                 for server in dns_servers.iter() {
-                    let socket_addr = SocketAddrV4::new(Ipv4Addr::new(server.0, server.1, server.2, server.3), 53);
+                    let socket_addr = SocketAddrV4::new(
+                        Ipv4Addr::new(server.0, server.1, server.2, server.3),
+                        53,
+                    );
 
                     if sock.send_to(data, socket_addr).is_ok() {
                         sent = true;
@@ -449,7 +450,6 @@ impl SlirpBackend {
                         guest_mac,
                         src_ip,
                         src_port,
-
                         // #[cfg(not(target_family = "wasm"))]
                         // created: std::time::Instant::now(),
                     });
