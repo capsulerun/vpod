@@ -270,38 +270,33 @@ def test_shell_working_directory():
 
 # --- network tests ---
 
-# Network test fails in github CI,
-# So I recommend running it manually while finding a solution to the problem.
-
-# def test_network_http_wget():
-#     with Sandbox.create() as sbx:
-#         result = sbx.commands.run("wget -q -O- http://example.com")
-#         assert result.success
-#         assert "Example Domain" in result.stdout
+def test_network_http_wget():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("wget -q -O- https://kfuckkfmkyxe0l-tests.vpod.sh && echo")
+        assert result.success
+        assert "VPOD_TEST_OK" in result.stdout
 
 
-# def test_network_dns_resolves():
-#     with Sandbox.create() as sbx:
-#         result = sbx.commands.run("wget -q --spider http://example.com")
-#         assert result.success
+def test_network_dns_resolves():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("wget -q --spider https://kfuckkfmkyxe0l-tests.vpod.sh")
+        assert result.success
 
 
-# def test_network_python_requests():
-#     with Sandbox.create() as sbx:
-#         sbx.code.run("import urllib.request")
-#         sbx.code.run("body = urllib.request.urlopen('http://example.com').read().decode()")
-#         result = sbx.code.run("print('ok' if 'Example Domain' in body else 'fail')")
-#         assert result.success
-#         assert result.text.strip() == "ok"
+def test_network_python_requests():
+    with Sandbox.create() as sbx:
+        result = sbx.code.run(
+            "import urllib.request\n"
+            "req = urllib.request.Request(\n"
+            "    'https://kfuckkfmkyxe0l-tests.vpod.sh',\n"
+            "    headers={'User-Agent': 'vpod-test/1.0'},\n"
+            ")\n"
+            "body = urllib.request.urlopen(req).read().decode()\n"
+            "print('ok' if 'VPOD_TEST_OK' in body else 'fail')"
+        )
+        assert result.success
+        assert result.text.strip() == "ok"
 
-
-# def test_network_isolation_between_sandboxes():
-#     with Sandbox.create() as sbx1, Sandbox.create() as sbx2:
-#         r1 = sbx1.commands.run("wget -q -O- http://example.com")
-#         r2 = sbx2.commands.run("wget -q -O- http://example.com")
-
-#     assert r1.success and "Example Domain" in r1.stdout
-#     assert r2.success and "Example Domain" in r2.stdout
 
 
 def test_python_class_definition():
