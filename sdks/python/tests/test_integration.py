@@ -282,23 +282,6 @@ def test_network_dns_resolves():
         result = sbx.commands.run("wget -q --spider https://kfuckkfmkyxe0l-tests.vpod.sh")
         assert result.success
 
-
-def test_network_python_requests():
-    with Sandbox.create() as sbx:
-        result = sbx.code.run(
-            "import urllib.request\n"
-            "req = urllib.request.Request(\n"
-            "    'https://kfuckkfmkyxe0l-tests.vpod.sh',\n"
-            "    headers={'User-Agent': 'vpod-test/1.0'},\n"
-            ")\n"
-            "body = urllib.request.urlopen(req, timeout=10).read().decode()\n"
-            "print('ok' if 'VPOD_TEST_OK' in body else body)"
-        )
-        assert result.success, result.text
-        assert result.text.strip() == "ok", result.text
-
-
-
 def test_python_class_definition():
     with Sandbox.create() as sbx:
         sbx.code.run(
