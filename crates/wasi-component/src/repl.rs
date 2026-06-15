@@ -8,7 +8,7 @@ const STEP: u64 = 8192;
 const NET_YIELD_NS: u64 = 5_000_000; // 5 ms
 
 // TO TEST : the time UART must be quiet after last output before declare the command
-const QUIET_PERIOD_NS: u64 = 300_000_000; // 300 ms
+const QUIET_PERIOD_NS: u64 = 150_000_000; // 150 ms
 
 pub fn shell_init(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     for byte in b"stty -echo\n" {
@@ -98,8 +98,9 @@ pub fn capture_output_impl(
         match hart.run(bus, STEP) {
             StepResult::Ok => {}
             StepResult::Trap(_) | StepResult::Halt => {
-                if stop_on_ctrl && !bus.uart_ctrl.tx_is_empty() {
-                    bus.uart.drain_tx();
+                let remaining = bus.uart.drain_tx();
+                if !remaining.is_empty() {
+                    output.extend_from_slice(&remaining);
                 }
                 break;
             }
@@ -141,12 +142,10 @@ pub fn capture_output_impl(
         }
     }
 
-    if !output.is_empty() && !output.ends_with(b"\n") {
-        if let Some(pos) = output.iter().rposition(|&b| b == b'\n') {
-            output.truncate(pos + 1);
-        } else {
-            output.clear();
-        }
+    // Strip a trailing partial prompt that didn't get detected (e.g. stop_on_ctrl path).
+    // Only remove the prompt bytes themselves, never truncate actual command output.
+    if output.ends_with(prompt) {
+        output.truncate(output.len() - prompt.len());
     }
 
     let raw = String::from_utf8_lossy(&output);

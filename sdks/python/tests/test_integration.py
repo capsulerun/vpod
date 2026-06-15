@@ -270,9 +270,6 @@ def test_shell_working_directory():
 
 # --- network tests ---
 
-# Network test fails in github CI,
-# So I recommend running it manually while finding a solution to the problem.
-
 def test_network_http_wget():
     with Sandbox.create() as sbx:
         result = sbx.commands.run("wget -q -O- http://example.com")
