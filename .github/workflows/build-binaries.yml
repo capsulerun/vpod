@@ -19,7 +19,7 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             archive: tar.gz
-            cross: true
+            zigbuild: true
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: tar.gz
@@ -38,20 +38,23 @@ jobs:
         with:
           targets: wasm32-wasip2,${{ matrix.target }}
 
-      - name: Install cross (Linux aarch64)
-        if: matrix.cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
+      - name: Install cargo-zigbuild (Linux aarch64)
+        if: matrix.zigbuild
+        run: |
+          pip install ziglang
+          cargo install cargo-zigbuild
+          rustup target add aarch64-unknown-linux-gnu
 
       - name: Build WASM component
         run: cargo build --release --target wasm32-wasip2 -p wasi-component
 
       - name: Build binary (native)
-        if: "!matrix.cross"
+        if: "!matrix.zigbuild"
         run: cargo build --release --target ${{ matrix.target }} -p vpod
 
-      - name: Build binary (cross)
-        if: matrix.cross
-        run: cross build --release --target ${{ matrix.target }} -p vpod
+      - name: Build binary (zigbuild)
+        if: matrix.zigbuild
+        run: cargo zigbuild --release --target ${{ matrix.target }} -p vpod
 
       - name: Package (Unix)
         if: matrix.archive == 'tar.gz'
@@ -72,6 +75,14 @@ jobs:
           "ASSET=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload to release
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.ASSET }}
+
+      - name: Upload artifact (manual run)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET }}
+          path: ${{ env.ASSET }}
