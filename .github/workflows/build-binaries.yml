@@ -41,6 +41,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Inject version
+        shell: bash
+        run: |
+          V="${{ github.event_name == 'release' && github.ref_name || inputs.tag }}"
+          V="${V#v}"
+          sed -i "s/^version = \".*\"/version = \"$V\"/" crates/vpod/Cargo.toml
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
