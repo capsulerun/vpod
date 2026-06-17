@@ -4,6 +4,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to upload binaries to (e.g. v0.1.3)'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -35,6 +40,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Inject version
+        shell: bash
+        run: |
+          V="${{ github.event_name == 'release' && github.ref_name || inputs.tag }}"
+          V="${V#v}"
+          perl -i -pe "s/^version = .*/version = \"$V\"/" crates/vpod/Cargo.toml
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -78,13 +90,12 @@ jobs:
           "ASSET=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload to release
-        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event_name == 'release' && github.ref_name || inputs.tag }}
           files: ${{ env.ASSET }}
 
-      - name: Upload artifact (manual run)
-        if: github.event_name == 'workflow_dispatch'
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ASSET }}
