@@ -47,9 +47,13 @@ Reduces code size by 30%, improving instruction fetch speed and memory efficienc
 
 ### CLI
 
-```bash
-cargo install vpod
 ```
+curl -fsSL https://install.vpod.sh | sh
+```
+> or
+> ```bash
+> cargo install vpod
+> ```
 
 ```bash
 # Pull a snapshot
@@ -88,7 +92,7 @@ with Sandbox.create() as sandbox:
 ```
 
 > [!IMPORTANT]
-> The first call to `Sandbox.create()` downloads the default snapshot (`alpine`) and caches it locally.
+> The first call to `Sandbox.create()` downloads the default snapshot (`alpine`) and caches it locally if not already present.
 
 ## Documentation
 
@@ -133,8 +137,8 @@ path = snapshots.pull("alpine:latest")
 ```
 
 ## Limitations
-- **Emulation overhead** — No hardware acceleration in the WASM component. CPU-intensive workloads may run slower than native.
-- **No GPU access** — CUDA, Metal, and hardware ML accelerators are not yet available. Support may be added in the future with wasi-nn.
+- **Emulation overhead**: No hardware acceleration in the WASM component. CPU-intensive workloads may run slower than native.
+- **No GPU access**: CUDA, Metal, and hardware ML accelerators are not yet available. Support may be added in the future with wasi-nn.
 
 ## Contributing
 
