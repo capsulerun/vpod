@@ -24,6 +24,8 @@ impl Guest for Executor {
             bus.uart.drain_tx();
 
             repl::shell_init(&mut bus, &mut hart, DEFAULT_PROMPT);
+        } else {
+            repl::sync_clock(&mut bus, &mut hart, DEFAULT_PROMPT);
         }
 
         let cmd = format!("{{ {code}; }} 2>/dev/ttyS1\n");
