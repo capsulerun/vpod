@@ -47,13 +47,17 @@ Reduces code size by 30%, improving instruction fetch speed and memory efficienc
 
 ### CLI
 
-```
+```bash
 curl -fsSL https://install.vpod.sh | sh
 ```
-> or
+> <details>
+> <summary>Or install via cargo</summary>
+>   
 > ```bash
 > cargo install vpod
 > ```
+> 
+> </details>
 
 ```bash
 # Pull a snapshot
