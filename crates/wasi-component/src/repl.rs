@@ -11,15 +11,18 @@ const NET_YIELD_NS: u64 = 5_000_000; // 5 ms
 // TO TEST : the time UART must be quiet after last output before declare the command
 const QUIET_PERIOD_NS: u64 = 150_000_000; // 150 ms
 
-pub fn shell_init(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
+pub fn sync_clock(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     let now = wall_clock::now();
     let date_cmd = format!("date -s @{}\n", now.seconds);
-
     for byte in date_cmd.bytes() {
         bus.uart.push_rx(byte);
     }
     wait_for_prompt(bus, hart, prompt);
     bus.uart.drain_tx();
+}
+
+pub fn shell_init(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
+    sync_clock(bus, hart, prompt);
 
     for byte in b"stty -echo\n" {
         bus.uart.push_rx(*byte);

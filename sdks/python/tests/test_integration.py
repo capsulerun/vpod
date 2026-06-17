@@ -267,10 +267,13 @@ def test_shell_working_directory():
         assert result.success
         assert "created_here.txt" in result.stdout
 
-def test_network_dns_resolves():
+
+def test_network_http_wget():
     with Sandbox.create() as sbx:
-        result = sbx.commands.run("wget -q --spider https://kfuckkfmkyxe0l-tests.vpod.sh")
+        result = sbx.commands.run("wget -q -O- https://kfuckkfmkyxe0l-tests.vpod.sh && echo")
         assert result.success
+        assert "VPOD_TEST_OK" in result.stdout
+
 
 def test_python_class_definition():
     with Sandbox.create() as sbx:

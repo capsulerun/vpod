@@ -54,6 +54,9 @@ impl SessionManager {
 
                 bus.uart.drain_tx();
                 repl::shell_init(&mut bus, &mut hart, &prompt_bytes);
+
+            } else {
+                repl::sync_clock(&mut bus, &mut hart, &prompt_bytes);
             }
         } else {
             let launch = format!("stty -echo; {command}\n");
