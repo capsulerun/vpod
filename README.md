@@ -50,6 +50,16 @@ Reduces code size by 30%, improving instruction fetch speed and memory efficienc
 ```bash
 curl -fsSL https://install.vpod.sh | sh
 ```
+
+> <details>
+> <summary>Or install via PowerShell (windows)</summary>
+> 
+> ```bash
+> irm https://install.vpod.sh | iex
+> ```
+> 
+> </details>
+
 > <details>
 > <summary>Or install via cargo</summary>
 >   
