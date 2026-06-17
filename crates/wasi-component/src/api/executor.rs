@@ -24,7 +24,6 @@ impl Guest for Executor {
             bus.uart.drain_tx();
 
             repl::shell_init(&mut bus, &mut hart, DEFAULT_PROMPT);
-
         } else {
             repl::sync_clock(&mut bus, &mut hart, DEFAULT_PROMPT);
         }
