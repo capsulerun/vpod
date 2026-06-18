@@ -62,8 +62,12 @@ impl SessionManager {
             for byte in launch.bytes() {
                 bus.uart.push_rx(byte);
             }
+
             repl::wait_for_prompt(&mut bus, &mut hart, &prompt_bytes);
+
             bus.uart.drain_tx();
+            bus.uart_stderr.drain_tx();
+            bus.uart_ctrl.drain_tx();
         }
 
         let id = self.next_id.get();

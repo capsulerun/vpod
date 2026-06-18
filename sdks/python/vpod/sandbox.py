@@ -65,6 +65,8 @@ class Sandbox:
 
     def __enter__(self) -> "Sandbox":
         self._in_context = True
+        self.code._start_repl()
+
         return self
 
     def __exit__(self, *_) -> None:
