@@ -1340,7 +1340,11 @@ fn orc_b(x: u64) -> u64 {
 
 #[inline(always)]
 fn resolve_rm(inst_rm: u32, fcsr: u64) -> u32 {
-    if inst_rm == 7 { ((fcsr >> 5) & 0x7) as u32 } else { inst_rm }
+    if inst_rm == 7 {
+        ((fcsr >> 5) & 0x7) as u32
+    } else {
+        inst_rm
+    }
 }
 
 #[inline(always)]
