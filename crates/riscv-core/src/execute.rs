@@ -679,9 +679,11 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                 ctx.csr.mstatus &= !crate::csr::MSTATUS_SPP;
                 if spie != 0 {
                     ctx.csr.mstatus |= crate::csr::MSTATUS_SIE;
+                } else {
+                    ctx.csr.mstatus &= !crate::csr::MSTATUS_SIE;
                 }
 
-                ctx.csr.mstatus &= !crate::csr::MSTATUS_SPIE;
+                ctx.csr.mstatus |= crate::csr::MSTATUS_SPIE;
                 *ctx.priv_mode = PrivMode::from_bits(spp);
                 ctx.regs.pc = ctx.csr.sepc;
                 ctx.mmu.flush();
@@ -697,9 +699,11 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
 
                 if mpie != 0 {
                     ctx.csr.mstatus |= crate::csr::MSTATUS_MIE;
+                } else {
+                    ctx.csr.mstatus &= !crate::csr::MSTATUS_MIE;
                 }
 
-                ctx.csr.mstatus &= !crate::csr::MSTATUS_MPIE;
+                ctx.csr.mstatus |= crate::csr::MSTATUS_MPIE;
                 *ctx.priv_mode = PrivMode::from_bits(mpp);
                 ctx.regs.pc = ctx.csr.mepc;
                 ctx.mmu.flush();
@@ -1334,6 +1338,46 @@ fn orc_b(x: u64) -> u64 {
     result
 }
 
+fn fclass_s(bits: u32) -> u64 {
+    let sign = (bits >> 31) & 1;
+    let exp = (bits >> 23) & 0xFF;
+    let frac = bits & 0x7F_FFFF;
+
+    if exp == 0 && frac == 0 {
+        if sign == 1 { 1 << 3 } else { 1 << 4 }
+    } else if exp == 0 {
+        if sign == 1 { 1 << 2 } else { 1 << 5 }
+    } else if exp == 0xFF && frac == 0 {
+        if sign == 1 { 1 << 0 } else { 1 << 7 }
+    } else if exp == 0xFF && (frac & (1 << 22)) != 0 {
+        1 << 9
+    } else if exp == 0xFF {
+        1 << 8
+    } else {
+        if sign == 1 { 1 << 1 } else { 1 << 6 }
+    }
+}
+
+fn fclass_d(bits: u64) -> u64 {
+    let sign = (bits >> 63) & 1;
+    let exp = (bits >> 52) & 0x7FF;
+    let frac = bits & 0x000F_FFFF_FFFF_FFFF;
+
+    if exp == 0 && frac == 0 {
+        if sign == 1 { 1 << 3 } else { 1 << 4 }
+    } else if exp == 0 {
+        if sign == 1 { 1 << 2 } else { 1 << 5 }
+    } else if exp == 0x7FF && frac == 0 {
+        if sign == 1 { 1 << 0 } else { 1 << 7 }
+    } else if exp == 0x7FF && (frac & (1 << 51)) != 0 {
+        1 << 9
+    } else if exp == 0x7FF {
+        1 << 8
+    } else {
+        if sign == 1 { 1 << 1 } else { 1 << 6 }
+    }
+}
+
 fn trap_from_mmu<B: SystemBus>(ctx: &mut ExecContext<B>, f: MmuFault) -> StepResult {
     take_exception(ctx, f.mcause(), f.tval());
     StepResult::Ok
@@ -1500,10 +1544,21 @@ fn op_fp<B: SystemBus>(
             ctx.regs.write_f32(rd, val);
             mark_fs_dirty(ctx);
         }
-        // FMV.X.W
+        // FMV.X.W / FCLASS.S
         0x70 => {
-            let val = ctx.regs.read_f32(rs1);
-            ctx.regs.write(rd, val as i32 as i64 as u64);
+            match inst.funct3() {
+                0x0 => {
+                    // FMV.X.W
+                    let val = ctx.regs.read_f32(rs1);
+                    ctx.regs.write(rd, val as i32 as i64 as u64);
+                }
+                0x1 => {
+                    // FCLASS.S
+                    let bits = ctx.regs.read_f32(rs1);
+                    ctx.regs.write(rd, fclass_s(bits));
+                }
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            }
         }
         // FMV.D.X
         0x79 => {
@@ -1511,10 +1566,21 @@ fn op_fp<B: SystemBus>(
             ctx.regs.write_f(rd, val);
             mark_fs_dirty(ctx);
         }
-        // FMV.X.D
+        // FMV.X.D / FCLASS.D
         0x71 => {
-            let val = ctx.regs.read_f(rs1);
-            ctx.regs.write(rd, val);
+            match inst.funct3() {
+                0x0 => {
+                    // FMV.X.D
+                    let val = ctx.regs.read_f(rs1);
+                    ctx.regs.write(rd, val);
+                }
+                0x1 => {
+                    // FCLASS.D
+                    let bits = ctx.regs.read_f(rs1);
+                    ctx.regs.write(rd, fclass_d(bits));
+                }
+                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+            }
         }
         0x00 => {
             // FADD.S
@@ -1722,7 +1788,8 @@ fn op_fp<B: SystemBus>(
         0x20 => {
             // FCVT.S.D
             let a = f64::from_bits(ctx.regs.read_f(rs1));
-            ctx.regs.write_f32(rd, (a as f32).to_bits());
+            let result = a as f32;
+            ctx.regs.write_f32(rd, result.to_bits());
             mark_fs_dirty(ctx);
         }
         0x21 => {
