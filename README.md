@@ -53,20 +53,20 @@ curl -fsSL https://install.vpod.sh | sh
 
 > <details>
 > <summary>Or install via PowerShell (windows)</summary>
-> 
+>
 > ```bash
 > irm https://install.vpod.sh | iex
 > ```
-> 
+>
 > </details>
 
 > <details>
 > <summary>Or install via cargo</summary>
->   
+>
 > ```bash
 > cargo install vpod
 > ```
-> 
+>
 > </details>
 
 ```bash
@@ -153,6 +153,7 @@ path = snapshots.pull("alpine:latest")
 ## Limitations
 - **Emulation overhead**: No hardware acceleration in the WASM component. CPU-intensive workloads may run slower than native.
 - **No GPU access**: CUDA, Metal, and hardware ML accelerators are not yet available. Support may be added in the future with wasi-nn.
+- **Env vars don't cross between shell and Python**: `sandbox.commands.run("export FOO=bar")` is not visible in `sandbox.code.run(...)`. Use the filesystem to share data between the two.
 
 ## Contributing
 

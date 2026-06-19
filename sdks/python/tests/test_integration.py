@@ -282,18 +282,11 @@ def test_shared_vm_shell_writes_python_reads():
 
 def test_shared_vm_python_writes_shell_reads():
     with Sandbox.create() as sbx:
-        sbx.code.run("open('/tmp/py_shared.txt', 'w').write('from_python')")
+        sbx.code.run("f = open('/tmp/py_shared.txt', 'w'); f.write('from_python\\n'); f.close()")
         result = sbx.commands.run("cat /tmp/py_shared.txt")
         assert result.success
         assert "from_python" in result.stdout
 
-
-def test_shared_vm_env_var():
-    with Sandbox.create() as sbx:
-        sbx.commands.run("export MY_VAR=hello")
-        result = sbx.code.run("import os; print(os.environ.get('MY_VAR', 'not_found'))")
-        assert result.success
-        assert "hello" in result.text
 
 
 def test_python_class_definition():
