@@ -1,9 +1,5 @@
-import base64
-
 from ._result import unwrap_result
 from .execution import CodeExecution
-
-_SENTINEL = "---VPOD_DONE---"
 
 
 class Code:
@@ -23,13 +19,10 @@ class Code:
                 "Use 'with Sandbox.create() as sandbox:'"
             )
 
-        b64 = base64.b64encode(code.encode()).decode()
-        cmd = f"echo {b64} >&9; cat /tmp/py.resp"
-        result = unwrap_result(self._exports["session-exec"](session_id, cmd))
+        result = unwrap_result(self._exports["session-exec"](session_id, "\x00" + code))
         output = result.stdout if hasattr(result, 'stdout') else str(result)
         stderr = result.stderr if hasattr(result, 'stderr') else ""
 
-        output = "\n".join(l for l in output.splitlines() if l != _SENTINEL)
         return self._parse_output(output, stderr)
 
     def close(self):
