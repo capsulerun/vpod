@@ -1338,6 +1338,33 @@ fn orc_b(x: u64) -> u64 {
     result
 }
 
+#[inline(always)]
+fn resolve_rm(inst_rm: u32, fcsr: u64) -> u32 {
+    if inst_rm == 7 { ((fcsr >> 5) & 0x7) as u32 } else { inst_rm }
+}
+
+#[inline(always)]
+fn round_f64_to_int(float: f64, rm: u32) -> f64 {
+    match rm {
+        0 | 4 => float.round_ties_even(),
+        1 => float.trunc(),
+        2 => float.floor(),
+        3 => float.ceil(),
+        _ => float.round_ties_even(),
+    }
+}
+
+#[inline(always)]
+fn round_f32_to_int(float: f32, rm: u32) -> f32 {
+    match rm {
+        0 | 4 => float.round_ties_even(),
+        1 => float.trunc(),
+        2 => float.floor(),
+        3 => float.ceil(),
+        _ => float.round_ties_even(),
+    }
+}
+
 fn fclass_s(bits: u32) -> u64 {
     let sign = (bits >> 31) & 1;
     let exp = (bits >> 23) & 0xFF;
@@ -1734,11 +1761,13 @@ fn op_fp<B: SystemBus>(
         0x60 => {
             // FCVT.W.S / FCVT.WU.S / FCVT.L.S / FCVT.LU.S
             let a = f32::from_bits(ctx.regs.read_f32(rs1));
+            let rm = resolve_rm(inst.funct3(), ctx.csr.fcsr);
+            let rounded = round_f32_to_int(a, rm);
             let result = match rs2 {
-                0 => (a as i32) as i64 as u64, // FCVT.W.S
-                1 => (a as u32) as u64,        // FCVT.WU.S
-                2 => (a as i64) as u64,        // FCVT.L.S
-                3 => a as u64,                 // FCVT.LU.S
+                0 => (rounded as i32) as i64 as u64,
+                1 => (rounded as u32) as u64,
+                2 => (rounded as i64) as u64,
+                3 => rounded as u64,
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
 
@@ -1761,11 +1790,13 @@ fn op_fp<B: SystemBus>(
         0x61 => {
             // FCVT.W.D / FCVT.WU.D / FCVT.L.D / FCVT.LU.D
             let a = f64::from_bits(ctx.regs.read_f(rs1));
+            let rm = resolve_rm(inst.funct3(), ctx.csr.fcsr);
+            let rounded = round_f64_to_int(a, rm);
             let result = match rs2 {
-                0 => (a as i32) as i64 as u64,
-                1 => (a as u32) as u64,
-                2 => (a as i64) as u64,
-                3 => a as u64,
+                0 => (rounded as i32) as i64 as u64,
+                1 => (rounded as u32) as u64,
+                2 => (rounded as i64) as u64,
+                3 => rounded as u64,
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
 
