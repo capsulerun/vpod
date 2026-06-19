@@ -272,6 +272,30 @@ def test_network_dns_resolves():
         result = sbx.commands.run("wget -q --spider https://kfuckkfmkyxe0l-tests.vpod.sh")
         assert result.success
 
+def test_shared_vm_shell_writes_python_reads():
+    with Sandbox.create() as sbx:
+        sbx.commands.run("echo 'shared_value' > /tmp/shared.txt")
+        result = sbx.code.run("print(open('/tmp/shared.txt').read().strip())")
+        assert result.success
+        assert "shared_value" in result.text
+
+
+def test_shared_vm_python_writes_shell_reads():
+    with Sandbox.create() as sbx:
+        sbx.code.run("open('/tmp/py_shared.txt', 'w').write('from_python')")
+        result = sbx.commands.run("cat /tmp/py_shared.txt")
+        assert result.success
+        assert "from_python" in result.stdout
+
+
+def test_shared_vm_env_var():
+    with Sandbox.create() as sbx:
+        sbx.commands.run("export MY_VAR=hello")
+        result = sbx.code.run("import os; print(os.environ.get('MY_VAR', 'not_found'))")
+        assert result.success
+        assert "hello" in result.text
+
+
 def test_python_class_definition():
     with Sandbox.create() as sbx:
         sbx.code.run(
