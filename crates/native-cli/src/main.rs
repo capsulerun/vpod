@@ -59,6 +59,7 @@ fn main() {
     let mut setup_cmds: Vec<String> = Vec::new();
     let mut snap_save: Option<PathBuf> = None;
     let mut snap_warm = false;
+    let mut snap_python = false;
     let mut snap_load: Option<PathBuf> = None;
     let mut ram_mb: u64 = 256;
     let mut bootargs = "root=/dev/ram0 rw console=ttyS0 earlycon".to_string();
@@ -91,6 +92,10 @@ fn main() {
             "--bootargs" => bootargs = args.next().unwrap_or_else(|| usage()),
             "--snapshot-save" => snap_save = Some(args.next().unwrap_or_else(|| usage()).into()),
             "--snapshot-warm" => snap_warm = true,
+            "--snapshot-python" => {
+                snap_warm = true;
+                snap_python = true;
+            }
             "--snapshot-load" => snap_load = Some(args.next().unwrap_or_else(|| usage()).into()),
             "--ram" => {
                 ram_mb = args
@@ -192,11 +197,15 @@ fn main() {
         0
     };
 
-    let snap_flags = if snap_warm {
+    let snap_flags = (if snap_warm {
         snapshot::FLAG_SHELL_READY
     } else {
         0
-    };
+    }) | (if snap_python {
+        snapshot::FLAG_PYTHON_READY
+    } else {
+        0
+    });
 
     if !setup_cmds.is_empty() {
         run_setup::run(
