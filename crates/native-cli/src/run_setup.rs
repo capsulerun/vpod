@@ -16,6 +16,7 @@ pub fn run(
 ) {
     eprintln!("[vpod] setup: booting guest, waiting for shell prompt...");
     bus.uart.capture_tx.set(true);
+    bus.uart_data.capture_tx.set(true);
 
     wait_for_prompt(bus, hart, true);
 
@@ -142,7 +143,7 @@ fn push_line(bus: &mut MachineBus, data: &[u8]) {
 fn python_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
     push_line(
         bus,
-        b"mkfifo /tmp/py.in /tmp/py.resp; python3 /usr/lib/vpod/pyrunner.py &",
+        b"mkfifo /tmp/py.in; python3 /usr/lib/vpod/pyrunner.py &",
     );
     wait_for_prompt(bus, hart, false);
     drain_all(bus);
@@ -151,9 +152,34 @@ fn python_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
     wait_for_prompt(bus, hart, false);
     drain_all(bus);
 
-    push_line(bus, b"echo cGFzcw== >&9; cat /tmp/py.resp");
-    let output = wait_for_prompt(bus, hart, true);
-    let text = String::from_utf8_lossy(&output);
+    push_line(bus, b"echo cGFzcw== >&9");
+    wait_for_prompt(bus, hart, false);
+
+    // For the ttyS3
+    let mut data_buf = Vec::new();
+    for _ in 0..100_000u32 {
+        if hart.is_waiting {
+            hart.is_waiting = false;
+        }
+
+        bus.clint.advance_by_instructions(8192);
+        bus.poll(hart);
+
+        match hart.run(bus, 8192) {
+            riscv_core::StepResult::Ok => {}
+            _ => break,
+        }
+
+        let tx = bus.uart_data.drain_tx();
+        if !tx.is_empty() {
+            data_buf.extend_from_slice(&tx);
+            if String::from_utf8_lossy(&data_buf).contains("---VPOD_DONE---") {
+                break;
+            }
+        }
+    }
+
+    let text = String::from_utf8_lossy(&data_buf);
 
     if text.contains("---VPOD_DONE---") {
         eprintln!("[vpod-setup] pyrunner verified OK");
