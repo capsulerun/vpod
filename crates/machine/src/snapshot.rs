@@ -10,6 +10,7 @@ const MAGIC: &[u8; 4] = b"VPOD";
 const VERSION: u8 = 1;
 
 pub const FLAG_SHELL_READY: u8 = 1 << 0;
+pub const FLAG_PYTHON_READY: u8 = 1 << 1;
 
 pub fn save(
     bus: &MachineBus,

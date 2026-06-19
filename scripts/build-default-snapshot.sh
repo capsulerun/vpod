@@ -117,7 +117,7 @@ fi
 
 echo "── Building agent overlay..."
 rm -rf "$OVERLAY"
-mkdir -p "$OVERLAY/sbin" "$OVERLAY/etc/apk"
+mkdir -p "$OVERLAY/sbin" "$OVERLAY/etc/apk" "$OVERLAY/usr/lib/vpod"
 
 printf 'https://dl-cdn.alpinelinux.org/alpine/v%s/main\nhttps://dl-cdn.alpinelinux.org/alpine/v%s/community\n' \
     "$ALPINE_MINOR" "$ALPINE_MINOR" > "$OVERLAY/etc/apk/repositories"
@@ -166,6 +166,46 @@ INIT_EOF
 chmod +x "$OVERLAY/sbin/init"
 ln -sf /sbin/init "$OVERLAY/init"
 
+cat > "$OVERLAY/usr/lib/vpod/pyrunner.py" << 'PYRUNNER_EOF'
+import sys, io, traceback, base64
+
+_globals = {}
+_sentinel = "---VPOD_DONE---"
+_real_stdout = sys.stdout
+_real_stderr = sys.stderr
+
+_in = open("/tmp/py.in", "r")
+
+for _line in _in:
+    _line = _line.rstrip("\n")
+    if not _line:
+        continue
+    try:
+        _code = base64.b64decode(_line).decode()
+    except Exception:
+        _code = _line
+
+    _buf = io.StringIO()
+    sys.stdout = _buf
+    sys.stderr = _buf
+    try:
+        exec(compile(_code, "<vpod>", "exec"), _globals)
+    except SystemExit:
+        pass
+    except Exception:
+        _buf.write(traceback.format_exc())
+    finally:
+        sys.stdout = _real_stdout
+        sys.stderr = _real_stderr
+
+    _resp = open("/tmp/py.resp", "w")
+    _val = _buf.getvalue()
+    if _val:
+        _resp.write(_val)
+    _resp.write(_sentinel + "\n")
+    _resp.close()
+PYRUNNER_EOF
+
 echo "── Repacking minirootfs as cpio..."
 MINI_WORK="$ROOT/dist/agent-minirootfs"
 rm -rf "$MINI_WORK"
@@ -201,7 +241,7 @@ echo "── Booting guest to pre-install ca-certificates + python3..."
     --net \
     --setup "date -s '$(date -u '+%Y-%m-%d %H:%M:%S')'; sed -i 's|https://|http://|g' /etc/apk/repositories; apk update --allow-untrusted; apk add --allow-untrusted ca-certificates python3 py3-pip; sed -i 's|http://|https://|g' /etc/apk/repositories; sync" \
     --snapshot-save "$SNAP" \
-    --snapshot-warm
+    --snapshot-python
 
 echo ""
 echo "=== Done ==="

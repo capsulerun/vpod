@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use machine::machine_bus::MachineBus;
-use machine::snapshot::FLAG_SHELL_READY;
+use machine::snapshot::{FLAG_PYTHON_READY, FLAG_SHELL_READY};
 use riscv_core::{Hart, StepResult};
 
 const STEP: u64 = 32768;
@@ -34,6 +34,17 @@ pub fn run(
         if !shell_init(bus, hart) {
             eprintln!("[vpod-setup] shell_init failed, saving cold snapshot");
             final_flags &= !FLAG_SHELL_READY;
+        }
+    }
+
+    if snap_flags & FLAG_PYTHON_READY != 0 && final_flags & FLAG_SHELL_READY != 0 {
+        eprintln!("[vpod-setup] starting pyrunner for python-ready snapshot...");
+        drain_all(bus);
+
+        if python_init(bus, hart) {
+            final_flags |= FLAG_PYTHON_READY;
+        } else {
+            eprintln!("[vpod-setup] python_init failed, snapshot will not have FLAG_PYTHON_READY");
         }
     }
 
@@ -126,6 +137,32 @@ fn push_line(bus: &mut MachineBus, data: &[u8]) {
         bus.uart.push_rx(b);
     }
     bus.uart.push_rx(b'\n');
+}
+
+fn python_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
+    push_line(
+        bus,
+        b"mkfifo /tmp/py.in /tmp/py.resp; python3 /usr/lib/vpod/pyrunner.py &",
+    );
+    wait_for_prompt(bus, hart, false);
+    drain_all(bus);
+
+    push_line(bus, b"exec 9>/tmp/py.in");
+    wait_for_prompt(bus, hart, false);
+    drain_all(bus);
+
+    push_line(bus, b"echo cGFzcw== >&9; cat /tmp/py.resp");
+    let output = wait_for_prompt(bus, hart, true);
+    let text = String::from_utf8_lossy(&output);
+
+    if text.contains("---VPOD_DONE---") {
+        eprintln!("[vpod-setup] pyrunner verified OK");
+        drain_all(bus);
+        true
+    } else {
+        eprintln!("[vpod-setup] pyrunner probe failed: {:?}", text.trim());
+        false
+    }
 }
 
 fn drain_all(bus: &mut MachineBus) {
