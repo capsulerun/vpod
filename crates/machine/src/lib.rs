@@ -19,6 +19,10 @@ pub const UART_CTRL_BASE: u64 = 0x1000_0200;
 pub const UART_CTRL_SIZE: u64 = 0x100;
 pub const UART_CTRL_IRQ: u32 = 6;
 
+pub const UART_DATA_BASE: u64 = 0x1000_0300;
+pub const UART_DATA_SIZE: u64 = 0x100;
+pub const UART_DATA_IRQ: u32 = 7;
+
 pub const VIRTIO_BASE: u64 = 0x1000_1000;
 pub const VIRTIO_SIZE: u64 = 0x200;
 pub const VIRTIO_BLK_IRQ: u32 = 2;
