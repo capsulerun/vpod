@@ -24,12 +24,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     Start {
-        #[arg(default_value = "alpine-3.23.0-256mb")]
+        #[arg(default_value = "vpod-base")]
         snapshot: String,
     },
 
     Pull {
-        #[arg(default_value = "alpine-3.23.0-256mb")]
+        #[arg(default_value = "vpod-base")]
         snapshot: String,
     },
 

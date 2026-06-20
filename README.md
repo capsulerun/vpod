@@ -112,6 +112,16 @@ with Sandbox.create() as sandbox:
 
 Full reference for the CLI and Python SDK.
 
+### Available Snapshots
+
+These snapshots are currently available in the registry and can be pulled using `vpod pull <name>:<tag>` or via the Python SDK.
+
+| Name | Tag | Description | Memory Limit (ram) |
+|:---|:---|:---|:---|
+| `alpine` | `3.23.0`, `latest` | Minimal Alpine Linux 3.23.0 base layer. | 256 MB |
+| `vsnap-base` | `0.1.0` | General-purpose snapshot with Python 3 pre-installed. | 256 MB |
+| `vsnap-data` | `0.1.0` | Data-science snapshot with `numpy`, `pandas` and `scipy` pre-installed. | 512 MB |
+
 ### CLI commands
 
 | Command | Description |

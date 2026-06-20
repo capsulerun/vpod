@@ -33,7 +33,8 @@ impl Guest for Executor {
             bus.uart.push_rx(byte);
         }
 
-        let stdout = repl::capture_output_impl(&mut bus, &mut hart, DEFAULT_PROMPT, 30, true);
+        let stdout =
+            repl::capture_output(&mut bus, &mut hart, DEFAULT_PROMPT, 30, true, None, false);
 
         let stderr_bytes = bus.uart_stderr.drain_tx();
         let stderr = String::from_utf8_lossy(&stderr_bytes)

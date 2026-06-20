@@ -69,12 +69,14 @@ pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     }
 }
 
-pub fn capture_output_impl(
+pub fn capture_output(
     bus: &mut MachineBus,
     hart: &mut Hart,
     prompt: &[u8],
     timeout_secs: u64,
     stop_on_ctrl: bool,
+    sentinel: Option<&str>,
+    data_channel: bool,
 ) -> String {
     let deadline = monotonic_clock::now() + timeout_secs * 1_000_000_000;
 
@@ -95,7 +97,9 @@ pub fn capture_output_impl(
                 let timeout = monotonic_clock::subscribe_duration(NET_YIELD_NS);
                 poll::poll(&[&timeout]);
 
-                if got_output
+                if !data_channel
+                    && sentinel.is_none()
+                    && got_output
                     && !bus.net_rx_pending()
                     && !bus.net_has_active_connections()
                     && monotonic_clock::now().saturating_sub(last_output_ns) >= QUIET_PERIOD_NS
@@ -118,19 +122,31 @@ pub fn capture_output_impl(
             }
         }
 
-        let tx = bus.uart.drain_tx();
+        let tx = if data_channel {
+            bus.uart_data.drain_tx()
+        } else {
+            bus.uart.drain_tx()
+        };
+
         if !tx.is_empty() {
             output.extend_from_slice(&tx);
             got_output = true;
             last_output_ns = monotonic_clock::now();
 
-            if output.ends_with(prompt) {
+            if !data_channel && output.ends_with(prompt) {
                 output.truncate(output.len() - prompt.len());
+                break;
+            }
+
+            if let Some(s) = sentinel
+                && let Ok(text) = std::str::from_utf8(&output)
+                && text.contains(s)
+            {
                 break;
             }
         }
 
-        if stop_on_ctrl && !bus.uart_ctrl.tx_is_empty() {
+        if !data_channel && stop_on_ctrl && !bus.uart_ctrl.tx_is_empty() {
             for _ in 0..64 {
                 bus.clint.advance_by_instructions(STEP);
                 bus.poll(hart);
@@ -154,7 +170,7 @@ pub fn capture_output_impl(
         }
     }
 
-    if !output.is_empty() && !output.ends_with(b"\n") {
+    if !data_channel && !output.is_empty() && !output.ends_with(b"\n") {
         if let Some(pos) = output.iter().rposition(|&b| b == b'\n') {
             output.truncate(pos + 1);
         } else {
@@ -164,6 +180,17 @@ pub fn capture_output_impl(
 
     let raw = String::from_utf8_lossy(&output);
     let cleaned = strip_ansi(&raw);
+
+    if data_channel {
+        if let Some(s) = sentinel
+            && let Some(pos) = cleaned.find(s)
+        {
+            return cleaned[..pos].trim_end().to_string();
+        }
+
+        return cleaned.trim_end().to_string();
+    }
+
     if !bus.uart_ctrl.tx_is_empty() {
         strip_kernel_log(&cleaned).trim_end().to_string()
     } else {
