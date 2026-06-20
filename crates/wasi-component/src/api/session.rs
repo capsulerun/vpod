@@ -123,8 +123,9 @@ impl SessionManager {
         } else {
             session.is_pyrunner
         };
-        let code = if code.starts_with('\0') {
-            code[1..].to_string()
+
+        let code = if let Some(s) = code.strip_prefix('\0') {
+            s.to_string()
         } else {
             code
         };

@@ -138,12 +138,11 @@ pub fn capture_output(
                 break;
             }
 
-            if let Some(s) = sentinel {
-                if let Ok(text) = std::str::from_utf8(&output) {
-                    if text.contains(s) {
-                        break;
-                    }
-                }
+            if let Some(s) = sentinel
+                && let Ok(text) = std::str::from_utf8(&output)
+                && text.contains(s)
+            {
+                break;
             }
         }
 
@@ -183,11 +182,12 @@ pub fn capture_output(
     let cleaned = strip_ansi(&raw);
 
     if data_channel {
-        if let Some(s) = sentinel {
-            if let Some(pos) = cleaned.find(s) {
-                return cleaned[..pos].trim_end().to_string();
-            }
+        if let Some(s) = sentinel
+            && let Some(pos) = cleaned.find(s)
+        {
+            return cleaned[..pos].trim_end().to_string();
         }
+
         return cleaned.trim_end().to_string();
     }
 
