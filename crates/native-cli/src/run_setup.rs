@@ -91,7 +91,8 @@ fn shell_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
 fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, verbose: bool) -> Vec<u8> {
     let mut buffer = Vec::new();
     let mut dsr_answered = false;
-    for _ in 0..2_000_000u32 {
+
+    for _ in 0..8_000_000u32 {
         if hart.is_waiting {
             hart.is_waiting = false;
         }
