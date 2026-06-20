@@ -234,6 +234,15 @@ fn walk_inner(
     }
 
     let leaf_ppn = (pte >> 10) & 0x0fff_ffff_ffff;
+
+    if level > 0 {
+        let align_mask = (1u64 << (9 * level as u32)) - 1;
+
+        if leaf_ppn & align_mask != 0 {
+            return Err(());
+        }
+    }
+
     let page_offset_bits = 12 + 9 * level as u32;
     let page_offset_mask = (1u64 << page_offset_bits) - 1;
     let physical_address = (leaf_ppn << 12) | (virtual_address & page_offset_mask);

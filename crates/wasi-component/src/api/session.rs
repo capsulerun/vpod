@@ -14,6 +14,7 @@ pub struct Session {
     pub prompt: Vec<u8>,
     pub is_shell: bool,
     pub is_pyrunner: bool,
+    pub has_pyrunner: bool,
 }
 
 pub struct SessionManager {
@@ -68,7 +69,12 @@ impl SessionManager {
                 repl::sync_clock(&mut bus, &mut hart, &prompt_bytes);
             }
         } else if use_pyrunner {
-            repl::sync_clock(&mut bus, &mut hart, &prompt_bytes);
+            if !shell_ready {
+                repl::wait_for_prompt(&mut bus, &mut hart, &prompt_bytes);
+                bus.uart.drain_tx();
+            }
+
+            repl::shell_init(&mut bus, &mut hart, &prompt_bytes);
         } else {
             let launch = format!("stty -echo; {command}\n");
             for byte in launch.bytes() {
@@ -92,6 +98,7 @@ impl SessionManager {
                 prompt: prompt_bytes,
                 is_shell,
                 is_pyrunner: use_pyrunner,
+                has_pyrunner: python_ready,
             },
         );
 
@@ -104,59 +111,94 @@ impl SessionManager {
             .get_mut(&handle)
             .ok_or_else(|| format!("invalid session handle: {handle}"))?;
 
+        session.bus.uart.drain_tx();
         session.bus.uart_stderr.drain_tx();
         session.bus.uart_ctrl.drain_tx();
+        session.bus.uart_data.drain_tx();
 
         const PYRUNNER_SENTINEL: &str = "---VPOD_DONE---";
 
-        let cmd = if session.is_pyrunner {
+        let use_pyrunner = if code.starts_with('\0') {
+            session.has_pyrunner
+        } else {
+            session.is_pyrunner
+        };
+
+        let code = if let Some(s) = code.strip_prefix('\0') {
+            s.to_string()
+        } else {
+            code
+        };
+
+        if use_pyrunner {
             let b64 = base64::engine::general_purpose::STANDARD.encode(code.as_bytes());
-            format!("echo {} >&9; cat /tmp/py.resp 2>/dev/ttyS1\n", b64)
-        } else if session.is_shell {
-            format!("{{ {code}; }} 2>/dev/ttyS1\n")
-        } else {
-            format!("{code}\n")
-        };
+            let cmd = format!("echo {} >&9\n", b64);
+            for byte in cmd.bytes() {
+                session.bus.uart.push_rx(byte);
+            }
 
-        for byte in cmd.bytes() {
-            session.bus.uart.push_rx(byte);
-        }
+            let stdout = repl::capture_output(
+                &mut session.bus,
+                &mut session.hart,
+                b"",
+                120,
+                false,
+                Some(PYRUNNER_SENTINEL),
+                true,
+            );
 
-        let stdout = repl::capture_output_impl(
-            &mut session.bus,
-            &mut session.hart,
-            &session.prompt,
-            30,
-            session.is_shell || session.is_pyrunner,
-        );
+            let stderr_bytes = session.bus.uart_stderr.drain_tx();
+            let stderr = String::from_utf8_lossy(&stderr_bytes)
+                .trim_end()
+                .to_string();
 
-        let stdout = if session.is_pyrunner {
-            stdout
-                .lines()
-                .filter(|l| *l != PYRUNNER_SENTINEL)
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            stdout
-        };
-
-        let stderr_bytes = session.bus.uart_stderr.drain_tx();
-        let stderr = String::from_utf8_lossy(&stderr_bytes)
-            .trim_end()
-            .to_string();
-
-        let exit_code = if session.is_shell || session.is_pyrunner {
             let ctrl_bytes = session.bus.uart_ctrl.drain_tx();
-            ctrl_bytes.first().copied().unwrap_or(0) as u32
-        } else {
-            0
-        };
+            let exit_code = ctrl_bytes.first().copied().unwrap_or(0) as u32;
 
-        Ok(ExecutionResult {
-            stdout,
-            stderr,
-            exit_code,
-        })
+            Ok(ExecutionResult {
+                stdout,
+                stderr,
+                exit_code,
+            })
+        } else {
+            let cmd = if session.is_shell {
+                format!("{{ {code}; }} 2>/dev/ttyS1\n")
+            } else {
+                format!("{code}\n")
+            };
+
+            for byte in cmd.bytes() {
+                session.bus.uart.push_rx(byte);
+            }
+
+            let stdout = repl::capture_output(
+                &mut session.bus,
+                &mut session.hart,
+                &session.prompt,
+                30,
+                session.is_shell,
+                None,
+                false,
+            );
+
+            let stderr_bytes = session.bus.uart_stderr.drain_tx();
+            let stderr = String::from_utf8_lossy(&stderr_bytes)
+                .trim_end()
+                .to_string();
+
+            let exit_code = if session.is_shell {
+                let ctrl_bytes = session.bus.uart_ctrl.drain_tx();
+                ctrl_bytes.first().copied().unwrap_or(0) as u32
+            } else {
+                0
+            };
+
+            Ok(ExecutionResult {
+                stdout,
+                stderr,
+                exit_code,
+            })
+        }
     }
 
     pub fn close_session(&self, handle: u64) {

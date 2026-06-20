@@ -23,7 +23,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-ALPINE_MINOR="${ALPINE_VERSION%.*}"   # e.g. 3.23
+ALPINE_MINOR="${ALPINE_VERSION%.*}"
 ALPINE_DIR="$ROOT/dist/alpine-standard-${ALPINE_VERSION}-riscv64"
 ISO_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_MINOR}/releases/riscv64/alpine-standard-${ALPINE_VERSION}-riscv64.iso"
 MINIROOTFS_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_MINOR}/releases/riscv64/alpine-minirootfs-${ALPINE_VERSION}-riscv64.tar.gz"
@@ -66,7 +66,6 @@ echo "── Building vpod..."
 (cd "$ROOT" && cargo build --release --bin vpod-native)
 
 
-# Download pre-built OpenSBI fw_jump.bin
 if [ ! -f "$OPENSBI_FW" ]; then
     echo "── Downloading OpenSBI ${OPENSBI_VERSION} pre-built firmware..."
     curl -L --progress-bar -o "$OPENSBI_TAR" "$OPENSBI_URL"
@@ -80,7 +79,6 @@ else
     echo "── OpenSBI firmware already present, skipping."
 fi
 
-# Download Alpine ISO + extract kernel
 if [ ! -f "$ISO" ]; then
     echo "── Downloading Alpine standard ISO ${ALPINE_VERSION}..."
     curl -L --progress-bar -o "$ISO" "$ISO_URL"
@@ -115,7 +113,7 @@ else
 fi
 
 
-echo "── Building agent overlay..."
+echo "── Building overlay..."
 rm -rf "$OVERLAY"
 mkdir -p "$OVERLAY/sbin" "$OVERLAY/etc/apk" "$OVERLAY/usr/lib/vpod"
 
@@ -228,7 +226,7 @@ cat "$PART_MINI" "$PART_OVL" > "$OUT"
 rm -f "$PART_MINI" "$PART_OVL"
 echo "   Done: $OUT ($(du -sh "$OUT" | cut -f1))"
 
-SNAP="$ROOT/dist/alpine-3.23.0-256mb.snap"
+SNAP="$ROOT/dist/vpod-base-${RAM_MB}mb.snap"
 BOOTARGS="root=/dev/ram0 rw console=ttyS0 earlycon init=/sbin/init"
 
 echo "── Booting guest to pre-install ca-certificates + python3..."
@@ -239,7 +237,7 @@ echo "── Booting guest to pre-install ca-certificates + python3..."
     --ram "$RAM_MB" \
     --bootargs "$BOOTARGS" \
     --net \
-    --setup "date -s '$(date -u '+%Y-%m-%d %H:%M:%S')'; sed -i 's|https://|http://|g' /etc/apk/repositories; apk update --allow-untrusted; apk add --allow-untrusted ca-certificates python3 py3-pip; sed -i 's|http://|https://|g' /etc/apk/repositories; sync" \
+    --setup "date -s '$(date -u '+%Y-%m-%d %H:%M:%S')'; sed -i 's|https://|http://|g' /etc/apk/repositories; apk update --allow-untrusted; apk add --allow-untrusted ca-certificates python3; sed -i 's|http://|https://|g' /etc/apk/repositories; sync" \
     --snapshot-save "$SNAP" \
     --snapshot-python
 
