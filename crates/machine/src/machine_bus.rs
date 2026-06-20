@@ -139,7 +139,7 @@ impl MachineBus {
     }
 
     pub fn has_pending_io(&self) -> bool {
-        self.uart.rx_pending() || self.net_rx_pending()
+        self.uart.rx_pending() || self.uart_data.rx_pending() || self.net_rx_pending()
     }
 
     pub fn drain_console_tx(&mut self) -> Vec<u8> {

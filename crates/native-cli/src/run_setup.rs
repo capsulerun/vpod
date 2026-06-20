@@ -142,23 +142,20 @@ fn push_line(bus: &mut MachineBus, data: &[u8]) {
 }
 
 fn python_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
-    push_line(
-        bus,
-        b"mkfifo /tmp/py.in; python3 /usr/lib/vpod/pyrunner.py &",
-    );
+    push_line(bus, b"stty -F /dev/ttyS3 -echo");
     wait_for_prompt(bus, hart, false);
     drain_all(bus);
 
-    push_line(bus, b"exec 9>/tmp/py.in");
+    push_line(bus, b"python3 /usr/lib/vpod/pyrunner.py &");
     wait_for_prompt(bus, hart, false);
     drain_all(bus);
 
-    push_line(bus, b"echo cGFzcw== >&9");
-    wait_for_prompt(bus, hart, false);
+    for &b in b"cGFzcw==\n" {
+        bus.uart_data.push_rx(b);
+    }
 
-    // For the ttyS3
     let mut data_buf = Vec::new();
-    for _ in 0..100_000u32 {
+    for _ in 0..2_000_000u32 {
         if hart.is_waiting {
             hart.is_waiting = false;
         }

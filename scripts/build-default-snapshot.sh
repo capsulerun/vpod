@@ -171,10 +171,13 @@ _globals = {}
 _sentinel = "---VPOD_DONE---"
 _real_stdout = sys.stdout
 _real_stderr = sys.stderr
+_data_out = open("/dev/ttyS3", "w")
+_data_in = open("/dev/ttyS3", "r", buffering=1)
 
-_in = open("/tmp/py.in", "r")
-
-for _line in _in:
+while True:
+    _line = _data_in.readline()
+    if not _line:
+        break
     _line = _line.rstrip("\n")
     if not _line:
         continue
@@ -196,12 +199,11 @@ for _line in _in:
         sys.stdout = _real_stdout
         sys.stderr = _real_stderr
 
-    _resp = open("/tmp/py.resp", "w")
     _val = _buf.getvalue()
     if _val:
-        _resp.write(_val)
-    _resp.write(_sentinel + "\n")
-    _resp.close()
+        _data_out.write(_val)
+    _data_out.write(_sentinel + "\n")
+    _data_out.flush()
 PYRUNNER_EOF
 
 echo "── Repacking minirootfs as cpio..."
@@ -226,7 +228,7 @@ cat "$PART_MINI" "$PART_OVL" > "$OUT"
 rm -f "$PART_MINI" "$PART_OVL"
 echo "   Done: $OUT ($(du -sh "$OUT" | cut -f1))"
 
-SNAP="$ROOT/dist/vpod-base-${RAM_MB}mb.snap"
+SNAP="$ROOT/dist/vsnap-base-${RAM_MB}mb.snap"
 BOOTARGS="root=/dev/ram0 rw console=ttyS0 earlycon init=/sbin/init"
 
 echo "── Booting guest to pre-install ca-certificates + python3..."
