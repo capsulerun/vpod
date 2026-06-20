@@ -132,10 +132,10 @@ impl SessionManager {
 
         if use_pyrunner {
             let b64 = base64::engine::general_purpose::STANDARD.encode(code.as_bytes());
-            let cmd = format!("echo {} >&9\n", b64);
-            for byte in cmd.bytes() {
-                session.bus.uart.push_rx(byte);
+            for byte in b64.bytes() {
+                session.bus.uart_data.push_rx(byte);
             }
+            session.bus.uart_data.push_rx(b'\n');
 
             let stdout = repl::capture_output(
                 &mut session.bus,
