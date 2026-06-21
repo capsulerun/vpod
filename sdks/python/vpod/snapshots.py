@@ -3,6 +3,7 @@ import json
 import shutil
 import ssl
 import os
+import time
 import urllib.request
 from pathlib import Path
 
@@ -48,7 +49,16 @@ def pull(name: str = "alpine:latest") -> Path:
     return dest
 
 
+_REGISTRY_TTL = 86400
+_REGISTRY_CACHE = cache_dir() / "snapshots.json"
+
+
 def fetch_registry() -> list[dict]:
+    if _REGISTRY_CACHE.exists():
+        age = time.time() - _REGISTRY_CACHE.stat().st_mtime
+        if age < _REGISTRY_TTL:
+            return json.loads(_REGISTRY_CACHE.read_text())["snapshots"]
+
     try:
         request = urllib.request.Request(
             REGISTRY_URL,
@@ -57,8 +67,14 @@ def fetch_registry() -> list[dict]:
         context = _create_ssl_context()
 
         with urllib.request.urlopen(request, timeout=10, context=context) as response:
-            return json.loads(response.read())["snapshots"]
+            data = response.read()
+
+        _REGISTRY_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        _REGISTRY_CACHE.write_bytes(data)
+        return json.loads(data)["snapshots"]
     except Exception as e:
+        if _REGISTRY_CACHE.exists():
+            return json.loads(_REGISTRY_CACHE.read_text())["snapshots"]
         raise ConnectionError(
             f"Failed to fetch snapshot registry from {REGISTRY_URL}: {e}"
         ) from e
