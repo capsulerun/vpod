@@ -131,6 +131,14 @@ Full reference for the CLI and Python SDK.
 | `sandbox.commands.run(cmd)` | Run a command |
 | `sandbox.code.run(code)` | Run Python code |
 
+```python
+from vpod import Sandbox
+
+with Sandbox.create() as sandbox:
+    sandbox.commands.run("echo 'from shell' > /tmp/shared.txt")
+    sandbox.code.run("print(open('/tmp/shared.txt').read().strip())")
+```
+
 ### Snapshots
 
 #### List available snapshots
