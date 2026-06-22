@@ -112,6 +112,15 @@ with Sandbox.create() as sandbox:
 
 Full reference for the CLI and Python SDK.
 
+## Available Snapshots
+
+| Name | Description | Memory Limit (RAM) |
+|:---|:---|:---|
+| `vsnap-base` | Alpine-based general-purpose snapshot. | 256 MB |
+| `vsnap-data` | Alpine-based snapshot with `numpy`, `pandas`, and `scipy` pre‑installed. | 512 MB |
+
+## CLI
+
 | Command | Description |
 |:---|:---|
 | `vpod` | Start an interactive shell with default snapshot |

@@ -73,6 +73,13 @@ for s in snapshots.fetch_registry():
 path = snapshots.pull("alpine:latest")
 ```
 
+#### Available Snapshots
+
+| Name | Description | Memory Limit (RAM) |
+|:---|:---|:---|
+| `vsnap-base` | Alpine-based general-purpose snapshot. | 256 MB |
+| `vsnap-data` | Alpine-based snapshot with `numpy`, `pandas`, and `scipy` pre‑installed. | 512 MB |
+
 ## How it works
 
 A vpod runs a RISC‑V virtual machine compiled to WebAssembly. The core implements the **RV64GC** specification:
