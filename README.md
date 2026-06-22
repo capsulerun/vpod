@@ -112,13 +112,6 @@ with Sandbox.create() as sandbox:
 
 Full reference for the CLI and Python SDK.
 
-## Available Snapshots
-
-| Name | Description | Memory Limit (RAM) |
-|:---|:---|:---|
-| `vsnap-base` | Alpine-based general-purpose snapshot. | 256 MB |
-| `vsnap-data` | Alpine-based snapshot with `numpy`, `pandas`, and `scipy` pre‑installed. | 512 MB |
-
 ## CLI
 
 | Command | Description |
@@ -128,9 +121,9 @@ Full reference for the CLI and Python SDK.
 | `vpod pull <snapshot>` | Pull a snapshot |
 | `vpod list` | List available snapshots |
 
-### Python SDK
+## Python SDK
 
-#### Sandbox
+### Sandbox
 
 | Method | Description |
 |:---|:---|
@@ -138,15 +131,37 @@ Full reference for the CLI and Python SDK.
 | `sandbox.commands.run(cmd)` | Run a command |
 | `sandbox.code.run(code)` | Run Python code |
 
+```python
+from vpod import Sandbox
 
-#### Snapshots
+with Sandbox.create() as sandbox:
+    sandbox.commands.run("echo 'from shell' > /tmp/shared.txt")
+    sandbox.code.run("print(open('/tmp/shared.txt').read().strip())")
+```
+
+### Snapshots
+
+#### List available snapshots
+
+| Name | tag | Description | Memory Limit (RAM) |
+|:---|:---|:---|:---|
+| `alpine` | 3.23.0 | Minimal Alpine Linux snapshot, no Python. | 256 MB |
+| `vsnap-base` | 0.1.0 | Alpine-based snapshot with Python pre-installed. | 256 MB |
+| `vsnap-data` | 0.1.0 | Alpine-based snapshot with `numpy`, `pandas`, and `scipy` pre‑installed. | 512 MB |
+
+```python
+with Sandbox.create(snapshot="vsnap-data") as sandbox:
+    sandbox.code.run("import pandas as pd; import numpy as np")
+    r = sandbox.code.run("s = pd.Series([1, 2, 3, 4, 5]); print(s.sum(), s.mean())")
+    print(r.text)
+```
+
+#### Snapshot API
 
 | Method | Description | Return type |
 |:---|:---|:---|
 | `snapshots.fetch_registry()` | Fetch available snapshots | list[dict] |
 | `snapshots.pull(name)` | Pull a snapshot | str |
-
-**Example**
 
 ```python
 from vpod import snapshots
@@ -154,8 +169,9 @@ from vpod import snapshots
 for snap in snapshots.fetch_registry():
     print(snap["name"], snap["tag"])
 
-path = snapshots.pull("alpine:latest")
+snapshots.pull("vsnap-data")
 ```
+
 
 ## Limitations
 - **Emulation overhead**: No hardware acceleration in the WASM component. CPU-intensive workloads may run slower than native.
