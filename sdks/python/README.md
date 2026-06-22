@@ -35,11 +35,11 @@ All calls share the same running VM:
 from vpod import Sandbox
 
 with Sandbox.create() as sbx:
-    sbx.commands.run("export Foo=Bar")
+    sbx.commands.run("export FOO=bar")
     sbx.commands.run("touch /tmp/data.csv")
 
-    result = sbx.commands.run("echo $Foo")
-    print(result.stdout)  # Bar
+    result = sbx.commands.run("echo $FOO")
+    print(result.stdout)  # bar
 ```
 
 ### Python REPL
@@ -60,7 +60,7 @@ Variables and imports persist for the lifetime of the session.
 
 ### Snapshots
 
-The first call to `Sandbox.create()` downloads the VM snapshot (~50MB) and caches it locally at `~/.local/share/vpod/snapshots/`. Subsequent calls use the cache instantly.
+The first call to `Sandbox.create()` downloads the VM snapshot (~50MB) and caches it locally. Subsequent calls use the cache instantly.
 
 To pre-download (e.g. in a Dockerfile or CI setup):
 
