@@ -1,5 +1,6 @@
 pub mod blk;
 pub mod console;
+// pub mod fs;
 pub mod net;
 pub mod slirp;
 
@@ -85,6 +86,11 @@ impl<'a> RamView<'a> {
     pub fn write_u32(&mut self, pa: u64, val: u32) {
         let i = self.idx(pa);
         self.ram[i..i + 4].copy_from_slice(&val.to_le_bytes());
+    }
+
+    pub fn write_u64(&mut self, pa: u64, val: u64) {
+        let i = self.idx(pa);
+        self.ram[i..i + 8].copy_from_slice(&val.to_le_bytes());
     }
 
     pub fn read_bytes(&self, pa: u64, buf: &mut [u8]) {
