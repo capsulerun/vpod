@@ -5,6 +5,7 @@ use crate::uart::Uart;
 use crate::virtio::RamView;
 use crate::virtio::blk::VirtioBlk;
 use crate::virtio::console::VirtioConsole;
+use crate::virtio::fs::{Mount, VirtioFs};
 use crate::virtio::net::VirtioNet;
 use crate::virtio::slirp::SlirpBackend;
 
@@ -12,7 +13,7 @@ use crate::{
     GUEST_MAC, KERNEL_OFFSET, LOW_RAM_BASE, LOW_RAM_SIZE, RAM_BASE, UART_BASE, UART_CTRL_BASE,
     UART_CTRL_IRQ, UART_CTRL_SIZE, UART_DATA_BASE, UART_DATA_IRQ, UART_DATA_SIZE, UART_IRQ,
     UART_SIZE, UART_STDERR_BASE, UART_STDERR_IRQ, UART_STDERR_SIZE, VIRTIO_BASE, VIRTIO_BLK_IRQ,
-    VIRTIO_CONSOLE_IRQ, VIRTIO_NET_IRQ, VIRTIO_SIZE,
+    VIRTIO_CONSOLE_IRQ, VIRTIO_FS_IRQ, VIRTIO_NET_IRQ, VIRTIO_SIZE,
 };
 
 use riscv_core::csr::{MIP_MEIP, MIP_MSIP, MIP_MTIP, MIP_SEIP};
@@ -31,6 +32,7 @@ pub struct MachineBus {
     pub blk: Option<VirtioBlk>,
     pub console: VirtioConsole,
     pub net: Option<VirtioNet<SlirpBackend>>,
+    pub fs: Option<VirtioFs>,
 }
 
 impl MachineBus {
@@ -52,6 +54,7 @@ impl MachineBus {
             blk: None,
             console: VirtioConsole::new(),
             net: None,
+            fs: None,
         }
     }
 
@@ -63,6 +66,10 @@ impl MachineBus {
     pub fn attach_net(&mut self) {
         let backend = SlirpBackend::new(GUEST_MAC);
         self.net = Some(VirtioNet::new(backend, GUEST_MAC));
+    }
+
+    pub fn attach_fs(&mut self, mounts: Vec<Mount>) {
+        self.fs = Some(VirtioFs::new(mounts));
     }
 
     pub fn ram_size(&self) -> u64 {
@@ -119,6 +126,11 @@ impl MachineBus {
             network_device.poll_rx(&mut ram);
             self.plic
                 .set_irq(VIRTIO_NET_IRQ, network_device.mmio.int_status != 0);
+        }
+
+        if let Some(fs_device) = &self.fs {
+            self.plic
+                .set_irq(VIRTIO_FS_IRQ, fs_device.mmio.int_status != 0);
         }
 
         if self.plic.irq_pending() {
@@ -180,7 +192,7 @@ impl MachineBus {
     }
 
     fn virtio_device_slot(address: u64) -> Option<usize> {
-        if (VIRTIO_BASE..VIRTIO_BASE + VIRTIO_SIZE * 3).contains(&address) {
+        if (VIRTIO_BASE..VIRTIO_BASE + VIRTIO_SIZE * 4).contains(&address) {
             Some(((address - VIRTIO_BASE) / VIRTIO_SIZE) as usize)
         } else {
             None
@@ -232,6 +244,7 @@ impl SystemBus for MachineBus {
                 0 => self.blk.as_ref().map_or(0, |b| b.mmio.read(word_offset)),
                 1 => self.console.mmio.read(word_offset),
                 2 => self.net.as_ref().map_or(0, |n| n.mmio.read(word_offset)),
+                3 => self.fs.as_ref().map_or(0, |f| f.mmio.read(word_offset)),
                 _ => 0,
             };
 
@@ -271,6 +284,10 @@ impl SystemBus for MachineBus {
                 1 => self.console.mmio.read(offset),
                 2 => self
                     .net
+                    .as_ref()
+                    .map_or(0, |device| device.mmio.read(offset)),
+                3 => self
+                    .fs
                     .as_ref()
                     .map_or(0, |device| device.mmio.read(offset)),
                 _ => 0,
@@ -371,6 +388,10 @@ impl SystemBus for MachineBus {
                     .net
                     .as_mut()
                     .and_then(|device| device.mmio.write(offset, value)),
+                3 => self
+                    .fs
+                    .as_mut()
+                    .and_then(|device| device.mmio.write(offset, value)),
                 _ => None,
             };
 
@@ -388,6 +409,11 @@ impl SystemBus for MachineBus {
                     2 => {
                         if let Some(network_device) = &mut self.net {
                             network_device.notify(queue_index, &mut ram);
+                        }
+                    }
+                    3 => {
+                        if let Some(fs_device) = &mut self.fs {
+                            fs_device.notify(queue_index, &mut ram);
                         }
                     }
                     _ => {}
@@ -489,9 +515,15 @@ pub fn boot(
         TIMER_FREQUENCY,
         VIRTIO_BASE,
         VIRTIO_SIZE,
-        &[VIRTIO_BLK_IRQ, VIRTIO_CONSOLE_IRQ, VIRTIO_NET_IRQ],
+        &[
+            VIRTIO_BLK_IRQ,
+            VIRTIO_CONSOLE_IRQ,
+            VIRTIO_NET_IRQ,
+            VIRTIO_FS_IRQ,
+        ],
         bus.blk.is_some(),
         bus.net.is_some(),
+        bus.fs.is_some(),
         bootargs,
         initrd_start,
         initrd_end,
