@@ -53,17 +53,19 @@ const FATTR_SIZE: u32 = 1 << 3;
 
 const FUSE_ROOT_ID: u64 = 1;
 
-#[repr(C)]
+
+// #[repr(C)]
 struct FuseInHeader {
-    len: u32,
+    _len: u32,
     opcode: u32,
     unique: u64,
     nodeid: u64,
-    uid: u32,
-    gid: u32,
-    pid: u32,
+    _uid: u32,
+    _gid: u32,
+    _pid: u32,
     _padding: u32,
 }
+
 
 #[derive(Clone)]
 struct Inode {
@@ -156,13 +158,13 @@ impl VirtioFs {
         }
 
         let header = FuseInHeader {
-            len: ram.read_u32(header_addr),
+            _len: ram.read_u32(header_addr),
             opcode: ram.read_u32(header_addr + 4),
             unique: ram.read_u64(header_addr + 8),
             nodeid: ram.read_u64(header_addr + 16),
-            uid: ram.read_u32(header_addr + 24),
-            gid: ram.read_u32(header_addr + 28),
-            pid: ram.read_u32(header_addr + 32),
+            _uid: ram.read_u32(header_addr + 24),
+            _gid: ram.read_u32(header_addr + 28),
+            _pid: ram.read_u32(header_addr + 32),
             _padding: ram.read_u32(header_addr + 36),
         };
 
