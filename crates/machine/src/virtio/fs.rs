@@ -533,7 +533,7 @@ impl VirtioFs {
         ino: u64,
         metadata: &fs::Metadata,
     ) -> u32 {
-        let entry_out_size = 120u32;
+        let entry_out_size = 128u32;
         let total = 16 + entry_out_size;
 
         ram.write_u32(out_addr, total);
@@ -608,7 +608,7 @@ impl VirtioFs {
         let base = 24 + name.len();
         let aligned = (base + 7) & !7;
 
-        if _plus { aligned + 120 } else { aligned }
+        if _plus { aligned + 128 } else { aligned }
     }
 
     fn write_dirent(
@@ -621,10 +621,8 @@ impl VirtioFs {
         _plus: bool,
     ) {
         if _plus {
-            // For readdirplus
-            payload.extend_from_slice(&[0u8; 120]);
-
-            let start = payload.len() - 120;
+            payload.extend_from_slice(&[0u8; 128]);
+            let start = payload.len() - 128;
             payload[start..start + 8].copy_from_slice(&ino.to_le_bytes());
         }
 
