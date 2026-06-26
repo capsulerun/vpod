@@ -1,6 +1,6 @@
 pub mod blk;
 pub mod console;
-// pub mod fs;
+pub mod fs;
 pub mod net;
 pub mod slirp;
 
@@ -50,57 +50,57 @@ impl<'a> RamView<'a> {
         Self { ram, mask }
     }
 
-    fn idx(&self, pa: u64) -> usize {
-        ((pa - RAM_BASE) & self.mask) as usize
+    fn idx(&self, physical_address: u64) -> usize {
+        ((physical_address - RAM_BASE) & self.mask) as usize
     }
 
-    pub fn read_u8(&self, pa: u64) -> u8 {
-        self.ram[self.idx(pa)]
+    pub fn read_u8(&self, physical_address: u64) -> u8 {
+        self.ram[self.idx(physical_address)]
     }
 
-    pub fn read_u16(&self, pa: u64) -> u16 {
-        let i = self.idx(pa);
-        u16::from_le_bytes(self.ram[i..i + 2].try_into().unwrap())
+    pub fn read_u16(&self, physical_address: u64) -> u16 {
+        let idx = self.idx(physical_address);
+        u16::from_le_bytes(self.ram[idx..idx + 2].try_into().unwrap())
     }
 
-    pub fn read_u32(&self, pa: u64) -> u32 {
-        let i = self.idx(pa);
-        u32::from_le_bytes(self.ram[i..i + 4].try_into().unwrap())
+    pub fn read_u32(&self, physical_address: u64) -> u32 {
+        let idx = self.idx(physical_address);
+        u32::from_le_bytes(self.ram[idx..idx + 4].try_into().unwrap())
     }
 
-    pub fn read_u64(&self, pa: u64) -> u64 {
-        let i = self.idx(pa);
-        u64::from_le_bytes(self.ram[i..i + 8].try_into().unwrap())
+    pub fn read_u64(&self, physical_address: u64) -> u64 {
+        let idx = self.idx(physical_address);
+        u64::from_le_bytes(self.ram[idx..idx + 8].try_into().unwrap())
     }
 
-    pub fn write_u8(&mut self, pa: u64, val: u8) {
-        let i = self.idx(pa);
-        self.ram[i] = val;
+    pub fn write_u8(&mut self, physical_address: u64, val: u8) {
+        let idx = self.idx(physical_address);
+        self.ram[idx] = val;
     }
 
-    pub fn write_u16(&mut self, pa: u64, val: u16) {
-        let i = self.idx(pa);
-        self.ram[i..i + 2].copy_from_slice(&val.to_le_bytes());
+    pub fn write_u16(&mut self, physical_address: u64, val: u16) {
+        let idx = self.idx(physical_address);
+        self.ram[idx..idx + 2].copy_from_slice(&val.to_le_bytes());
     }
 
-    pub fn write_u32(&mut self, pa: u64, val: u32) {
-        let i = self.idx(pa);
-        self.ram[i..i + 4].copy_from_slice(&val.to_le_bytes());
+    pub fn write_u32(&mut self, physical_address: u64, val: u32) {
+        let idx = self.idx(physical_address);
+        self.ram[idx..idx + 4].copy_from_slice(&val.to_le_bytes());
     }
 
-    pub fn write_u64(&mut self, pa: u64, val: u64) {
-        let i = self.idx(pa);
-        self.ram[i..i + 8].copy_from_slice(&val.to_le_bytes());
+    pub fn write_u64(&mut self, physical_address: u64, val: u64) {
+        let idx = self.idx(physical_address);
+        self.ram[idx..idx + 8].copy_from_slice(&val.to_le_bytes());
     }
 
-    pub fn read_bytes(&self, pa: u64, buf: &mut [u8]) {
-        let i = self.idx(pa);
-        buf.copy_from_slice(&self.ram[i..i + buf.len()]);
+    pub fn read_bytes(&self, physical_address: u64, buf: &mut [u8]) {
+        let idx = self.idx(physical_address);
+        buf.copy_from_slice(&self.ram[idx..idx + buf.len()]);
     }
 
-    pub fn write_bytes(&mut self, pa: u64, buf: &[u8]) {
-        let i = self.idx(pa);
-        self.ram[i..i + buf.len()].copy_from_slice(buf);
+    pub fn write_bytes(&mut self, physical_address: u64, buf: &[u8]) {
+        let idx = self.idx(physical_address);
+        self.ram[idx..idx + buf.len()].copy_from_slice(buf);
     }
 }
 

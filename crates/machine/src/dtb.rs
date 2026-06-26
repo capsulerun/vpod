@@ -219,6 +219,7 @@ pub fn build(
     virtio_irqs: &[u32],
     has_blk: bool,
     has_net: bool,
+    has_fs: bool,
     bootargs: &str,
     initrd_start: u64,
     initrd_end: u64,
@@ -342,13 +343,17 @@ pub fn build(
     builder.prop_interrupts(uart_data_irq);
     builder.end_node();
 
-    let virtio_names = ["virtio-blk", "virtio-console", "virtio-net"];
+    let virtio_names = ["virtio-blk", "virtio-console", "virtio-net", "virtio-fs"];
     for (i, (&irq, name)) in virtio_irqs.iter().zip(virtio_names.iter()).enumerate() {
         if i == 0 && !has_blk {
             continue;
         }
 
         if i == 2 && !has_net {
+            continue;
+        }
+
+        if i == 3 && !has_fs {
             continue;
         }
 
