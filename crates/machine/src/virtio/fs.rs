@@ -53,7 +53,6 @@ const FATTR_SIZE: u32 = 1 << 3;
 
 const FUSE_ROOT_ID: u64 = 1;
 
-
 // #[repr(C)]
 struct FuseInHeader {
     _len: u32,
@@ -65,7 +64,6 @@ struct FuseInHeader {
     _pid: u32,
     _padding: u32,
 }
-
 
 #[derive(Clone)]
 struct Inode {
