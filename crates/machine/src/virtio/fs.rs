@@ -2,8 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
-use std::io::Seek;
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 use super::{RamView, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
@@ -28,11 +27,29 @@ const FUSE_OPENDIR: u32 = 27;
 const FUSE_RELEASEDIR: u32 = 29;
 const FUSE_FORGET: u32 = 2;
 const FUSE_BATCH_FORGET: u32 = 42;
+const FUSE_WRITE: u32 = 16;
+const FUSE_CREATE: u32 = 35;
+const FUSE_MKDIR: u32 = 9;
+const FUSE_RMDIR: u32 = 11;
+const FUSE_UNLINK: u32 = 10;
+const FUSE_RENAME: u32 = 12;
+const FUSE_RENAME2: u32 = 45;
+const FUSE_SETATTR: u32 = 4;
+const FUSE_FLUSH: u32 = 25;
+const FUSE_FSYNC: u32 = 20;
+const FUSE_FSYNCDIR: u32 = 30;
 
 const ENOENT: i32 = -2;
 const ENOTDIR: i32 = -20;
 const ENOSYS: i32 = -38;
 const EBADF: i32 = -9;
+const EACCES: i32 = -13;
+const ENOTEMPTY: i32 = -39;
+const EEXIST: i32 = -17;
+const EINVAL: i32 = -22;
+
+const FATTR_MODE: u32 = 1 << 0;
+const FATTR_SIZE: u32 = 1 << 3;
 
 const FUSE_ROOT_ID: u64 = 1;
 
@@ -61,6 +78,7 @@ struct FileHandle {
 pub struct Mount {
     pub host_path: PathBuf,
     pub tag: String,
+    pub writable: bool,
 }
 
 pub struct VirtioFs {
@@ -92,6 +110,10 @@ impl VirtioFs {
 
     fn root_path(&self) -> Option<&Path> {
         self.mounts.first().map(|m| m.host_path.as_path())
+    }
+
+    fn is_writable(&self) -> bool {
+        self.mounts.first().is_some_and(|m| m.writable)
     }
 
     pub fn notify(&mut self, queue_index: usize, ram: &mut RamView) {
@@ -162,6 +184,16 @@ impl VirtioFs {
             }
             FUSE_STATFS => self.statfs(&header, out_addr, out_len, ram),
             FUSE_FORGET | FUSE_BATCH_FORGET => 0,
+            FUSE_WRITE => self.write_data(&header, ram, in_body_addr, &read_bufs, out_addr),
+            FUSE_CREATE => self.create(&header, ram, in_body_addr, in_body_len, out_addr, out_len),
+            FUSE_MKDIR => self.mkdir(&header, ram, in_body_addr, in_body_len, out_addr, out_len),
+            FUSE_RMDIR => self.rmdir(&header, ram, in_body_addr, in_body_len, out_addr),
+            FUSE_UNLINK => self.unlink(&header, ram, in_body_addr, in_body_len, out_addr),
+            FUSE_RENAME | FUSE_RENAME2 => {
+                self.rename(&header, ram, in_body_addr, in_body_len, out_addr)
+            }
+            FUSE_SETATTR => self.setattr(&header, ram, in_body_addr, out_addr, out_len),
+            FUSE_FLUSH | FUSE_FSYNC | FUSE_FSYNCDIR => self.flush(&header, out_addr, ram),
             _ => self.reply_error(&header, ENOSYS, out_addr, ram),
         }
     }
@@ -634,5 +666,386 @@ impl VirtioFs {
 
         let padding = (8 - (name.len() % 8)) % 8;
         payload.extend(std::iter::repeat_n(0u8, padding));
+    }
+
+    fn write_data(
+        &self,
+        header: &FuseInHeader,
+        ram: &mut RamView,
+        in_body_addr: u64,
+        read_bufs: &[(u64, u32)],
+        out_addr: u64,
+    ) -> u32 {
+        if !self.is_writable() {
+            return self.reply_error(header, EACCES, out_addr, ram);
+        }
+
+        let fh = ram.read_u64(in_body_addr);
+        let offset = ram.read_u64(in_body_addr + 8);
+        let size = ram.read_u32(in_body_addr + 16);
+
+        let handle = match self.file_handles.get(&fh) {
+            Some(h) => h,
+            None => return self.reply_error(header, EBADF, out_addr, ram),
+        };
+
+        let mut file = match fs::OpenOptions::new().write(true).open(&handle.path) {
+            Ok(f) => f,
+            Err(_) => return self.reply_error(header, EACCES, out_addr, ram),
+        };
+
+        if file.seek(std::io::SeekFrom::Start(offset)).is_err() {
+            return self.reply_error(header, EINVAL, out_addr, ram);
+        }
+
+        let mut written: u32 = 0;
+        let mut remaining = size;
+        for &(buf_addr, buf_len) in read_bufs.iter().skip(1) {
+            if remaining == 0 {
+                break;
+            }
+            let chunk = buf_len.min(remaining) as usize;
+            let mut data = vec![0u8; chunk];
+            ram.read_bytes(buf_addr, &mut data);
+            match file.write_all(&data) {
+                Ok(_) => written += chunk as u32,
+                Err(_) => break,
+            }
+            remaining -= chunk as u32;
+        }
+
+        let total = 24u32;
+        ram.write_u32(out_addr, total);
+        ram.write_u32(out_addr + 4, 0);
+        ram.write_u64(out_addr + 8, header.unique);
+        ram.write_u32(out_addr + 16, written);
+        ram.write_u32(out_addr + 20, 0);
+
+        total
+    }
+
+    fn create(
+        &mut self,
+        header: &FuseInHeader,
+        ram: &mut RamView,
+        in_body_addr: u64,
+        in_body_len: u32,
+        out_addr: u64,
+        _out_len: u32,
+    ) -> u32 {
+        if !self.is_writable() {
+            return self.reply_error(header, EACCES, out_addr, ram);
+        }
+
+        let name_offset = 16u32;
+        let name = self.read_cstring(
+            ram,
+            in_body_addr + name_offset as u64,
+            in_body_len.saturating_sub(name_offset),
+        );
+
+        let parent_path = if header.nodeid == FUSE_ROOT_ID {
+            match self.root_path() {
+                Some(p) => p.to_path_buf(),
+                None => return self.reply_error(header, ENOENT, out_addr, ram),
+            }
+        } else {
+            match self.inodes.get(&header.nodeid) {
+                Some(inode) => inode.path.clone(),
+                None => return self.reply_error(header, ENOENT, out_addr, ram),
+            }
+        };
+
+        let file_path = parent_path.join(&name);
+
+        if fs::File::create(&file_path).is_err() {
+            return self.reply_error(header, EACCES, out_addr, ram);
+        }
+
+        let metadata = match fs::metadata(&file_path) {
+            Ok(m) => m,
+            Err(_) => return self.reply_error(header, ENOENT, out_addr, ram),
+        };
+
+        let ino = self.get_or_create_inode(&file_path, false);
+
+        let fh = self.next_fh;
+        self.next_fh += 1;
+        self.file_handles.insert(
+            fh,
+            FileHandle {
+                path: file_path,
+                is_dir: false,
+            },
+        );
+
+        let total = 16 + 128 + 16;
+        ram.write_u32(out_addr, total);
+        ram.write_u32(out_addr + 4, 0);
+        ram.write_u64(out_addr + 8, header.unique);
+
+        let body = out_addr + 16;
+        ram.write_u64(body, ino);
+        ram.write_u64(body + 8, 0);
+        ram.write_u64(body + 16, 1);
+        ram.write_u64(body + 24, 1);
+        ram.write_u32(body + 32, 0);
+        ram.write_u32(body + 36, 0);
+        self.write_fuse_attr(ram, body + 40, ino, &metadata);
+
+        let open_out = out_addr + 16 + 128;
+        ram.write_u64(open_out, fh);
+        ram.write_u32(open_out + 8, 0);
+        ram.write_u32(open_out + 12, 0);
+
+        total
+    }
+
+    fn mkdir(
+        &mut self,
+        header: &FuseInHeader,
+        ram: &mut RamView,
+        in_body_addr: u64,
+        in_body_len: u32,
+        out_addr: u64,
+        _out_len: u32,
+    ) -> u32 {
+        if !self.is_writable() {
+            return self.reply_error(header, EACCES, out_addr, ram);
+        }
+
+        let name = self.read_cstring(ram, in_body_addr + 8, in_body_len.saturating_sub(8));
+
+        let parent_path = if header.nodeid == FUSE_ROOT_ID {
+            match self.root_path() {
+                Some(p) => p.to_path_buf(),
+                None => return self.reply_error(header, ENOENT, out_addr, ram),
+            }
+        } else {
+            match self.inodes.get(&header.nodeid) {
+                Some(inode) => inode.path.clone(),
+                None => return self.reply_error(header, ENOENT, out_addr, ram),
+            }
+        };
+
+        let dir_path = parent_path.join(&name);
+
+        if dir_path.exists() {
+            return self.reply_error(header, EEXIST, out_addr, ram);
+        }
+
+        if fs::create_dir(&dir_path).is_err() {
+            return self.reply_error(header, EACCES, out_addr, ram);
+        }
+
+        let metadata = match fs::metadata(&dir_path) {
+            Ok(m) => m,
+            Err(_) => return self.reply_error(header, ENOENT, out_addr, ram),
+        };
+
+        let ino = self.get_or_create_inode(&dir_path, true);
+        self.write_entry_out(header, ram, out_addr, ino, &metadata)
+    }
+
+    fn rmdir(
+        &mut self,
+        header: &FuseInHeader,
+        ram: &mut RamView,
+        in_body_addr: u64,
+        in_body_len: u32,
+        out_addr: u64,
+    ) -> u32 {
+        if !self.is_writable() {
+            return self.reply_error(header, EACCES, out_addr, ram);
+        }
+
+        let name = self.read_cstring(ram, in_body_addr, in_body_len);
+
+        let parent_path = if header.nodeid == FUSE_ROOT_ID {
+            match self.root_path() {
+                Some(p) => p.to_path_buf(),
+                None => return self.reply_error(header, ENOENT, out_addr, ram),
+            }
+        } else {
+            match self.inodes.get(&header.nodeid) {
+                Some(inode) => inode.path.clone(),
+                None => return self.reply_error(header, ENOENT, out_addr, ram),
+            }
+        };
+
+        let dir_path = parent_path.join(&name);
+
+        match fs::remove_dir(&dir_path) {
+            Ok(_) => self.reply_ok(header, out_addr, ram),
+            Err(e) => {
+                let errno = if e.raw_os_error() == Some(39) {
+                    ENOTEMPTY
+                } else {
+                    ENOENT
+                };
+                self.reply_error(header, errno, out_addr, ram)
+            }
+        }
+    }
+
+    fn unlink(
+        &mut self,
+        header: &FuseInHeader,
+        ram: &mut RamView,
+        in_body_addr: u64,
+        in_body_len: u32,
+        out_addr: u64,
+    ) -> u32 {
+        if !self.is_writable() {
+            return self.reply_error(header, EACCES, out_addr, ram);
+        }
+
+        let name = self.read_cstring(ram, in_body_addr, in_body_len);
+
+        let parent_path = if header.nodeid == FUSE_ROOT_ID {
+            match self.root_path() {
+                Some(p) => p.to_path_buf(),
+                None => return self.reply_error(header, ENOENT, out_addr, ram),
+            }
+        } else {
+            match self.inodes.get(&header.nodeid) {
+                Some(inode) => inode.path.clone(),
+                None => return self.reply_error(header, ENOENT, out_addr, ram),
+            }
+        };
+
+        let file_path = parent_path.join(&name);
+
+        match fs::remove_file(&file_path) {
+            Ok(_) => self.reply_ok(header, out_addr, ram),
+            Err(_) => self.reply_error(header, ENOENT, out_addr, ram),
+        }
+    }
+
+    fn rename(
+        &mut self,
+        header: &FuseInHeader,
+        ram: &mut RamView,
+        in_body_addr: u64,
+        in_body_len: u32,
+        out_addr: u64,
+    ) -> u32 {
+        if !self.is_writable() {
+            return self.reply_error(header, EACCES, out_addr, ram);
+        }
+
+        let newdir = ram.read_u64(in_body_addr);
+        let name_start = if header.opcode == FUSE_RENAME2 {
+            12u32
+        } else {
+            8u32
+        };
+
+        let old_name = self.read_cstring(
+            ram,
+            in_body_addr + name_start as u64,
+            in_body_len.saturating_sub(name_start),
+        );
+        let new_name_offset = name_start + old_name.len() as u32 + 1;
+        let new_name = self.read_cstring(
+            ram,
+            in_body_addr + new_name_offset as u64,
+            in_body_len.saturating_sub(new_name_offset),
+        );
+
+        let old_parent = if header.nodeid == FUSE_ROOT_ID {
+            match self.root_path() {
+                Some(p) => p.to_path_buf(),
+                None => return self.reply_error(header, ENOENT, out_addr, ram),
+            }
+        } else {
+            match self.inodes.get(&header.nodeid) {
+                Some(inode) => inode.path.clone(),
+                None => return self.reply_error(header, ENOENT, out_addr, ram),
+            }
+        };
+
+        let new_parent = if newdir == FUSE_ROOT_ID {
+            match self.root_path() {
+                Some(p) => p.to_path_buf(),
+                None => return self.reply_error(header, ENOENT, out_addr, ram),
+            }
+        } else {
+            match self.inodes.get(&newdir) {
+                Some(inode) => inode.path.clone(),
+                None => return self.reply_error(header, ENOENT, out_addr, ram),
+            }
+        };
+
+        let old_path = old_parent.join(&old_name);
+        let new_path = new_parent.join(&new_name);
+
+        match fs::rename(&old_path, &new_path) {
+            Ok(_) => {
+                for inode in self.inodes.values_mut() {
+                    if inode.path == old_path {
+                        inode.path = new_path.clone();
+                        break;
+                    }
+                }
+                self.reply_ok(header, out_addr, ram)
+            }
+            Err(_) => self.reply_error(header, EACCES, out_addr, ram),
+        }
+    }
+
+    fn setattr(
+        &mut self,
+        header: &FuseInHeader,
+        ram: &mut RamView,
+        in_body_addr: u64,
+        out_addr: u64,
+        out_len: u32,
+    ) -> u32 {
+        if !self.is_writable() {
+            return self.reply_error(header, EACCES, out_addr, ram);
+        }
+
+        let valid = ram.read_u32(in_body_addr);
+
+        let path = if header.nodeid == FUSE_ROOT_ID {
+            match self.root_path() {
+                Some(p) => p.to_path_buf(),
+                None => return self.reply_error(header, ENOENT, out_addr, ram),
+            }
+        } else {
+            match self.inodes.get(&header.nodeid) {
+                Some(inode) => inode.path.clone(),
+                None => return self.reply_error(header, ENOENT, out_addr, ram),
+            }
+        };
+
+        if valid & FATTR_SIZE != 0 {
+            let new_size = ram.read_u64(in_body_addr + 16);
+            let file = match fs::OpenOptions::new().write(true).open(&path) {
+                Ok(f) => f,
+                Err(_) => return self.reply_error(header, EACCES, out_addr, ram),
+            };
+            if file.set_len(new_size).is_err() {
+                return self.reply_error(header, EACCES, out_addr, ram);
+            }
+        }
+
+        // if valid & FATTR_MODE != 0 {
+        //  WASI doesn't support chmod
+        // }
+
+        self.getattr(header, out_addr, out_len, ram)
+    }
+
+    fn flush(&self, header: &FuseInHeader, out_addr: u64, ram: &mut RamView) -> u32 {
+        self.reply_ok(header, out_addr, ram)
+    }
+
+    fn reply_ok(&self, header: &FuseInHeader, out_addr: u64, ram: &mut RamView) -> u32 {
+        ram.write_u32(out_addr, 16);
+        ram.write_u32(out_addr + 4, 0);
+        ram.write_u64(out_addr + 8, header.unique);
+        16
     }
 }
