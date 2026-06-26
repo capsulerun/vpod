@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
 use std::io::Seek;
+use std::path::{Path, PathBuf};
 
 use super::{RamView, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
 
@@ -608,11 +608,7 @@ impl VirtioFs {
         let base = 24 + name.len();
         let aligned = (base + 7) & !7;
 
-        if _plus {
-            aligned + 120
-        } else {
-            aligned
-        }
+        if _plus { aligned + 120 } else { aligned }
     }
 
     fn write_dirent(
