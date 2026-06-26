@@ -48,7 +48,7 @@ const ENOTEMPTY: i32 = -39;
 const EEXIST: i32 = -17;
 const EINVAL: i32 = -22;
 
-const FATTR_MODE: u32 = 1 << 0;
+// const FATTR_MODE: u32 = 1 << 0;
 const FATTR_SIZE: u32 = 1 << 3;
 
 const FUSE_ROOT_ID: u64 = 1;
@@ -1032,7 +1032,7 @@ impl VirtioFs {
         }
 
         // if valid & FATTR_MODE != 0 {
-        //  WASI doesn't support chmod
+        //  WASI doesn't support chmod yet
         // }
 
         self.getattr(header, out_addr, out_len, ram)
