@@ -41,6 +41,7 @@ fn main() {
         usage();
     });
 
+    let mount_args = mounts.clone();
     let (mut bus, mut hart, flags) = vm::load(vm::VmConfig {
         snapshot: &snap,
         disk: disk_path.as_deref(),
@@ -53,7 +54,17 @@ fn main() {
     });
 
     if flags & machine::snapshot::FLAG_SHELL_READY != 0 {
-        for &b in b"stty echo; export PS1='\\w # '; trap - EXIT\n" {
+        let mut script = String::new();
+        for mount in &mount_args {
+            script.push_str(&format!(
+                "mkdir -p {0} && mount -t virtiofs virtiofs {0} 2>/dev/null; ",
+                mount.guest_path
+            ));
+        }
+
+        script.push_str("stty echo; export PS1='\\w # '; trap - EXIT\n");
+
+        for b in script.bytes() {
             bus.uart.push_rx(b);
         }
     }

@@ -108,6 +108,10 @@ impl VirtioFs {
         device
     }
 
+    pub fn set_mounts(&mut self, mounts: Vec<Mount>) {
+        self.mounts = mounts;
+    }
+
     fn root_path(&self) -> Option<&Path> {
         self.mounts.first().map(|m| m.host_path.as_path())
     }
@@ -166,12 +170,28 @@ impl VirtioFs {
             _padding: ram.read_u32(header_addr + 36),
         };
 
-        let in_body_addr = header_addr + 40;
-        let in_body_len = header_len.saturating_sub(40);
+        let (in_body_addr, in_body_len) = if header_len > 40 {
+            (header_addr + 40, header_len - 40)
+        } else if read_bufs.len() > 1 {
+            (read_bufs[1].0, read_bufs[1].1)
+        } else {
+            (header_addr + 40, 0)
+        };
 
-        let (out_addr, out_len) = write_bufs[0];
+        let out_len: u32 = write_bufs.iter().map(|(_, l)| *l).sum();
+        let (out_addr, needs_scatter) = if write_bufs.len() == 1 {
+            (write_bufs[0].0, false)
+        } else {
+            let (first_addr, first_len) = write_bufs[0];
+            if write_bufs[1].0 == first_addr + first_len as u64 {
+                (first_addr, false)
+            } else {
+                let scratch = crate::RAM_BASE + ram.len() as u64 - 4096;
+                (scratch, true)
+            }
+        };
 
-        match header.opcode {
+        let used_len = match header.opcode {
             FUSE_INIT => self.init(&header, out_addr, out_len, ram),
             FUSE_LOOKUP => self.lookup(&header, ram, in_body_addr, in_body_len, out_addr, out_len),
             FUSE_GETATTR => self.getattr(&header, out_addr, out_len, ram),
@@ -183,7 +203,7 @@ impl VirtioFs {
                 self.release(&header, ram, in_body_addr, out_addr, out_len)
             }
             FUSE_STATFS => self.statfs(&header, out_addr, out_len, ram),
-            FUSE_FORGET | FUSE_BATCH_FORGET => 0,
+            FUSE_FORGET | FUSE_BATCH_FORGET => return 0,
             FUSE_WRITE => self.write_data(&header, ram, in_body_addr, &read_bufs, out_addr),
             FUSE_CREATE => self.create(&header, ram, in_body_addr, in_body_len, out_addr, out_len),
             FUSE_MKDIR => self.mkdir(&header, ram, in_body_addr, in_body_len, out_addr, out_len),
@@ -195,7 +215,27 @@ impl VirtioFs {
             FUSE_SETATTR => self.setattr(&header, ram, in_body_addr, out_addr, out_len),
             FUSE_FLUSH | FUSE_FSYNC | FUSE_FSYNCDIR => self.flush(&header, out_addr, ram),
             _ => self.reply_error(&header, ENOSYS, out_addr, ram),
+        };
+
+        if needs_scatter && used_len > 0 {
+            let mut src_offset = 0u64;
+            for &(buf_addr, buf_len) in &write_bufs {
+                let copy_len = (used_len as u64 - src_offset).min(buf_len as u64);
+
+                if copy_len == 0 {
+                    break;
+                }
+
+                for i in 0..copy_len {
+                    let b = ram.read_u8(out_addr + src_offset + i);
+                    ram.write_u8(buf_addr + i, b);
+                }
+
+                src_offset += copy_len;
+            }
         }
+
+        used_len
     }
 
     fn init(&self, header: &FuseInHeader, out_addr: u64, _out_len: u32, ram: &mut RamView) -> u32 {

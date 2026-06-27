@@ -69,7 +69,11 @@ impl MachineBus {
     }
 
     pub fn attach_fs(&mut self, mounts: Vec<Mount>) {
-        self.fs = Some(VirtioFs::new(mounts));
+        if let Some(fs) = &mut self.fs {
+            fs.set_mounts(mounts);
+        } else {
+            self.fs = Some(VirtioFs::new(mounts));
+        }
     }
 
     pub fn ram_size(&self) -> u64 {
@@ -523,7 +527,7 @@ pub fn boot(
         ],
         bus.blk.is_some(),
         bus.net.is_some(),
-        bus.fs.is_some(),
+        true,
         bootargs,
         initrd_start,
         initrd_end,

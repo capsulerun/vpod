@@ -6,6 +6,7 @@ use riscv_core::Hart;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
+#[derive(Clone)]
 pub struct MountArg {
     pub alias: String,
 
@@ -94,6 +95,7 @@ pub fn load(config: VmConfig) -> Result<(MachineBus, Hart, u8), String> {
 
     let mut bus = MachineBus::new(ram_size);
     bus.attach_net();
+    bus.attach_fs(vec![]);
     let mut hart = Hart::new(0x1000);
 
     if let Some(disk_path) = config.disk {

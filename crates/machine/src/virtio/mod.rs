@@ -50,6 +50,10 @@ impl<'a> RamView<'a> {
         Self { ram, mask }
     }
 
+    pub fn len(&self) -> usize {
+        self.ram.len()
+    }
+
     fn idx(&self, physical_address: u64) -> usize {
         ((physical_address - RAM_BASE) & self.mask) as usize
     }
