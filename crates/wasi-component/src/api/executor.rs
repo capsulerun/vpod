@@ -12,6 +12,7 @@ impl Guest for Executor {
         let (mut bus, mut hart, flags) = vm::load(vm::VmConfig {
             snapshot: snapshot_path.as_ref(),
             disk: None,
+            mounts: vec![],
             capture_tx: true,
         })?;
 

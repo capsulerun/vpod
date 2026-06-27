@@ -41,6 +41,12 @@ pub fn save(
         net.mmio.serialize(writer)?;
     }
 
+    let has_fs = bus.fs.is_some();
+    writer.write_all(&[has_fs as u8])?;
+    if let Some(fs) = &bus.fs {
+        fs.mmio.serialize(writer)?;
+    }
+
     Ok(())
 }
 
@@ -104,6 +110,16 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
     if has_net[0] != 0 {
         if let Some(net) = &mut bus.net {
             net.mmio.deserialize(reader)?;
+        } else {
+            let mut skip = crate::virtio::VirtioMmio::new(0, 0, 2);
+            skip.deserialize(reader)?;
+        }
+    }
+
+    let mut has_fs = [0u8; 1];
+    if reader.read_exact(&mut has_fs).is_ok() && has_fs[0] != 0 {
+        if let Some(fs) = &mut bus.fs {
+            fs.mmio.deserialize(reader)?;
         } else {
             let mut skip = crate::virtio::VirtioMmio::new(0, 0, 2);
             skip.deserialize(reader)?;
