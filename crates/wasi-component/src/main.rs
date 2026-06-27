@@ -5,7 +5,9 @@ mod vm;
 use std::path::PathBuf;
 
 fn usage() -> ! {
-    eprintln!("usage: vpod-wasi-cli --snapshot-load <file> [--disk <img>]");
+    eprintln!(
+        "usage: vpod-wasi-cli --snapshot-load <file> [--disk <img>] [--mount alias:guest[:rw]]"
+    );
     std::process::exit(1);
 }
 
@@ -17,11 +19,16 @@ fn main() {
 
     let mut disk_path: Option<PathBuf> = None;
     let mut snap_load: Option<PathBuf> = None;
+    let mut mounts: Vec<vm::MountArg> = Vec::new();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--snapshot-load" => snap_load = Some(args.next().unwrap_or_else(|| usage()).into()),
             "--disk" => disk_path = Some(args.next().unwrap_or_else(|| usage()).into()),
+            "--mount" => {
+                let val = args.next().unwrap_or_else(|| usage());
+                mounts.push(vm::MountArg::parse(&val));
+            }
             _ => {
                 eprintln!("unknown argument: {arg}");
                 usage();
@@ -37,6 +44,7 @@ fn main() {
     let (mut bus, mut hart, flags) = vm::load(vm::VmConfig {
         snapshot: &snap,
         disk: disk_path.as_deref(),
+        mounts,
         capture_tx: true,
     })
     .unwrap_or_else(|e| {

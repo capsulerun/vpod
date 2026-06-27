@@ -39,6 +39,7 @@ impl SessionManager {
         let (mut bus, mut hart, flags) = crate::vm::load(crate::vm::VmConfig {
             snapshot: snapshot_path.as_ref(),
             disk: None,
+            mounts: vec![],
             capture_tx: true,
         })?;
 
