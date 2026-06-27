@@ -50,6 +50,10 @@ impl<'a> RamView<'a> {
         Self { ram, mask }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.ram.is_empty()
+    }
+
     pub fn len(&self) -> usize {
         self.ram.len()
     }
