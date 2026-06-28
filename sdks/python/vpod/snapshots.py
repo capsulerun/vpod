@@ -26,7 +26,7 @@ def cache_dir() -> Path:
 def pull(name: str = "vsnap-base:latest") -> Path:
     """
     Downloads from the registry if not already cached.
-    If the cached snapshot has an invalid format re-downloads.
+    If the cached snapshot is corrupt, force-refreshes the registry and re-downloads.
     """
     override_path = os.environ.get("VPOD_SNAPSHOT")
     if override_path:
@@ -43,7 +43,14 @@ def pull(name: str = "vsnap-base:latest") -> Path:
     if dest.exists() and meta.exists() and meta.read_text().strip() == snapshot["sha256"]:
         if _validate_snapshot_magic(dest):
             return dest
-        return repull(name)
+
+        _REGISTRY_CACHE.unlink(missing_ok=True)
+        registry = fetch_registry()
+        snapshot = resolve_snapshot(registry, name)
+        dest = cache_dir() / f"{snapshot['id']}.snap"
+        meta = dest.with_suffix(".meta")
+        dest.unlink(missing_ok=True)
+        meta.unlink(missing_ok=True)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     _download_and_decompress(snapshot["url"], dest, snapshot["sha256"])
@@ -54,28 +61,6 @@ def pull(name: str = "vsnap-base:latest") -> Path:
 
 _REGISTRY_TTL = 86400
 _REGISTRY_CACHE = cache_dir() / "snapshots.json"
-
-
-def force_refresh_registry() -> list[dict]:
-    _REGISTRY_CACHE.unlink(missing_ok=True)
-    return fetch_registry()
-
-
-def repull(name: str = "vsnap-base:latest") -> Path:
-    registry = force_refresh_registry()
-    snapshot = resolve_snapshot(registry, name)
-
-    dest = cache_dir() / f"{snapshot['id']}.snap"
-    meta = dest.with_suffix(".meta")
-
-    dest.unlink(missing_ok=True)
-    meta.unlink(missing_ok=True)
-
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    _download_and_decompress(snapshot["url"], dest, snapshot["sha256"])
-    meta.write_text(snapshot["sha256"])
-
-    return dest
 
 
 def fetch_registry() -> list[dict]:
