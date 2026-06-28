@@ -19,6 +19,9 @@ struct Cli {
 
     #[arg(long, env = "VPOD_REGISTRY", global = true, hide = true)]
     registry: Option<String>,
+
+    #[arg(short = 'm', long = "mount", global = true)]
+    mounts: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -34,11 +37,16 @@ enum Cmd {
     },
 
     List,
+
+    #[command(external_subcommand)]
+    External(Vec<String>),
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let reg_url = cli.registry.as_deref().unwrap_or(DEFAULT_REGISTRY);
+
+    let mounts = cli.mounts;
 
     match cli.command.unwrap_or(Cmd::Start {
         snapshot: "alpine-3.23.0-256mb".to_string(),
@@ -47,8 +55,13 @@ fn main() -> Result<()> {
             snapshot: snapshot_name,
         } => {
             let (version, snapshot) = resolve_snapshot(&snapshot_name, reg_url)?;
+            let parsed_mounts = start::parse_mounts(&mounts)?;
 
-            start::run(start::RunConfig { version, snapshot })?;
+            start::run(start::RunConfig {
+                version,
+                snapshot,
+                mounts: parsed_mounts,
+            })?;
         }
 
         Cmd::Pull { snapshot } => {
@@ -97,6 +110,18 @@ fn main() -> Result<()> {
                 eprintln!("\x1b[2mRegistry unreachable\x1b[0m");
             }
         },
+
+        Cmd::External(args) => {
+            let snapshot_name = args.first().map(|s| s.as_str()).unwrap_or("vpod-base");
+            let (version, snapshot) = resolve_snapshot(snapshot_name, reg_url)?;
+            let parsed_mounts = start::parse_mounts(&mounts)?;
+
+            start::run(start::RunConfig {
+                version,
+                snapshot,
+                mounts: parsed_mounts,
+            })?;
+        }
     }
 
     Ok(())

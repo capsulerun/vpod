@@ -1,6 +1,6 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use super::{RamView, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
+use super::{RAM_BASE, RamView, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
 
 const DEVICE_ID: u32 = 2;
 const VIRTIO_F_VERSION_1: u64 = 1u64 << 32;
@@ -149,7 +149,7 @@ impl VirtioBlk {
 
         self.file.seek(SeekFrom::Start(sector * SECTOR_SIZE))?;
 
-        let index = ((destination - crate::RAM_BASE) & ram.mask) as usize;
+        let index = ((destination - RAM_BASE) & ram.mask) as usize;
         self.file
             .read_exact(&mut ram.ram[index..index + length as usize])?;
 
@@ -170,7 +170,7 @@ impl VirtioBlk {
 
         self.file.seek(SeekFrom::Start(sector * SECTOR_SIZE))?;
 
-        let index = ((source - crate::RAM_BASE) & ram.mask) as usize;
+        let index = ((source - RAM_BASE) & ram.mask) as usize;
         self.file
             .write_all(&ram.ram[index..index + length as usize])?;
 

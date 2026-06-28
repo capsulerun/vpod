@@ -219,6 +219,7 @@ pub fn build(
     virtio_irqs: &[u32],
     has_blk: bool,
     has_net: bool,
+    num_fs: usize,
     bootargs: &str,
     initrd_start: u64,
     initrd_end: u64,
@@ -359,6 +360,19 @@ pub fn build(
         builder.prop_interrupt_parent(3);
         builder.prop_interrupts(irq);
         builder.prop_str("device", name);
+        builder.end_node();
+    }
+
+    for i in 0..num_fs {
+        let slot = 3 + i;
+        let base = virtio_base + slot as u64 * virtio_size;
+        let irq = 8 + i as u32;
+        builder.begin_node(&format!("virtio_mmio@{:x}", base));
+        builder.prop_str("compatible", "virtio,mmio");
+        builder.prop_reg(base, virtio_size);
+        builder.prop_interrupt_parent(3);
+        builder.prop_interrupts(irq);
+        builder.prop_str("device", "virtio-fs");
         builder.end_node();
     }
 

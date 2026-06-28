@@ -137,6 +137,7 @@ ip link set lo up 2>/dev/null || true
 modprobe virtio_mmio 2>/dev/null || true
 modprobe virtio_net  2>/dev/null || true
 modprobe virtio_blk  2>/dev/null || true
+modprobe virtiofs    2>/dev/null || true
 
 ip link set eth0 up                       2>/dev/null || true
 ip addr add 10.0.2.15/24 dev eth0         2>/dev/null || true

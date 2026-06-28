@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::clint::{CLINT_BASE, CLINT_SIZE, Clint, TIMER_FREQUENCY};
 use crate::dtb;
 use crate::plic::{PLIC_BASE, PLIC_SIZE, Plic};
@@ -5,6 +7,7 @@ use crate::uart::Uart;
 use crate::virtio::RamView;
 use crate::virtio::blk::VirtioBlk;
 use crate::virtio::console::VirtioConsole;
+use crate::virtio::fs::{Mount, VirtioFs};
 use crate::virtio::net::VirtioNet;
 use crate::virtio::slirp::SlirpBackend;
 
@@ -12,7 +15,7 @@ use crate::{
     GUEST_MAC, KERNEL_OFFSET, LOW_RAM_BASE, LOW_RAM_SIZE, RAM_BASE, UART_BASE, UART_CTRL_BASE,
     UART_CTRL_IRQ, UART_CTRL_SIZE, UART_DATA_BASE, UART_DATA_IRQ, UART_DATA_SIZE, UART_IRQ,
     UART_SIZE, UART_STDERR_BASE, UART_STDERR_IRQ, UART_STDERR_SIZE, VIRTIO_BASE, VIRTIO_BLK_IRQ,
-    VIRTIO_CONSOLE_IRQ, VIRTIO_NET_IRQ, VIRTIO_SIZE,
+    VIRTIO_CONSOLE_IRQ, VIRTIO_FS_BASE_IRQ, VIRTIO_MAX_FS, VIRTIO_NET_IRQ, VIRTIO_SIZE,
 };
 
 use riscv_core::csr::{MIP_MEIP, MIP_MSIP, MIP_MTIP, MIP_SEIP};
@@ -31,6 +34,7 @@ pub struct MachineBus {
     pub blk: Option<VirtioBlk>,
     pub console: VirtioConsole,
     pub net: Option<VirtioNet<SlirpBackend>>,
+    pub fs_devices: Vec<VirtioFs>,
 }
 
 impl MachineBus {
@@ -52,6 +56,7 @@ impl MachineBus {
             blk: None,
             console: VirtioConsole::new(),
             net: None,
+            fs_devices: Vec::new(),
         }
     }
 
@@ -63,6 +68,26 @@ impl MachineBus {
     pub fn attach_net(&mut self) {
         let backend = SlirpBackend::new(GUEST_MAC);
         self.net = Some(VirtioNet::new(backend, GUEST_MAC));
+    }
+
+    pub fn attach_fs(&mut self, mounts: Vec<Mount>) {
+        self.fs_devices = (0..crate::VIRTIO_MAX_FS)
+            .map(|i| {
+                let tag = format!("vfs{}", i);
+                if let Some(mount) = mounts.get(i).cloned() {
+                    VirtioFs::new_single(mount, &tag)
+                } else {
+                    VirtioFs::new_single(
+                        Mount {
+                            host_path: PathBuf::new(),
+                            tag: tag.clone(),
+                            writable: false,
+                        },
+                        &tag,
+                    )
+                }
+            })
+            .collect();
     }
 
     pub fn ram_size(&self) -> u64 {
@@ -119,6 +144,13 @@ impl MachineBus {
             network_device.poll_rx(&mut ram);
             self.plic
                 .set_irq(VIRTIO_NET_IRQ, network_device.mmio.int_status != 0);
+        }
+
+        for (i, fs_device) in self.fs_devices.iter().enumerate() {
+            self.plic.set_irq(
+                VIRTIO_FS_BASE_IRQ + i as u32,
+                fs_device.mmio.int_status != 0,
+            );
         }
 
         if self.plic.irq_pending() {
@@ -179,8 +211,9 @@ impl MachineBus {
         unsafe { *self.ram.get_unchecked(index) }
     }
 
-    fn virtio_device_slot(address: u64) -> Option<usize> {
-        if (VIRTIO_BASE..VIRTIO_BASE + VIRTIO_SIZE * 3).contains(&address) {
+    fn virtio_device_slot(&self, address: u64) -> Option<usize> {
+        let num_slots = 3 + VIRTIO_MAX_FS;
+        if (VIRTIO_BASE..VIRTIO_BASE + VIRTIO_SIZE * num_slots as u64).contains(&address) {
             Some(((address - VIRTIO_BASE) / VIRTIO_SIZE) as usize)
         } else {
             None
@@ -224,7 +257,7 @@ impl SystemBus for MachineBus {
                 .read_register((address - UART_DATA_BASE) as u8);
         }
 
-        if let Some(slot) = Self::virtio_device_slot(address) {
+        if let Some(slot) = self.virtio_device_slot(address) {
             let offset = Self::virtio_register_offset(address);
             let word_offset = offset & !3;
             let byte_index = (offset & 3) as usize;
@@ -232,6 +265,10 @@ impl SystemBus for MachineBus {
                 0 => self.blk.as_ref().map_or(0, |b| b.mmio.read(word_offset)),
                 1 => self.console.mmio.read(word_offset),
                 2 => self.net.as_ref().map_or(0, |n| n.mmio.read(word_offset)),
+                s if s >= 3 => self
+                    .fs_devices
+                    .get(s - 3)
+                    .map_or(0, |f| f.mmio.read(word_offset)),
                 _ => 0,
             };
 
@@ -261,7 +298,7 @@ impl SystemBus for MachineBus {
             return self.plic.read_register(address - PLIC_BASE);
         }
 
-        if let Some(slot) = Self::virtio_device_slot(address) {
+        if let Some(slot) = self.virtio_device_slot(address) {
             let offset = Self::virtio_register_offset(address);
             return match slot {
                 0 => self
@@ -273,6 +310,10 @@ impl SystemBus for MachineBus {
                     .net
                     .as_ref()
                     .map_or(0, |device| device.mmio.read(offset)),
+                s if s >= 3 => self
+                    .fs_devices
+                    .get(s - 3)
+                    .map_or(0, |d| d.mmio.read(offset)),
                 _ => 0,
             };
         }
@@ -359,7 +400,7 @@ impl SystemBus for MachineBus {
             return;
         }
 
-        if let Some(slot) = Self::virtio_device_slot(address) {
+        if let Some(slot) = self.virtio_device_slot(address) {
             let offset = Self::virtio_register_offset(address);
             let notify_queue_index = match slot {
                 0 => self
@@ -371,6 +412,10 @@ impl SystemBus for MachineBus {
                     .net
                     .as_mut()
                     .and_then(|device| device.mmio.write(offset, value)),
+                s if s >= 3 => self
+                    .fs_devices
+                    .get_mut(s - 3)
+                    .and_then(|d| d.mmio.write(offset, value)),
                 _ => None,
             };
 
@@ -388,6 +433,11 @@ impl SystemBus for MachineBus {
                     2 => {
                         if let Some(network_device) = &mut self.net {
                             network_device.notify(queue_index, &mut ram);
+                        }
+                    }
+                    s if s >= 3 => {
+                        if let Some(fs_device) = self.fs_devices.get_mut(s - 3) {
+                            fs_device.notify(queue_index, &mut ram);
                         }
                     }
                     _ => {}
@@ -492,6 +542,7 @@ pub fn boot(
         &[VIRTIO_BLK_IRQ, VIRTIO_CONSOLE_IRQ, VIRTIO_NET_IRQ],
         bus.blk.is_some(),
         bus.net.is_some(),
+        VIRTIO_MAX_FS,
         bootargs,
         initrd_start,
         initrd_end,

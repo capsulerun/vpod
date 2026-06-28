@@ -1,13 +1,50 @@
 use lz4_flex::frame::FrameDecoder;
 use machine::machine_bus::MachineBus;
 use machine::snapshot;
+use machine::virtio::fs::Mount;
 use riscv_core::Hart;
 use std::io::{BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+#[derive(Clone)]
+pub struct MountArg {
+    pub alias: String,
+
+    #[allow(dead_code)]
+    pub guest_path: String, // clippy doesn't see the usage in main.rs
+
+    pub writable: bool,
+}
+
+impl MountArg {
+    #[allow(dead_code)] // clippy doesn't see the usage in main.rs
+    pub fn parse(s: &str) -> Self {
+        let parts: Vec<&str> = s.split(':').collect();
+
+        match parts.len() {
+            2 => Self {
+                alias: parts[0].to_string(),
+                guest_path: parts[1].to_string(),
+                writable: false,
+            },
+            3 => Self {
+                alias: parts[0].to_string(),
+                guest_path: parts[1].to_string(),
+                writable: parts[2] == "rw",
+            },
+            _ => Self {
+                alias: s.to_string(),
+                guest_path: "/mnt".to_string(),
+                writable: false,
+            },
+        }
+    }
+}
 
 pub struct VmConfig<'a> {
     pub snapshot: &'a Path,
     pub disk: Option<&'a Path>,
+    pub mounts: Vec<MountArg>,
     pub capture_tx: bool,
 }
 
@@ -22,6 +59,7 @@ fn ram_size_from_filename(snapshot_path: &Path) -> Option<u64> {
                 .ok()
                 .map(|mb| mb * 1024 * 1024);
         }
+
         if lower.ends_with("gb") {
             return lower
                 .trim_end_matches("gb")
@@ -57,6 +95,7 @@ pub fn load(config: VmConfig) -> Result<(MachineBus, Hart, u8), String> {
 
     let mut bus = MachineBus::new(ram_size);
     bus.attach_net();
+    bus.attach_fs(vec![]);
     let mut hart = Hart::new(0x1000);
 
     if let Some(disk_path) = config.disk {
@@ -84,6 +123,16 @@ pub fn load(config: VmConfig) -> Result<(MachineBus, Hart, u8), String> {
         }
     }
     .map_err(|e| format!("failed to restore snapshot: {e}"))?;
+
+    for (i, m) in config.mounts.iter().enumerate() {
+        if let Some(fs) = bus.fs_devices.get_mut(i) {
+            fs.set_mounts(vec![Mount {
+                host_path: PathBuf::from(&m.alias),
+                tag: format!("vfs{}", i),
+                writable: m.writable,
+            }]);
+        }
+    }
 
     bus.uart.capture_tx.set(config.capture_tx);
     bus.uart_stderr.capture_tx.set(true);
