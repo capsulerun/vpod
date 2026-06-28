@@ -17,8 +17,20 @@ pub fn snapshot_path(snap: &Snapshot) -> PathBuf {
     cache_dir().join(format!("{}.snap", snap.id))
 }
 
+pub fn meta_path(snap: &Snapshot) -> PathBuf {
+    cache_dir().join(format!("{}.meta", snap.id))
+}
+
 pub fn is_cached(snap: &Snapshot) -> bool {
-    snapshot_path(snap).exists()
+    let dest = snapshot_path(snap);
+    let meta = meta_path(snap);
+    if dest.exists() && meta.exists() {
+        fs::read_to_string(&meta)
+            .map(|s| s.trim() == snap.sha256)
+            .unwrap_or(false)
+    } else {
+        false
+    }
 }
 
 pub fn pull(snap: &Snapshot) -> Result<PathBuf> {
@@ -73,6 +85,9 @@ pub fn pull(snap: &Snapshot) -> Result<PathBuf> {
 
     fs::rename(&tmp, &dest)
         .with_context(|| format!("failed to move snapshot to {}", dest.display()))?;
+
+    let meta = meta_path(snap);
+    fs::write(&meta, &snap.sha256)?;
 
     eprintln!("Pulled {} → {}", snap.display_name(), dest.display());
     Ok(dest)

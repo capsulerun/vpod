@@ -73,7 +73,7 @@ def _get_or_load_component(wasm_path: Path):
     return _engine, _component
 
 
-def load_component(wasm_path: Path, snapshot_path: Path = None):
+def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list[str] | None = None):
     from . import snapshots as _snapshots
     snap_dir = str(_snapshots.cache_dir()) if snapshot_path is None else str(snapshot_path.parent)
 
@@ -85,6 +85,11 @@ def load_component(wasm_path: Path, snapshot_path: Path = None):
     wasi.inherit_stderr()
     wasi.inherit_stdin()
     wasi.preopen_dir(snap_dir, snap_dir)
+
+    if mount_dirs:
+        for dir_path in mount_dirs:
+            wasi.preopen_dir(dir_path, dir_path)
+
     wasi_config_inherit_network(wasi.ptr())
     store.set_wasi(wasi)
 

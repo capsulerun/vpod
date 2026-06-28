@@ -11,9 +11,35 @@ use wasmtime_wasi::{DirPerms, FilePerms, IoView, WasiCtx, WasiCtxBuilder, WasiVi
 
 static WASM_BYTES: &[u8] = include_bytes!(env!("VPOD_WASM_PATH"));
 
+pub struct MountEntry {
+    pub host_path: PathBuf,
+    pub guest_path: String,
+    pub writable: bool,
+}
+
+pub fn parse_mounts(mounts: &[String]) -> anyhow::Result<Vec<MountEntry>> {
+    mounts
+        .iter()
+        .map(|m| {
+            let parts: Vec<&str> = m.split(':').collect();
+            let (host, guest, writable) = match parts.len() {
+                2 => (parts[0], parts[1], false),
+                3 => (parts[0], parts[1], parts[2] == "rw"),
+                _ => anyhow::bail!("invalid mount format '{m}', expected host:guest[:rw]"),
+            };
+            Ok(MountEntry {
+                host_path: PathBuf::from(host),
+                guest_path: guest.to_string(),
+                writable,
+            })
+        })
+        .collect()
+}
+
 pub struct RunConfig {
     pub version: String,
     pub snapshot: Snapshot,
+    pub mounts: Vec<MountEntry>,
 }
 
 struct State {
@@ -217,16 +243,36 @@ pub fn run(cfg: RunConfig) -> Result<()> {
         .context("raw snapshot filename is not valid UTF-8")?
         .to_string();
 
-    let wasm_args = vec![
+    let mut wasm_args = vec![
         "vpod-wasi-cli".to_string(),
         "--snapshot-load".to_string(),
         format!("snap/{raw_file}"),
     ];
 
+    for (i, mount) in cfg.mounts.iter().enumerate() {
+        wasm_args.push("--mount".to_string());
+
+        let alias = format!("mount{i}");
+        let rw = if mount.writable { ":rw" } else { "" };
+        wasm_args.push(format!("{alias}:{}{rw}", mount.guest_path));
+    }
+
     let mut builder = WasiCtxBuilder::new();
     builder.inherit_stdin().inherit_stdout().inherit_stderr();
     builder.args(&wasm_args);
     builder.preopened_dir(&snap_dir, "snap", DirPerms::READ, FilePerms::READ)?;
+
+    for (i, mount) in cfg.mounts.iter().enumerate() {
+        let alias = format!("mount{i}");
+        let (dir_perms, file_perms) = if mount.writable {
+            (DirPerms::all(), FilePerms::all())
+        } else {
+            (DirPerms::READ, FilePerms::READ)
+        };
+
+        builder.preopened_dir(&mount.host_path, &alias, dir_perms, file_perms)?;
+    }
+
     builder.inherit_network();
     builder.allow_ip_name_lookup(true);
     builder.allow_blocking_current_thread(true);

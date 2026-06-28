@@ -1,6 +1,9 @@
 // Performs the mathematical and logical calculations requested by the instruction.
 
-use crate::csr::{Csr, PrivMode};
+use crate::csr::{
+    Csr, MSTATUS_FS, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP, MSTATUS_SIE, MSTATUS_SPIE,
+    MSTATUS_SPP, PrivMode,
+};
 use crate::decode::{Instruction, sign_extend};
 use crate::extensions as ext;
 use crate::gpr::Gpr;
@@ -676,14 +679,14 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                 let spp = (ctx.csr.mstatus >> 8) & 1;
                 let spie = (ctx.csr.mstatus >> 5) & 1;
 
-                ctx.csr.mstatus &= !crate::csr::MSTATUS_SPP;
+                ctx.csr.mstatus &= !MSTATUS_SPP;
                 if spie != 0 {
-                    ctx.csr.mstatus |= crate::csr::MSTATUS_SIE;
+                    ctx.csr.mstatus |= MSTATUS_SIE;
                 } else {
-                    ctx.csr.mstatus &= !crate::csr::MSTATUS_SIE;
+                    ctx.csr.mstatus &= !MSTATUS_SIE;
                 }
 
-                ctx.csr.mstatus |= crate::csr::MSTATUS_SPIE;
+                ctx.csr.mstatus |= MSTATUS_SPIE;
                 *ctx.priv_mode = PrivMode::from_bits(spp);
                 ctx.regs.pc = ctx.csr.sepc;
                 ctx.mmu.flush();
@@ -695,15 +698,15 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                 // MRET
                 let mpp = (ctx.csr.mstatus >> 11) & 3;
                 let mpie = (ctx.csr.mstatus >> 7) & 1;
-                ctx.csr.mstatus &= !crate::csr::MSTATUS_MPP;
+                ctx.csr.mstatus &= !MSTATUS_MPP;
 
                 if mpie != 0 {
-                    ctx.csr.mstatus |= crate::csr::MSTATUS_MIE;
+                    ctx.csr.mstatus |= MSTATUS_MIE;
                 } else {
-                    ctx.csr.mstatus &= !crate::csr::MSTATUS_MIE;
+                    ctx.csr.mstatus &= !MSTATUS_MIE;
                 }
 
-                ctx.csr.mstatus |= crate::csr::MSTATUS_MPIE;
+                ctx.csr.mstatus |= MSTATUS_MPIE;
                 *ctx.priv_mode = PrivMode::from_bits(mpp);
                 ctx.regs.pc = ctx.csr.mepc;
                 ctx.mmu.flush();
@@ -1247,13 +1250,13 @@ fn take_interrupt<B: SystemBus>(ctx: &mut ExecContext<B>, irq_bit: u64) -> StepR
         ctx.csr.sepc = ctx.regs.pc;
         ctx.csr.stval = 0;
 
-        let spie = (ctx.csr.mstatus & crate::csr::MSTATUS_SIE) >> 1;
-        ctx.csr.mstatus &= !crate::csr::MSTATUS_SPIE;
+        let spie = (ctx.csr.mstatus & MSTATUS_SIE) >> 1;
+        ctx.csr.mstatus &= !MSTATUS_SPIE;
         ctx.csr.mstatus |= spie << 5;
-        ctx.csr.mstatus &= !crate::csr::MSTATUS_SIE;
+        ctx.csr.mstatus &= !MSTATUS_SIE;
 
         let spp = *ctx.priv_mode as u64;
-        ctx.csr.mstatus = (ctx.csr.mstatus & !crate::csr::MSTATUS_SPP) | (spp << 8);
+        ctx.csr.mstatus = (ctx.csr.mstatus & !MSTATUS_SPP) | (spp << 8);
         *ctx.priv_mode = PrivMode::S;
         ctx.regs.pc = ctx.csr.stvec & !3;
     } else {
@@ -1261,13 +1264,13 @@ fn take_interrupt<B: SystemBus>(ctx: &mut ExecContext<B>, irq_bit: u64) -> StepR
         ctx.csr.mepc = ctx.regs.pc;
         ctx.csr.mtval = 0;
 
-        let mpie = (ctx.csr.mstatus & crate::csr::MSTATUS_MIE) >> 3;
-        ctx.csr.mstatus &= !crate::csr::MSTATUS_MPIE;
+        let mpie = (ctx.csr.mstatus & MSTATUS_MIE) >> 3;
+        ctx.csr.mstatus &= !MSTATUS_MPIE;
         ctx.csr.mstatus |= mpie << 7;
-        ctx.csr.mstatus &= !crate::csr::MSTATUS_MIE;
+        ctx.csr.mstatus &= !MSTATUS_MIE;
 
         let mpp = *ctx.priv_mode as u64;
-        ctx.csr.mstatus = (ctx.csr.mstatus & !crate::csr::MSTATUS_MPP) | (mpp << 11);
+        ctx.csr.mstatus = (ctx.csr.mstatus & !MSTATUS_MPP) | (mpp << 11);
         *ctx.priv_mode = PrivMode::M;
         ctx.regs.pc = ctx.csr.mtvec & !3;
     }
@@ -1285,13 +1288,13 @@ pub fn take_exception<B: SystemBus>(ctx: &mut ExecContext<B>, cause: u64, tval: 
         ctx.csr.sepc = ctx.regs.pc;
         ctx.csr.stval = tval;
 
-        let spie = (ctx.csr.mstatus & crate::csr::MSTATUS_SIE) >> 1;
-        ctx.csr.mstatus &= !crate::csr::MSTATUS_SPIE;
+        let spie = (ctx.csr.mstatus & MSTATUS_SIE) >> 1;
+        ctx.csr.mstatus &= !MSTATUS_SPIE;
         ctx.csr.mstatus |= spie << 5;
-        ctx.csr.mstatus &= !crate::csr::MSTATUS_SIE;
+        ctx.csr.mstatus &= !MSTATUS_SIE;
 
         let spp = *ctx.priv_mode as u64;
-        ctx.csr.mstatus = (ctx.csr.mstatus & !crate::csr::MSTATUS_SPP) | (spp << 8);
+        ctx.csr.mstatus = (ctx.csr.mstatus & !MSTATUS_SPP) | (spp << 8);
         *ctx.priv_mode = PrivMode::S;
         ctx.regs.pc = ctx.csr.stvec & !3;
     } else {
@@ -1299,13 +1302,13 @@ pub fn take_exception<B: SystemBus>(ctx: &mut ExecContext<B>, cause: u64, tval: 
         ctx.csr.mepc = ctx.regs.pc;
         ctx.csr.mtval = tval;
 
-        let mpie = (ctx.csr.mstatus & crate::csr::MSTATUS_MIE) >> 3;
-        ctx.csr.mstatus &= !crate::csr::MSTATUS_MPIE;
+        let mpie = (ctx.csr.mstatus & MSTATUS_MIE) >> 3;
+        ctx.csr.mstatus &= !MSTATUS_MPIE;
         ctx.csr.mstatus |= mpie << 7;
-        ctx.csr.mstatus &= !crate::csr::MSTATUS_MIE;
+        ctx.csr.mstatus &= !MSTATUS_MIE;
 
         let mpp = *ctx.priv_mode as u64;
-        ctx.csr.mstatus = (ctx.csr.mstatus & !crate::csr::MSTATUS_MPP) | (mpp << 11);
+        ctx.csr.mstatus = (ctx.csr.mstatus & !MSTATUS_MPP) | (mpp << 11);
         *ctx.priv_mode = PrivMode::M;
         ctx.regs.pc = ctx.csr.mtvec & !3;
     }
@@ -1450,7 +1453,7 @@ fn check_fs<B: SystemBus>(ctx: &ExecContext<B>, raw: u32) -> Option<StepResult> 
 }
 
 fn mark_fs_dirty<B: SystemBus>(ctx: &mut ExecContext<B>) {
-    ctx.csr.mstatus |= crate::csr::MSTATUS_FS;
+    ctx.csr.mstatus |= MSTATUS_FS;
 }
 
 fn load_fp<B: SystemBus>(

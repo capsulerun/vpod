@@ -28,6 +28,8 @@ pub const VIRTIO_SIZE: u64 = 0x200;
 pub const VIRTIO_BLK_IRQ: u32 = 2;
 pub const VIRTIO_CONSOLE_IRQ: u32 = 3;
 pub const VIRTIO_NET_IRQ: u32 = 4;
+pub const VIRTIO_FS_BASE_IRQ: u32 = 8;
+pub const VIRTIO_MAX_FS: usize = 8;
 
 pub const GUEST_MAC: [u8; 6] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
 

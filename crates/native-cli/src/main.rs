@@ -136,6 +136,8 @@ fn main() {
         bus.attach_net();
     }
 
+    bus.attach_fs(vec![]);
+
     let restored_flags = if let Some(ref snap) = snap_load {
         let mut snap_file = std::fs::File::open(snap).unwrap_or_else(|e| {
             eprintln!("failed to open snapshot {:?}: {e}", snap);

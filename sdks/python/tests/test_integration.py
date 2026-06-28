@@ -305,3 +305,21 @@ def test_python_class_definition():
         result = sbx.code.run("print(c.count)")
         assert result.success
         assert "2" in result.text
+
+
+#  TO UNCOMMENT WHEN SNAPSHOT IS PUSHED
+# def test_mount_read_only(tmp_path):
+#     test_file = tmp_path / "hello.txt"
+#     test_file.write_text("mount_content\n")
+
+#     with Sandbox.create(mounts={str(tmp_path): "/mnt/data"}) as sbx:
+#         result = sbx.commands.run("cat /mnt/data/hello.txt")
+#         assert result.success
+#         assert "mount_content" in result.stdout
+
+
+# def test_mount_read_write(tmp_path):
+#     with Sandbox.create(mounts={str(tmp_path): "/mnt/out:rw"}) as sbx:
+#         sbx.commands.run("echo written_from_guest > /mnt/out/output.txt")
+
+#     assert (tmp_path / "output.txt").read_text().strip() == "written_from_guest"
