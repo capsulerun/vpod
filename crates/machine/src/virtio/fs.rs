@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
-use super::{RamView, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
+use super::{RAM_BASE, RamView, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
 
 const DEVICE_ID: u32 = 26; // VIRTIO_DEVICE_ID_FS
 const VIRTIO_F_VERSION_1: u64 = 1u64 << 32;
@@ -75,6 +75,7 @@ struct FileHandle {
     is_dir: bool,
 }
 
+#[derive(Clone)]
 pub struct Mount {
     pub host_path: PathBuf,
     pub tag: String,
@@ -108,12 +109,36 @@ impl VirtioFs {
         device
     }
 
+    pub fn new_single(mount: Mount, tag: &str) -> Self {
+        let mut device = Self {
+            mmio: VirtioMmio::new(DEVICE_ID, DEVICE_FEATURES, 2),
+            inodes: HashMap::new(),
+            next_inode: FUSE_ROOT_ID + 1,
+            file_handles: HashMap::new(),
+            next_fh: 1,
+            mounts: vec![mount],
+        };
+
+        let tag_bytes = tag.as_bytes();
+        let len = tag_bytes.len().min(36);
+        device.mmio.config[..len].copy_from_slice(&tag_bytes[..len]);
+        device.mmio.config[36..40].copy_from_slice(&1u32.to_le_bytes());
+
+        device
+    }
+
     pub fn set_mounts(&mut self, mounts: Vec<Mount>) {
         self.mounts = mounts;
     }
 
     fn root_path(&self) -> Option<&Path> {
-        self.mounts.first().map(|m| m.host_path.as_path())
+        self.mounts.first().and_then(|m| {
+            if m.host_path.as_os_str().is_empty() {
+                None
+            } else {
+                Some(m.host_path.as_path())
+            }
+        })
     }
 
     fn is_writable(&self) -> bool {
@@ -186,7 +211,7 @@ impl VirtioFs {
             if write_bufs[1].0 == first_addr + first_len as u64 {
                 (first_addr, false)
             } else {
-                let scratch = crate::RAM_BASE + ram.len() as u64 - 4096;
+                let scratch = RAM_BASE + ram.len() as u64 - 4096;
                 (scratch, true)
             }
         };

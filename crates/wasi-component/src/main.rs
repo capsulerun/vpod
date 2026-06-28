@@ -55,10 +55,10 @@ fn main() {
 
     if flags & machine::snapshot::FLAG_SHELL_READY != 0 {
         let mut script = String::new();
-        for mount in &mount_args {
+        for (i, mount) in mount_args.iter().enumerate() {
             script.push_str(&format!(
-                "mkdir -p {0} && mount -t virtiofs virtiofs {0} 2>/dev/null; ",
-                mount.guest_path
+                "mkdir -p {0} && mount -t virtiofs vfs{1} {0} 2>/dev/null; ",
+                mount.guest_path, i
             ));
         }
 

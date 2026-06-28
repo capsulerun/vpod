@@ -5,6 +5,8 @@ use std::sync::LazyLock;
 
 use crate::exports::vpod::sandbox::executor::ExecutionResult;
 use crate::repl;
+use crate::vm;
+
 use machine::machine_bus::MachineBus;
 use riscv_core::Hart;
 
@@ -36,7 +38,7 @@ impl SessionManager {
         command: String,
         prompt: String,
     ) -> Result<u64, String> {
-        let (mut bus, mut hart, flags) = crate::vm::load(crate::vm::VmConfig {
+        let (mut bus, mut hart, flags) = vm::load(vm::VmConfig {
             snapshot: snapshot_path.as_ref(),
             disk: None,
             mounts: vec![],

@@ -124,17 +124,14 @@ pub fn load(config: VmConfig) -> Result<(MachineBus, Hart, u8), String> {
     }
     .map_err(|e| format!("failed to restore snapshot: {e}"))?;
 
-    if !config.mounts.is_empty() {
-        let mounts: Vec<Mount> = config
-            .mounts
-            .iter()
-            .map(|m| Mount {
+    for (i, m) in config.mounts.iter().enumerate() {
+        if let Some(fs) = bus.fs_devices.get_mut(i) {
+            fs.set_mounts(vec![Mount {
                 host_path: PathBuf::from(&m.alias),
-                tag: "virtiofs".to_string(),
+                tag: format!("vfs{}", i),
                 writable: m.writable,
-            })
-            .collect();
-        bus.attach_fs(mounts);
+            }]);
+        }
     }
 
     bus.uart.capture_tx.set(config.capture_tx);

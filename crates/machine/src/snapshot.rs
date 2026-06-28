@@ -5,6 +5,7 @@ use riscv_core::csr::PrivMode;
 
 use crate::LOW_RAM_SIZE;
 use crate::machine_bus::MachineBus;
+use crate::virtio::VirtioMmio;
 
 const MAGIC: &[u8; 4] = b"VPOD";
 const VERSION: u8 = 1;
@@ -41,9 +42,9 @@ pub fn save(
         net.mmio.serialize(writer)?;
     }
 
-    let has_fs = bus.fs.is_some();
-    writer.write_all(&[has_fs as u8])?;
-    if let Some(fs) = &bus.fs {
+    let num_fs = bus.fs_devices.len() as u8;
+    writer.write_all(&[num_fs])?;
+    for fs in &bus.fs_devices {
         fs.mmio.serialize(writer)?;
     }
 
@@ -111,18 +112,21 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
         if let Some(net) = &mut bus.net {
             net.mmio.deserialize(reader)?;
         } else {
-            let mut skip = crate::virtio::VirtioMmio::new(0, 0, 2);
+            let mut skip = VirtioMmio::new(0, 0, 2);
             skip.deserialize(reader)?;
         }
     }
 
-    let mut has_fs = [0u8; 1];
-    if reader.read_exact(&mut has_fs).is_ok() && has_fs[0] != 0 {
-        if let Some(fs) = &mut bus.fs {
-            fs.mmio.deserialize(reader)?;
-        } else {
-            let mut skip = crate::virtio::VirtioMmio::new(0, 0, 2);
-            skip.deserialize(reader)?;
+    let mut num_fs_buf = [0u8; 1];
+    if reader.read_exact(&mut num_fs_buf).is_ok() {
+        let num_fs = num_fs_buf[0] as usize;
+        for i in 0..num_fs {
+            if let Some(fs) = bus.fs_devices.get_mut(i) {
+                fs.mmio.deserialize(reader)?;
+            } else {
+                let mut skip = VirtioMmio::new(0, 0, 2);
+                skip.deserialize(reader)?;
+            }
         }
     }
 
