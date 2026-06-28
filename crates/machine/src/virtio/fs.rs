@@ -457,7 +457,6 @@ impl VirtioFs {
         let mut payload = Vec::with_capacity(max_payload);
         let mut entry_index: u64 = 0;
 
-        // Add "." and ".."
         let dot_entries: Vec<(&str, u64)> = vec![(".", header.nodeid), ("..", 1)];
 
         for (name, ino) in &dot_entries {
@@ -618,7 +617,6 @@ impl VirtioFs {
                 return ino;
             }
         }
-        // temporary inode number for readdir
         0
     }
 
@@ -763,9 +761,29 @@ impl VirtioFs {
             return self.reply_error(header, EINVAL, out_addr, ram);
         }
 
+        let in_body_buf_idx = read_bufs
+            .iter()
+            .position(|&(addr, _)| addr == in_body_addr)
+            .unwrap_or(0);
+
+        let write_in_size: u64 = 40;
+        let data_addr = in_body_addr + write_in_size;
+        let in_body_buf_end = read_bufs[in_body_buf_idx].0 + read_bufs[in_body_buf_idx].1 as u64;
+        let inline_avail = in_body_buf_end.saturating_sub(data_addr) as u32;
+
         let mut written: u32 = 0;
-        let mut remaining = size;
-        for &(buf_addr, buf_len) in read_bufs.iter().skip(1) {
+
+        if inline_avail > 0 {
+            let chunk = inline_avail.min(size) as usize;
+            let mut data = vec![0u8; chunk];
+            ram.read_bytes(data_addr, &mut data);
+            if file.write_all(&data).is_ok() {
+                written += chunk as u32;
+            }
+        }
+
+        let mut remaining = size.saturating_sub(written);
+        for &(buf_addr, buf_len) in read_bufs.iter().skip(in_body_buf_idx + 1) {
             if remaining == 0 {
                 break;
             }

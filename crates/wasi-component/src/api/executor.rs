@@ -1,5 +1,5 @@
 use crate::api::session::SESSION_MANAGER;
-use crate::exports::vpod::sandbox::executor::{ExecutionResult, Guest};
+use crate::exports::vpod::sandbox::executor::{ExecutionResult, Guest, MountEntry};
 use crate::repl;
 use crate::vm;
 
@@ -56,8 +56,17 @@ impl Guest for Executor {
         snapshot_path: String,
         command: String,
         prompt: String,
+        mounts: Vec<MountEntry>,
     ) -> Result<u64, String> {
-        SESSION_MANAGER.start_session(snapshot_path, command, prompt)
+        let mount_args: Vec<vm::MountArg> = mounts
+            .into_iter()
+            .map(|m| vm::MountArg {
+                alias: m.host_alias,
+                guest_path: m.guest_path,
+                writable: m.writable,
+            })
+            .collect();
+        SESSION_MANAGER.start_session(snapshot_path, command, prompt, mount_args)
     }
 
     fn session_exec(handle: u64, code: String) -> Result<ExecutionResult, String> {

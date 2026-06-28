@@ -26,6 +26,7 @@ def cache_dir() -> Path:
 def pull(name: str = "alpine:latest") -> Path:
     """
     Downloads from the registry if not already cached.
+    If the cached snapshot has an invalid format re-downloads.
     """
     override_path = os.environ.get("VPOD_SNAPSHOT")
     if override_path:
@@ -40,7 +41,9 @@ def pull(name: str = "alpine:latest") -> Path:
     meta = dest.with_suffix(".meta")
 
     if dest.exists() and meta.exists() and meta.read_text().strip() == snapshot["sha256"]:
-        return dest
+        if _validate_snapshot_magic(dest):
+            return dest
+        return repull(name)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     _download_and_decompress(snapshot["url"], dest, snapshot["sha256"])
@@ -51,6 +54,28 @@ def pull(name: str = "alpine:latest") -> Path:
 
 _REGISTRY_TTL = 86400
 _REGISTRY_CACHE = cache_dir() / "snapshots.json"
+
+
+def force_refresh_registry() -> list[dict]:
+    _REGISTRY_CACHE.unlink(missing_ok=True)
+    return fetch_registry()
+
+
+def repull(name: str = "alpine:latest") -> Path:
+    registry = force_refresh_registry()
+    snapshot = resolve_snapshot(registry, name)
+
+    dest = cache_dir() / f"{snapshot['id']}.snap"
+    meta = dest.with_suffix(".meta")
+
+    dest.unlink(missing_ok=True)
+    meta.unlink(missing_ok=True)
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _download_and_decompress(snapshot["url"], dest, snapshot["sha256"])
+    meta.write_text(snapshot["sha256"])
+
+    return dest
 
 
 def fetch_registry() -> list[dict]:
@@ -141,6 +166,14 @@ def _decompress_file(src: Path, dst: Path) -> None:
             shutil.copyfileobj(f_in, f_out)
     else:
         shutil.copy2(src, dst)
+
+
+def _validate_snapshot_magic(path: Path) -> bool:
+    try:
+        with open(path, "rb") as f:
+            return f.read(4) == b"VPOD"
+    except OSError:
+        return False
 
 
 def _file_sha256(path: Path) -> str:

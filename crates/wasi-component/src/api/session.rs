@@ -37,11 +37,12 @@ impl SessionManager {
         snapshot_path: String,
         command: String,
         prompt: String,
+        mount_args: Vec<vm::MountArg>,
     ) -> Result<u64, String> {
         let (mut bus, mut hart, flags) = vm::load(vm::VmConfig {
             snapshot: snapshot_path.as_ref(),
             disk: None,
-            mounts: vec![],
+            mounts: mount_args.clone(),
             capture_tx: true,
         })?;
 
@@ -89,6 +90,24 @@ impl SessionManager {
             bus.uart.drain_tx();
             bus.uart_stderr.drain_tx();
             bus.uart_ctrl.drain_tx();
+        }
+
+        if !mount_args.is_empty() && (is_shell || use_pyrunner) {
+            let mut script = String::new();
+            for (i, m) in mount_args.iter().enumerate() {
+                script.push_str(&format!(
+                    "mkdir -p {0} && mount -t virtiofs vfs{1} {0} 2>/dev/null; ",
+                    m.guest_path, i
+                ));
+            }
+
+            script.push('\n');
+            for byte in script.bytes() {
+                bus.uart.push_rx(byte);
+            }
+
+            repl::wait_for_prompt(&mut bus, &mut hart, &prompt_bytes);
+            bus.uart.drain_tx();
         }
 
         let id = self.next_id.get();

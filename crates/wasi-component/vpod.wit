@@ -11,9 +11,15 @@ interface executor {
         exit-code: u32,
     }
 
+    record mount-entry {
+        host-alias: string,
+        guest-path: string,
+        writable: bool,
+    }
+
     execute: func(snapshot-path: string, code: string) -> result<execution-result, string>;
 
-    session-start: func(snapshot-path: string, command: string, prompt: string) -> result<u64, string>;
+    session-start: func(snapshot-path: string, command: string, prompt: string, mounts: list<mount-entry>) -> result<u64, string>;
     session-exec: func(handle: u64, code: string) -> result<execution-result, string>;
     session-close: func(handle: u64);
 }
