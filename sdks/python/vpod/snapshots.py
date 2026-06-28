@@ -23,7 +23,7 @@ def cache_dir() -> Path:
     return base / "vpod" / "snapshots"
 
 
-def pull(name: str = "alpine:latest") -> Path:
+def pull(name: str = "vsnap-base:latest") -> Path:
     """
     Downloads from the registry if not already cached.
     """
@@ -51,6 +51,28 @@ def pull(name: str = "alpine:latest") -> Path:
 
 _REGISTRY_TTL = 86400
 _REGISTRY_CACHE = cache_dir() / "snapshots.json"
+
+
+def force_refresh_registry() -> list[dict]:
+    _REGISTRY_CACHE.unlink(missing_ok=True)
+    return fetch_registry()
+
+
+def repull(name: str = "vsnap-base:latest") -> Path:
+    registry = force_refresh_registry()
+    snapshot = resolve_snapshot(registry, name)
+
+    dest = cache_dir() / f"{snapshot['id']}.snap"
+    meta = dest.with_suffix(".meta")
+
+    dest.unlink(missing_ok=True)
+    meta.unlink(missing_ok=True)
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _download_and_decompress(snapshot["url"], dest, snapshot["sha256"])
+    meta.write_text(snapshot["sha256"])
+
+    return dest
 
 
 def fetch_registry() -> list[dict]:
