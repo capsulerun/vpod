@@ -137,6 +137,7 @@ fn main() {
     }
 
     bus.attach_fs(vec![]);
+    bus.attach_crypto();
 
     let restored_flags = if let Some(ref snap) = snap_load {
         let mut snap_file = std::fs::File::open(snap).unwrap_or_else(|e| {
