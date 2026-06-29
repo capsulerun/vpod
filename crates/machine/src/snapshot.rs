@@ -146,11 +146,13 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
     let _ = bus.uart_data.deserialize(reader);
 
     let mut has_crypto = [0u8; 1];
-    if reader.read_exact(&mut has_crypto).is_ok()
-        && has_crypto[0] == 1
-        && let Some(crypto) = &mut bus.crypto
-    {
-        let _ = crypto.mmio.deserialize(reader);
+    if reader.read_exact(&mut has_crypto).is_ok() && has_crypto[0] == 1 {
+        if let Some(crypto) = &mut bus.crypto {
+            let _ = crypto.mmio.deserialize(reader);
+        } else {
+            let mut skip = VirtioMmio::new(0, 0, 2);
+            let _ = skip.deserialize(reader);
+        }
     }
 
     Ok(flags[0])

@@ -134,10 +134,15 @@ mount -t tmpfs    tmpfs    /tmp
 hostname vpod
 ip link set lo up 2>/dev/null || true
 
-modprobe virtio_mmio 2>/dev/null || true
-modprobe virtio_net  2>/dev/null || true
-modprobe virtio_blk  2>/dev/null || true
-modprobe virtiofs    2>/dev/null || true
+modprobe virtio_mmio   2>/dev/null || true
+modprobe virtio_net    2>/dev/null || true
+modprobe virtio_blk    2>/dev/null || true
+modprobe virtiofs      2>/dev/null || true
+modprobe virtio_crypto 2>/dev/null || true
+modprobe af_alg        2>/dev/null || true
+modprobe algif_aead    2>/dev/null || true
+modprobe algif_hash    2>/dev/null || true
+modprobe algif_skcipher 2>/dev/null || true
 
 ip link set eth0 up                       2>/dev/null || true
 ip addr add 10.0.2.15/24 dev eth0         2>/dev/null || true
@@ -157,10 +162,11 @@ fi
 
 export TERM=dumb
 export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+export OPENSSL_CONF=/etc/ssl/openssl.cnf
 export ENV=''
 unset HISTFILE
 set +o history 2>/dev/null || true
-exec setsid sh -c 'HISTFILE=/dev/null HISTSIZE=0 SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt exec sh </dev/ttyS0 >/dev/ttyS0 2>&1'
+exec setsid sh -c 'HISTFILE=/dev/null HISTSIZE=0 SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt OPENSSL_CONF=/etc/ssl/openssl.cnf exec sh </dev/ttyS0 >/dev/ttyS0 2>&1'
 INIT_EOF
 chmod +x "$OVERLAY/sbin/init"
 ln -sf /sbin/init "$OVERLAY/init"
@@ -213,12 +219,42 @@ rm -rf "$MINI_WORK"
 mkdir -p "$MINI_WORK"
 bsdtar -xf "$MINIROOTFS" -C "$MINI_WORK" --no-same-owner
 
-echo "── Extracting kernel modules into minirootfs..."
 mkdir -p "$MINI_WORK/lib"
-gunzip -c "$INITRAMFS_LTS" | (cd "$MINI_WORK" && cpio -idmu --quiet 'usr/lib/modules/*') 2>/dev/null || true
-if [ -d "$MINI_WORK/usr/lib/modules" ] && [ ! -e "$MINI_WORK/lib/modules" ]; then
+
+echo "── Downloading linux-lts package for kernel + crypto modules..."
+LTS_APK="$ROOT/dist/linux-lts.apk"
+LTS_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_MINOR}/main/riscv64/linux-lts-6.18.37-r0.apk"
+if [ ! -f "$LTS_APK" ]; then
+    curl -L --progress-bar -o "$LTS_APK" "$LTS_URL"
+fi
+LTS_EXTRACT="$ROOT/dist/lts-extract"
+rm -rf "$LTS_EXTRACT"
+mkdir -p "$LTS_EXTRACT"
+bsdtar -xzf "$LTS_APK" -C "$LTS_EXTRACT" \
+    'boot/vmlinuz-lts' \
+    'lib/modules/*'
+# Use the matching kernel so modules load correctly
+LTS_VMLINUZ="$LTS_EXTRACT/boot/vmlinuz-lts"
+if [ -f "$LTS_VMLINUZ" ]; then
+    MAGIC_LTS=$(dd if="$LTS_VMLINUZ" bs=2 count=1 2>/dev/null | od -A n -t x1 | tr -d ' \n')
+    if [ "$MAGIC_LTS" = "1f8b" ]; then
+        gzip -dc "$LTS_VMLINUZ" > "$KERNEL"
+    else
+        cp "$LTS_VMLINUZ" "$KERNEL"
+    fi
+    echo "   Updated kernel to 6.18.37-0-lts"
+fi
+# Copy ALL modules from the matching kernel version
+rm -rf "$MINI_WORK/usr/lib/modules"
+cp -a "$LTS_EXTRACT/lib/modules" "$MINI_WORK/usr/lib/modules"
+if [ ! -e "$MINI_WORK/lib/modules" ]; then
+    mkdir -p "$MINI_WORK/lib"
     ln -sf /usr/lib/modules "$MINI_WORK/lib/modules"
 fi
+LTS_KVER="6.18.37-0-lts"
+echo "   Crypto modules for $LTS_KVER:"
+find "$MINI_WORK/usr/lib/modules/$LTS_KVER" -name 'virtio_crypto*' -o -name 'algif_*' | xargs -I{} basename {}
+rm -rf "$LTS_EXTRACT"
 
 echo "── Packing rootfs.cpio.gz (minirootfs + modules + overlay)..."
 PART_MINI="$ROOT/dist/agent-mini.cpio.gz"
@@ -229,7 +265,9 @@ cat "$PART_MINI" "$PART_OVL" > "$OUT"
 rm -f "$PART_MINI" "$PART_OVL"
 echo "   Done: $OUT ($(du -sh "$OUT" | cut -f1))"
 
-SNAP="$ROOT/dist/vsnap-base-${RAM_MB}mb.snap"
+# SNAP="$ROOT/dist/vsnap-base-${RAM_MB}mb.snap"
+SNAP="$ROOT/dist/alpine-3.23.0-256mb.snap"
+
 BOOTARGS="root=/dev/ram0 rw console=ttyS0 earlycon init=/sbin/init"
 
 echo "── Booting guest to pre-install ca-certificates + python3..."
@@ -240,7 +278,7 @@ echo "── Booting guest to pre-install ca-certificates + python3..."
     --ram "$RAM_MB" \
     --bootargs "$BOOTARGS" \
     --net \
-    --setup "date -s '$(date -u '+%Y-%m-%d %H:%M:%S')'; sed -i 's|https://|http://|g' /etc/apk/repositories; apk update --allow-untrusted; apk add --allow-untrusted ca-certificates python3; sed -i 's|http://|https://|g' /etc/apk/repositories; sync" \
+    --setup "date -s '$(date -u '+%Y-%m-%d %H:%M:%S')'; sed -i 's|https://|http://|g' /etc/apk/repositories; apk update --allow-untrusted; apk add --allow-untrusted ca-certificates python3 openssl curl; depmod -a; sed -i 's|http://|https://|g' /etc/apk/repositories; mkdir -p /etc/ssl; printf '[openssl_init]\nproviders = provider_sect\nalg_section = algorithm_sect\n\n[provider_sect]\ndefault = default_sect\n\n[default_sect]\nactivate = 1\n\n[algorithm_sect]\ndefault_properties = ?provider=default\n\n[engine_section]\nafalg = afalg_sect\n\n[afalg_sect]\ninit = 1\n' > /etc/ssl/openssl.cnf; export OPENSSL_CONF=/etc/ssl/openssl.cnf; sync" \
     --snapshot-save "$SNAP" \
     --snapshot-python
 
