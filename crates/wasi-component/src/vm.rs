@@ -97,6 +97,7 @@ pub fn load(config: VmConfig) -> Result<(MachineBus, Hart, u8), String> {
     bus.attach_net();
     bus.attach_fs(vec![]);
     bus.attach_crypto();
+
     let mut hart = Hart::new(0x1000);
 
     if let Some(disk_path) = config.disk {
