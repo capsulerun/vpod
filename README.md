@@ -149,7 +149,7 @@ with Sandbox.create() as sandbox:
     sandbox.code.run("print(open('/tmp/shared.txt').read().strip())")
 ```
 
-#### `Sandbox.create()` method options
+#### `Sandbox.create()` parameters
 
 ##### `snapshot`
 
