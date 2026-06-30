@@ -229,6 +229,8 @@ pub fn build(
     uart_ctrl_irq: u32,
     uart_data_base: u64,
     uart_data_irq: u32,
+    uart_crypto_base: u64,
+    uart_crypto_irq: u32,
 ) -> Vec<u8> {
     let mut builder = DtbBuilder::new();
 
@@ -341,6 +343,15 @@ pub fn build(
     builder.prop_u32("clock-frequency", 3_686_400);
     builder.prop_interrupt_parent(3);
     builder.prop_interrupts(uart_data_irq);
+    builder.end_node();
+
+    // UART4 crypto offload channel
+    builder.begin_node(&format!("uart@{:x}", uart_crypto_base));
+    builder.prop_str("compatible", "ns16550a");
+    builder.prop_reg(uart_crypto_base, 0x100);
+    builder.prop_u32("clock-frequency", 3_686_400);
+    builder.prop_interrupt_parent(3);
+    builder.prop_interrupts(uart_crypto_irq);
     builder.end_node();
 
     let virtio_names = ["virtio-blk", "virtio-console", "virtio-net"];

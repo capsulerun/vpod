@@ -51,6 +51,7 @@ pub fn save(
     bus.uart_stderr.serialize(writer)?;
     bus.uart_ctrl.serialize(writer)?;
     bus.uart_data.serialize(writer)?;
+    bus.uart_crypto.serialize(writer)?;
 
     Ok(())
 }
@@ -137,6 +138,7 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
     let _ = bus.uart_stderr.deserialize(reader);
     let _ = bus.uart_ctrl.deserialize(reader);
     let _ = bus.uart_data.deserialize(reader);
+    let _ = bus.uart_crypto.deserialize(reader);
 
     Ok(flags[0])
 }

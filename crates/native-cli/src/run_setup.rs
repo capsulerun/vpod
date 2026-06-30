@@ -17,6 +17,7 @@ pub fn run(
     eprintln!("[vpod] setup: booting guest, waiting for shell prompt...");
     bus.uart.capture_tx.set(true);
     bus.uart_data.capture_tx.set(true);
+    bus.uart_crypto.capture_tx.set(true);
 
     wait_for_prompt(bus, hart, true);
 
