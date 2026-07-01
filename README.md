@@ -90,6 +90,7 @@ from vpod import Sandbox
 sandbox = Sandbox.create()
 result = sandbox.commands.run("whoami")
 print(result.stdout)  # root
+sandbox.close()
 
 # Persistent session — state preserved across calls
 with Sandbox.create() as sandbox:
@@ -112,18 +113,27 @@ with Sandbox.create() as sandbox:
 
 Full reference for the CLI and Python SDK.
 
-## CLI
+### CLI
 
 | Command | Description |
 |:---|:---|
 | `vpod` | Start an interactive shell with default snapshot |
-| `vpod start <snapshot>` | Start an interactive shell with a specific snapshot |
+| `vpod <snapshot>` | Start an interactive shell with a specific snapshot |
 | `vpod pull <snapshot>` | Pull a snapshot |
 | `vpod list` | List available snapshots |
 
-## Python SDK
+#### Options
 
-### Sandbox
+##### `--mount` or `-m`
+Create a link between your host and your sandbox by mounting a directory. You can configure read-only or read-write permissions for better access control.
+
+```bash
+vpod --mount workspace:/workspace # read only
+vpod --mount workspace:/workspace:rw # read and write
+```
+
+
+### Python SDK
 
 | Method | Description |
 |:---|:---|
@@ -139,13 +149,27 @@ with Sandbox.create() as sandbox:
     sandbox.code.run("print(open('/tmp/shared.txt').read().strip())")
 ```
 
-### Snapshots
+#### `Sandbox.create()` parameters
 
-#### List available snapshots
+##### `snapshot`
+
+```python
+sandbox = Sandbox.create(snapshot="alpine")
+```
+
+##### `mounts`
+
+```python
+sandbox = Sandbox.create(mounts={"workspace": "/workspace:rw", "docs": "/docs" })
+```
+
+
+
+#### Snapshots
 
 | Name | tag | Description | Memory Limit (RAM) |
 |:---|:---|:---|:---|
-| `alpine` | 3.23.0 | Minimal Alpine Linux snapshot, no Python. | 256 MB |
+| `alpine` | 3.23.0 | Minimal Alpine Linux snapshot. | 256 MB |
 | `vsnap-base` | 0.1.0 | Alpine-based snapshot with Python pre-installed. | 256 MB |
 | `vsnap-data` | 0.1.0 | Alpine-based snapshot with `numpy`, `pandas`, and `scipy` pre‑installed. | 512 MB |
 
