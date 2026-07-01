@@ -30,6 +30,8 @@ pub const VIRTIO_CONSOLE_IRQ: u32 = 3;
 pub const VIRTIO_NET_IRQ: u32 = 4;
 pub const VIRTIO_FS_BASE_IRQ: u32 = 8;
 pub const VIRTIO_MAX_FS: usize = 8;
+pub const VIRTIO_CRYPTO_IRQ: u32 = 16;
+pub const VIRTIO_CRYPTO_SLOT: usize = 3 + VIRTIO_MAX_FS;
 
 pub const GUEST_MAC: [u8; 6] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
 

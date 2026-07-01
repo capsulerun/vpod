@@ -52,6 +52,13 @@ pub fn save(
     bus.uart_ctrl.serialize(writer)?;
     bus.uart_data.serialize(writer)?;
 
+    if let Some(crypto) = &bus.crypto {
+        writer.write_all(&[1u8])?;
+        crypto.mmio.serialize(writer)?;
+    } else {
+        writer.write_all(&[0u8])?;
+    }
+
     Ok(())
 }
 
@@ -137,6 +144,16 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
     let _ = bus.uart_stderr.deserialize(reader);
     let _ = bus.uart_ctrl.deserialize(reader);
     let _ = bus.uart_data.deserialize(reader);
+
+    let mut has_crypto = [0u8; 1];
+    if reader.read_exact(&mut has_crypto).is_ok() && has_crypto[0] == 1 {
+        if let Some(crypto) = &mut bus.crypto {
+            let _ = crypto.mmio.deserialize(reader);
+        } else {
+            let mut skip = VirtioMmio::new(0, 0, 2);
+            let _ = skip.deserialize(reader);
+        }
+    }
 
     Ok(flags[0])
 }

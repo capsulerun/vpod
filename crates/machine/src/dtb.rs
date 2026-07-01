@@ -229,6 +229,8 @@ pub fn build(
     uart_ctrl_irq: u32,
     uart_data_base: u64,
     uart_data_irq: u32,
+    has_crypto: bool,
+    crypto_irq: u32,
 ) -> Vec<u8> {
     let mut builder = DtbBuilder::new();
 
@@ -367,12 +369,25 @@ pub fn build(
         let slot = 3 + i;
         let base = virtio_base + slot as u64 * virtio_size;
         let irq = 8 + i as u32;
+
         builder.begin_node(&format!("virtio_mmio@{:x}", base));
         builder.prop_str("compatible", "virtio,mmio");
         builder.prop_reg(base, virtio_size);
         builder.prop_interrupt_parent(3);
         builder.prop_interrupts(irq);
         builder.prop_str("device", "virtio-fs");
+        builder.end_node();
+    }
+
+    if has_crypto {
+        let crypto_slot = 3 + num_fs;
+        let base = virtio_base + crypto_slot as u64 * virtio_size;
+
+        builder.begin_node(&format!("virtio_mmio@{:x}", base));
+        builder.prop_str("compatible", "virtio,mmio");
+        builder.prop_reg(base, virtio_size);
+        builder.prop_interrupt_parent(3);
+        builder.prop_interrupts(crypto_irq);
         builder.end_node();
     }
 

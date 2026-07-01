@@ -1,5 +1,8 @@
 pub mod blk;
 pub mod console;
+
+pub mod crypto;
+
 pub mod fs;
 pub mod net;
 pub mod slirp;

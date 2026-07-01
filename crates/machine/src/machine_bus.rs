@@ -7,6 +7,9 @@ use crate::uart::Uart;
 use crate::virtio::RamView;
 use crate::virtio::blk::VirtioBlk;
 use crate::virtio::console::VirtioConsole;
+
+use crate::virtio::crypto::VirtioCrypto;
+
 use crate::virtio::fs::{Mount, VirtioFs};
 use crate::virtio::net::VirtioNet;
 use crate::virtio::slirp::SlirpBackend;
@@ -15,7 +18,8 @@ use crate::{
     GUEST_MAC, KERNEL_OFFSET, LOW_RAM_BASE, LOW_RAM_SIZE, RAM_BASE, UART_BASE, UART_CTRL_BASE,
     UART_CTRL_IRQ, UART_CTRL_SIZE, UART_DATA_BASE, UART_DATA_IRQ, UART_DATA_SIZE, UART_IRQ,
     UART_SIZE, UART_STDERR_BASE, UART_STDERR_IRQ, UART_STDERR_SIZE, VIRTIO_BASE, VIRTIO_BLK_IRQ,
-    VIRTIO_CONSOLE_IRQ, VIRTIO_FS_BASE_IRQ, VIRTIO_MAX_FS, VIRTIO_NET_IRQ, VIRTIO_SIZE,
+    VIRTIO_CONSOLE_IRQ, VIRTIO_CRYPTO_IRQ, VIRTIO_CRYPTO_SLOT, VIRTIO_FS_BASE_IRQ,
+    VIRTIO_MAX_FS, VIRTIO_NET_IRQ, VIRTIO_SIZE,
 };
 
 use riscv_core::csr::{MIP_MEIP, MIP_MSIP, MIP_MTIP, MIP_SEIP};
@@ -35,6 +39,8 @@ pub struct MachineBus {
     pub console: VirtioConsole,
     pub net: Option<VirtioNet<SlirpBackend>>,
     pub fs_devices: Vec<VirtioFs>,
+
+    pub crypto: Option<VirtioCrypto>,
 }
 
 impl MachineBus {
@@ -57,6 +63,8 @@ impl MachineBus {
             console: VirtioConsole::new(),
             net: None,
             fs_devices: Vec::new(),
+
+            crypto: None,
         }
     }
 
@@ -88,6 +96,10 @@ impl MachineBus {
                 }
             })
             .collect();
+    }
+
+    pub fn attach_crypto(&mut self) {
+        self.crypto = Some(VirtioCrypto::new());
     }
 
     pub fn ram_size(&self) -> u64 {
@@ -153,6 +165,11 @@ impl MachineBus {
             );
         }
 
+        if let Some(crypto_device) = &self.crypto {
+            self.plic
+                .set_irq(VIRTIO_CRYPTO_IRQ, crypto_device.mmio.int_status != 0);
+        }
+
         if self.plic.irq_pending() {
             hart.csr.mip |= MIP_MEIP | MIP_SEIP;
         } else {
@@ -212,7 +229,7 @@ impl MachineBus {
     }
 
     fn virtio_device_slot(&self, address: u64) -> Option<usize> {
-        let num_slots = 3 + VIRTIO_MAX_FS;
+        let num_slots = VIRTIO_CRYPTO_SLOT + 1;
         if (VIRTIO_BASE..VIRTIO_BASE + VIRTIO_SIZE * num_slots as u64).contains(&address) {
             Some(((address - VIRTIO_BASE) / VIRTIO_SIZE) as usize)
         } else {
@@ -265,6 +282,11 @@ impl SystemBus for MachineBus {
                 0 => self.blk.as_ref().map_or(0, |b| b.mmio.read(word_offset)),
                 1 => self.console.mmio.read(word_offset),
                 2 => self.net.as_ref().map_or(0, |n| n.mmio.read(word_offset)),
+
+                s if s == VIRTIO_CRYPTO_SLOT => {
+                    self.crypto.as_ref().map_or(0, |c| c.mmio.read(word_offset))
+                }
+
                 s if s >= 3 => self
                     .fs_devices
                     .get(s - 3)
@@ -310,6 +332,11 @@ impl SystemBus for MachineBus {
                     .net
                     .as_ref()
                     .map_or(0, |device| device.mmio.read(offset)),
+
+                s if s == VIRTIO_CRYPTO_SLOT => {
+                    self.crypto.as_ref().map_or(0, |c| c.mmio.read(offset))
+                }
+
                 s if s >= 3 => self
                     .fs_devices
                     .get(s - 3)
@@ -412,6 +439,11 @@ impl SystemBus for MachineBus {
                     .net
                     .as_mut()
                     .and_then(|device| device.mmio.write(offset, value)),
+
+                s if s == VIRTIO_CRYPTO_SLOT => self
+                    .crypto
+                    .as_mut()
+                    .and_then(|c| c.mmio.write(offset, value)),
                 s if s >= 3 => self
                     .fs_devices
                     .get_mut(s - 3)
@@ -433,6 +465,11 @@ impl SystemBus for MachineBus {
                     2 => {
                         if let Some(network_device) = &mut self.net {
                             network_device.notify(queue_index, &mut ram);
+                        }
+                    }
+                    s if s == VIRTIO_CRYPTO_SLOT => {
+                        if let Some(crypto_device) = &mut self.crypto {
+                            crypto_device.notify(queue_index, &mut ram);
                         }
                     }
                     s if s >= 3 => {
@@ -552,6 +589,8 @@ pub fn boot(
         UART_CTRL_IRQ,
         UART_DATA_BASE,
         UART_DATA_IRQ,
+        bus.crypto.is_some(),
+        VIRTIO_CRYPTO_IRQ,
     );
 
     let dtb_offset = if bios.is_some() {
