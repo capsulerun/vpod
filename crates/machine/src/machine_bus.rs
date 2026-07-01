@@ -12,12 +12,13 @@ use crate::virtio::net::VirtioNet;
 use crate::virtio::slirp::SlirpBackend;
 
 use crate::crypto_handler::CryptoHandler;
+use crate::tls_handler::TlsHandler;
 use crate::{
-    GUEST_MAC, KERNEL_OFFSET, LOW_RAM_BASE, LOW_RAM_SIZE, RAM_BASE, UART_BASE, UART_CRYPTO_BASE,
-    UART_CRYPTO_IRQ, UART_CRYPTO_SIZE, UART_CTRL_BASE, UART_CTRL_IRQ, UART_CTRL_SIZE,
-    UART_DATA_BASE, UART_DATA_IRQ, UART_DATA_SIZE, UART_IRQ, UART_SIZE, UART_STDERR_BASE,
-    UART_STDERR_IRQ, UART_STDERR_SIZE, VIRTIO_BASE, VIRTIO_BLK_IRQ, VIRTIO_CONSOLE_IRQ,
-    VIRTIO_FS_BASE_IRQ, VIRTIO_MAX_FS, VIRTIO_NET_IRQ, VIRTIO_SIZE,
+    GUEST_MAC, KERNEL_OFFSET, LOW_RAM_BASE, LOW_RAM_SIZE, RAM_BASE, UART_BASE,
+    UART_CRYPTO_BASE, UART_CRYPTO_IRQ, UART_CRYPTO_SIZE, UART_CTRL_BASE, UART_CTRL_IRQ,
+    UART_CTRL_SIZE, UART_DATA_BASE, UART_DATA_IRQ, UART_DATA_SIZE, UART_IRQ, UART_SIZE,
+    UART_STDERR_BASE, UART_STDERR_IRQ, UART_STDERR_SIZE, VIRTIO_BASE, VIRTIO_BLK_IRQ,
+    VIRTIO_CONSOLE_IRQ, VIRTIO_FS_BASE_IRQ, VIRTIO_MAX_FS, VIRTIO_NET_IRQ, VIRTIO_SIZE,
 };
 
 use riscv_core::csr::{MIP_MEIP, MIP_MSIP, MIP_MTIP, MIP_SEIP};
@@ -33,6 +34,7 @@ pub struct MachineBus {
     pub uart_data: Uart,
     pub uart_crypto: Uart,
     pub crypto_handler: CryptoHandler,
+    pub tls_handler: TlsHandler,
     pub clint: Clint,
     pub plic: Plic,
     pub blk: Option<VirtioBlk>,
@@ -57,6 +59,7 @@ impl MachineBus {
             uart_data: Uart::new(),
             uart_crypto: Uart::new(),
             crypto_handler: CryptoHandler::new(),
+            tls_handler: TlsHandler::new(),
             clint: Clint::new(),
             plic: Plic::new(),
             blk: None,
@@ -135,10 +138,7 @@ impl MachineBus {
             .set_irq(UART_CTRL_IRQ, self.uart_ctrl.irq_pending.get());
         self.plic
             .set_irq(UART_DATA_IRQ, self.uart_data.irq_pending.get());
-        self.plic
-            .set_irq(UART_CRYPTO_IRQ, self.uart_crypto.irq_pending.get());
-
-        self.crypto_handler.process(&self.uart_crypto);
+        self.uart_crypto.drain_tx();
 
         if let Some(block_device) = &self.blk {
             self.plic
@@ -181,7 +181,9 @@ impl MachineBus {
     }
 
     pub fn has_pending_io(&self) -> bool {
-        self.uart.rx_pending() || self.uart_data.rx_pending() || self.net_rx_pending()
+        self.uart.rx_pending()
+            || self.uart_data.rx_pending()
+            || self.net_rx_pending()
     }
 
     pub fn drain_console_tx(&mut self) -> Vec<u8> {
@@ -392,7 +394,9 @@ impl SystemBus for MachineBus {
         if (UART_CRYPTO_BASE..UART_CRYPTO_BASE + UART_CRYPTO_SIZE).contains(&address) {
             self.uart_crypto
                 .write_register((address - UART_CRYPTO_BASE) as u8, value);
+            return;
         }
+
     }
 
     fn write_halfword(&mut self, address: u64, value: u16) {
@@ -486,6 +490,17 @@ impl SystemBus for MachineBus {
 
         self.write_word(address, value as u32);
         self.write_word(address + 4, (value >> 32) as u32);
+    }
+
+    fn process_crypto_ecall_bytes(&mut self, request: &[u8]) -> Vec<u8> {
+        eprintln!("[ecall] op=0x{:02x} len={}", request.get(0).copied().unwrap_or(0), request.len());
+        if !request.is_empty() && request[0] >= 0x10 && request[0] <= 0x13 {
+            eprintln!("[ecall] routing to tls_handler");
+            let result = self.tls_handler.handle_request(request);
+            eprintln!("[ecall] tls returned {} bytes, status={}", result.len(), result[0]);
+            return result;
+        }
+        self.crypto_handler.handle_request(request)
     }
 }
 

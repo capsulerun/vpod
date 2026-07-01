@@ -660,6 +660,69 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
     match inst.funct3() {
         0x0 => match raw >> 20 {
             0x000 => {
+                if *ctx.priv_mode == PrivMode::U && ctx.regs.read(17) == 500 {
+                    let req_vaddr = ctx.regs.read(10);  // a0
+                    let req_len = ctx.regs.read(11) as usize;    // a1
+                    let resp_vaddr = ctx.regs.read(12); // a2
+                    let resp_cap = ctx.regs.read(13) as usize;   // a3
+
+                    if req_len > 65536 || resp_cap > 65536 {
+                        ctx.regs.write(10, 0);
+                        ctx.regs.pc = ctx.regs.pc.wrapping_add(4);
+                        return StepResult::Ok;
+                    }
+
+                    let mut request = vec![0u8; req_len];
+                    let mut ok = true;
+                    let mut i = 0;
+                    while i < req_len {
+                        let vaddr = req_vaddr.wrapping_add(i as u64);
+                        let paddr = match ctx.mmu.translate_load(vaddr, ctx.csr.satp, ctx.bus) {
+                            Ok(p) => p,
+                            Err(_) => { ok = false; break; }
+                        };
+                        let page_offset = (paddr & 0xFFF) as usize;
+                        let chunk = (4096 - page_offset).min(req_len - i);
+                        for j in 0..chunk {
+                            request[i + j] = ctx.bus.read_byte(paddr + j as u64);
+                        }
+                        i += chunk;
+                    }
+                    if !ok {
+                        ctx.regs.write(10, 0);
+                        ctx.regs.pc = ctx.regs.pc.wrapping_add(4);
+                        return StepResult::Ok;
+                    }
+
+                    let response = ctx.bus.process_crypto_ecall_bytes(&request);
+
+                    if response.len() > resp_cap {
+                        ctx.regs.write(10, 0);
+                        ctx.regs.pc = ctx.regs.pc.wrapping_add(4);
+                        return StepResult::Ok;
+                    }
+
+                    let mut i = 0;
+                    while i < response.len() {
+                        let vaddr = resp_vaddr.wrapping_add(i as u64);
+                        let paddr = match ctx.mmu.translate_store(vaddr, ctx.csr.satp, ctx.bus) {
+                            Ok(p) => p,
+                            Err(_) => { ok = false; break; }
+                        };
+                        let page_offset = (paddr & 0xFFF) as usize;
+                        let chunk = (4096 - page_offset).min(response.len() - i);
+                        for j in 0..chunk {
+                            ctx.bus.write_byte(paddr + j as u64, response[i + j]);
+                        }
+                        i += chunk;
+                    }
+
+                    let result = if ok { response.len() as u64 } else { 0 };
+                    ctx.regs.write(10, result);
+                    ctx.regs.pc = ctx.regs.pc.wrapping_add(4);
+                    return StepResult::Ok;
+                }
+
                 let cause = match ctx.priv_mode {
                     PrivMode::U => TrapCause::EcallFromUMode,
                     PrivMode::S => TrapCause::EcallFromSMode,

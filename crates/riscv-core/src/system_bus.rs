@@ -10,6 +10,11 @@ pub trait SystemBus {
     fn write_halfword(&mut self, address: u64, val: u16);
     fn write_word(&mut self, address: u64, val: u32);
     fn write_doubleword(&mut self, address: u64, val: u64);
+
+    fn process_crypto_ecall_bytes(&mut self, request: &[u8]) -> Vec<u8> {
+        let _ = request;
+        Vec::new()
+    }
 }
 
 pub struct FlatMemory {

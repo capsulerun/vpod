@@ -65,6 +65,16 @@ mkdir -p "$ROOT/dist" "$ALPINE_DIR"
 echo "── Building vpod..."
 (cd "$ROOT" && cargo build --release --bin vpod-native)
 
+echo "── Building OpenSSL provider (vpod.so)..."
+if ! command -v zig >/dev/null; then
+    echo "ERROR: zig is required to cross-compile the OpenSSL provider"
+    echo "  macOS: brew install zig"
+    exit 1
+fi
+(cd "$ROOT/guest/openssl-provider" && make clean && make)
+
+echo "── Building TLS shim (libssl.so.3)..."
+(cd "$ROOT/guest/tls-shim" && make clean && make)
 
 if [ ! -f "$OPENSBI_FW" ]; then
     echo "── Downloading OpenSBI ${OPENSBI_VERSION} pre-built firmware..."
@@ -115,10 +125,12 @@ fi
 
 echo "── Building overlay..."
 rm -rf "$OVERLAY"
-mkdir -p "$OVERLAY/sbin" "$OVERLAY/etc/apk" "$OVERLAY/usr/lib/vpod"
+mkdir -p "$OVERLAY/sbin" "$OVERLAY/etc" "$OVERLAY/usr/lib/vpod" "$OVERLAY/usr/lib/ossl-modules" "$OVERLAY/etc/ssl"
 
-printf 'https://dl-cdn.alpinelinux.org/alpine/v%s/main\nhttps://dl-cdn.alpinelinux.org/alpine/v%s/community\n' \
-    "$ALPINE_MINOR" "$ALPINE_MINOR" > "$OVERLAY/etc/apk/repositories"
+cp "$ROOT/guest/openssl-provider/vpod.so" "$OVERLAY/usr/lib/ossl-modules/vpod.so"
+cp "$ROOT/guest/openssl-provider/openssl.cnf" "$OVERLAY/etc/ssl/openssl-vpod.cnf"
+cp "$ROOT/guest/tls-shim/libssl.so.3" "$OVERLAY/usr/lib/vpod/libssl.so.3"
+
 echo 'nameserver 8.8.8.8' > "$OVERLAY/etc/resolv.conf"
 
 cat > "$OVERLAY/sbin/init" << 'INIT_EOF'
@@ -130,6 +142,13 @@ mount -t proc     proc     /proc
 mount -t sysfs    sysfs    /sys
 mount -t devtmpfs devtmpfs /dev
 mount -t tmpfs    tmpfs    /tmp
+
+# Setup APK repositories - use HTTP initially for bootstrap
+# (will be switched to HTTPS after ca-certificates is installed)
+cat > /etc/apk/repositories << APK_EOF
+http://dl-cdn.alpinelinux.org/alpine/v3.23/main
+http://dl-cdn.alpinelinux.org/alpine/v3.23/community
+APK_EOF
 
 hostname vpod
 ip link set lo up 2>/dev/null || true
@@ -154,6 +173,7 @@ if [ -c /dev/hvc0 ]; then
         done
     ) &
 fi
+
 
 export TERM=dumb
 export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
@@ -229,7 +249,9 @@ cat "$PART_MINI" "$PART_OVL" > "$OUT"
 rm -f "$PART_MINI" "$PART_OVL"
 echo "   Done: $OUT ($(du -sh "$OUT" | cut -f1))"
 
-SNAP="$ROOT/dist/vsnap-base-${RAM_MB}mb.snap"
+# SNAP="$ROOT/dist/vsnap-base-${RAM_MB}mb.snap"
+SNAP="$ROOT/dist/alpine-3.23.0-256mb.snap"
+
 BOOTARGS="root=/dev/ram0 rw console=ttyS0 earlycon init=/sbin/init"
 
 echo "── Booting guest to pre-install ca-certificates + python3..."
@@ -240,7 +262,7 @@ echo "── Booting guest to pre-install ca-certificates + python3..."
     --ram "$RAM_MB" \
     --bootargs "$BOOTARGS" \
     --net \
-    --setup "date -s '$(date -u '+%Y-%m-%d %H:%M:%S')'; sed -i 's|https://|http://|g' /etc/apk/repositories; apk update --allow-untrusted; apk add --allow-untrusted ca-certificates python3; sed -i 's|http://|https://|g' /etc/apk/repositories; sync" \
+    --setup "date -s '$(date -u '+%Y-%m-%d %H:%M:%S')'; sed -i 's|https://|http://|g' /etc/apk/repositories; apk update --allow-untrusted; apk add --allow-untrusted ca-certificates python3 curl openssl; sed -i 's|http://|https://|g' /etc/apk/repositories; cp /etc/ssl/openssl-vpod.cnf /etc/ssl/openssl.cnf; cp /usr/lib/vpod/libssl.so.3 /usr/lib/libssl.so.3; sync" \
     --snapshot-save "$SNAP" \
     --snapshot-python
 

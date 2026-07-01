@@ -1,3 +1,5 @@
+// NOT USED FOR NOW
+
 use std::io::Write;
 
 use super::{RamView, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
@@ -25,6 +27,10 @@ impl VirtioConsole {
             rx_pending: std::collections::VecDeque::new(),
             tx_buf: Vec::new(),
         }
+    }
+
+    pub fn has_pending_rx(&self) -> bool {
+        !self.rx_pending.is_empty()
     }
 
     pub fn push_rx(&mut self, byte: u8) {

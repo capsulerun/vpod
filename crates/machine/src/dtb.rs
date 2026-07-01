@@ -245,6 +245,7 @@ pub fn build(
     builder.prop_str("serial0", &format!("/uart@{:x}", uart_base));
     builder.end_node();
 
+
     builder.begin_node("chosen");
     builder.prop_str("bootargs", bootargs);
     builder.prop_str("stdout-path", "serial0:115200n8");
@@ -345,7 +346,7 @@ pub fn build(
     builder.prop_interrupts(uart_data_irq);
     builder.end_node();
 
-    // UART4 crypto offload channel
+    // UART4 crypto offload
     builder.begin_node(&format!("uart@{:x}", uart_crypto_base));
     builder.prop_str("compatible", "ns16550a");
     builder.prop_reg(uart_crypto_base, 0x100);
@@ -386,6 +387,7 @@ pub fn build(
         builder.prop_str("device", "virtio-fs");
         builder.end_node();
     }
+
 
     builder.end_node(); // root
     builder.finish()

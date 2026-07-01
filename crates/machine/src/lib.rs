@@ -4,6 +4,7 @@ pub mod dtb;
 pub mod machine_bus;
 pub mod plic;
 pub mod snapshot;
+pub mod tls_handler;
 pub mod uart;
 pub mod virtio;
 
