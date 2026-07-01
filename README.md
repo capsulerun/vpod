@@ -170,8 +170,8 @@ sandbox = Sandbox.create(mounts={"workspace": "/workspace:rw", "docs": "/docs" }
 | Name | tag | Description | Memory Limit (RAM) |
 |:---|:---|:---|:---|
 | `alpine` | 3.23.0 | Minimal Alpine Linux snapshot. | 256 MB |
-| `vsnap-base` | 0.1.0 | Alpine-based snapshot with Python pre-installed. | 256 MB |
-| `vsnap-data` | 0.1.0 | Alpine-based snapshot with `numpy`, `pandas`, and `scipy` pre‑installed. | 512 MB |
+| `vsnap-base` | 1.0.0 | Alpine-based snapshot with Python pre-installed. | 256 MB |
+| `vsnap-data` | 1.0.0 | Alpine-based snapshot with `numpy`, `pandas`, and `scipy` pre‑installed. | 512 MB |
 
 ```python
 with Sandbox.create(snapshot="vsnap-data") as sandbox:
