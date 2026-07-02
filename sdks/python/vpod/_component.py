@@ -84,11 +84,11 @@ def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list
     wasi.inherit_stdout()
     wasi.inherit_stderr()
     wasi.inherit_stdin()
-    wasi.preopen_dir(snap_dir, snap_dir)
+    wasi.preopen_dir(snap_dir, "snap")
 
     if mount_dirs:
-        for dir_path in mount_dirs:
-            wasi.preopen_dir(dir_path, dir_path)
+        for i, dir_path in enumerate(mount_dirs):
+            wasi.preopen_dir(dir_path, f"mount{i}")
 
     wasi_config_inherit_network(wasi.ptr())
     store.set_wasi(wasi)

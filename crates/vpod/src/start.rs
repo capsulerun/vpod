@@ -21,11 +21,11 @@ pub fn parse_mounts(mounts: &[String]) -> anyhow::Result<Vec<MountEntry>> {
     mounts
         .iter()
         .map(|m| {
-            let parts: Vec<&str> = m.split(':').collect();
-            let (host, guest, writable) = match parts.len() {
-                2 => (parts[0], parts[1], false),
-                3 => (parts[0], parts[1], parts[2] == "rw"),
-                _ => anyhow::bail!("invalid mount format '{m}', expected host:guest[:rw]"),
+            let (host, rest) = split_host_path(m)
+                .ok_or_else(|| anyhow::anyhow!("invalid mount format '{m}', expected host:guest[:rw]"))?;
+            let (guest, writable) = match rest.strip_suffix(":rw") {
+                Some(g) => (g, true),
+                None => (rest, false),
             };
             Ok(MountEntry {
                 host_path: PathBuf::from(host),
@@ -34,6 +34,17 @@ pub fn parse_mounts(mounts: &[String]) -> anyhow::Result<Vec<MountEntry>> {
             })
         })
         .collect()
+}
+
+fn split_host_path(s: &str) -> Option<(&str, &str)> {
+    if s.len() >= 3 && s.as_bytes()[1] == b':' && (s.as_bytes()[2] == b'\\' || s.as_bytes()[2] == b'/') {
+        let rest = &s[2..];
+        let colon = rest.find(':')?;
+        Some((&s[..2 + colon], &rest[colon + 1..]))
+    } else {
+        let colon = s.find(':')?;
+        Some((&s[..colon], &s[colon + 1..]))
+    }
 }
 
 pub struct RunConfig {
