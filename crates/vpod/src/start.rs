@@ -24,10 +24,12 @@ pub fn parse_mounts(mounts: &[String]) -> anyhow::Result<Vec<MountEntry>> {
             let (host, rest) = split_host_path(m).ok_or_else(|| {
                 anyhow::anyhow!("invalid mount format '{m}', expected host:guest[:rw]")
             })?;
+
             let (guest, writable) = match rest.strip_suffix(":rw") {
                 Some(g) => (g, true),
                 None => (rest, false),
             };
+
             Ok(MountEntry {
                 host_path: PathBuf::from(host),
                 guest_path: guest.to_string(),
