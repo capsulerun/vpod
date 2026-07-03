@@ -50,7 +50,7 @@ class Sandbox:
         snapshot_path = snapshots.pull(snapshot)
         wasm_path = locate_wasm()
 
-        self._snapshot_path = snapshot_path.as_posix()
+        self._snapshot_path = "snap/" + snapshot_path.name
         self._mounts = _parse_mounts(mounts) if mounts else []
 
         mount_dirs = [m["host_path"] for m in self._mounts]
@@ -77,9 +77,9 @@ class Sandbox:
     def _get_shell_session_id(self) -> int:
         if self._shell_session_id is None:
             mount_entries = []
-            for m in self._mounts:
+            for i, m in enumerate(self._mounts):
                 entry = object.__new__(type("MountEntry", (), {}))
-                object.__setattr__(entry, "host-alias", m["host_path"])
+                object.__setattr__(entry, "host-alias", f"mount{i}")
                 object.__setattr__(entry, "guest-path", m["guest_path"])
                 object.__setattr__(entry, "writable", m["writable"])
                 mount_entries.append(entry)
