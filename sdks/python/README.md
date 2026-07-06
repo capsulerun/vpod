@@ -90,7 +90,7 @@ To pre-download (e.g. in a Dockerfile or CI setup):
 ```python
 from vpod import snapshots
 
-for s in snapshots.fetch_registry():
+for s in snapshots.catalog():
     print(s["name"], s["tag"])
 
 snapshots.pull("alpine:latest")
