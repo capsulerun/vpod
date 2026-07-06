@@ -76,4 +76,27 @@ impl Guest for Executor {
     fn session_close(handle: u64) {
         SESSION_MANAGER.close_session(handle);
     }
+
+    fn session_suspend(handle: u64) -> Result<Vec<u8>, String> {
+        SESSION_MANAGER.suspend_session(handle)
+    }
+
+    fn session_resume(
+        snapshot_path: String,
+        delta: Vec<u8>,
+        command: String,
+        prompt: String,
+        mounts: Vec<MountEntry>,
+    ) -> Result<u64, String> {
+        let mount_args: Vec<vm::MountArg> = mounts
+            .into_iter()
+            .map(|m| vm::MountArg {
+                alias: m.host_alias,
+                guest_path: m.guest_path,
+                writable: m.writable,
+            })
+            .collect();
+
+        SESSION_MANAGER.resume_session(snapshot_path, delta, command, prompt, mount_args)
+    }
 }

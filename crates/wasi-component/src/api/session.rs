@@ -226,4 +226,86 @@ impl SessionManager {
     pub fn close_session(&self, handle: u64) {
         self.sessions.borrow_mut().remove(&handle);
     }
+
+    pub fn suspend_session(&self, handle: u64) -> Result<Vec<u8>, String> {
+        let mut sessions = self.sessions.borrow_mut();
+        let session = sessions
+            .remove(&handle)
+            .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+        let mut buf = Vec::new();
+        machine::snapshot::save_delta(&session.bus, &session.hart, &mut buf)
+            .map_err(|e| format!("suspend failed: {e}"))?;
+
+        let meta = format!(
+            "{}|{}|{}",
+            if session.is_shell {
+                "shell"
+            } else if session.is_pyrunner {
+                "pyrunner"
+            } else {
+                "custom"
+            },
+            session.has_pyrunner,
+            String::from_utf8_lossy(&session.prompt),
+        );
+
+        let meta_bytes = meta.as_bytes();
+        buf.extend_from_slice(&(meta_bytes.len() as u32).to_le_bytes());
+        buf.extend_from_slice(meta_bytes);
+
+        Ok(buf)
+    }
+
+    pub fn resume_session(
+        &self,
+        snapshot_path: String,
+        delta: Vec<u8>,
+        _command: String,
+        _prompt: String,
+        mount_args: Vec<vm::MountArg>,
+    ) -> Result<u64, String> {
+        let (mut bus, mut hart, _flags) = vm::load(vm::VmConfig {
+            snapshot: snapshot_path.as_ref(),
+            disk: None,
+            mounts: mount_args,
+            capture_tx: true,
+        })?;
+
+        let meta_len_offset = delta.len() - 4;
+        let meta_len = u32::from_le_bytes(delta[meta_len_offset..].try_into().unwrap()) as usize;
+        let meta_offset = meta_len_offset - meta_len;
+        let meta_str = String::from_utf8_lossy(&delta[meta_offset..meta_len_offset]).to_string();
+        let delta_bytes = &delta[..meta_offset];
+
+        let mut cursor = std::io::Cursor::new(delta_bytes);
+        machine::snapshot::restore_delta(&mut bus, &mut hart, &mut cursor)
+            .map_err(|e| format!("resume failed: {e}"))?;
+
+        let parts: Vec<&str> = meta_str.splitn(3, '|').collect();
+        let (is_shell, is_pyrunner, has_pyrunner, prompt) = if parts.len() == 3 {
+            let kind = parts[0];
+            let has_py = parts[1] == "true";
+            let prompt = parts[2].as_bytes().to_vec();
+            (kind == "shell", kind == "pyrunner", has_py, prompt)
+        } else {
+            (true, false, false, b"# ".to_vec())
+        };
+
+        let id = self.next_id.get();
+        self.next_id.set(id + 1);
+        self.sessions.borrow_mut().insert(
+            id,
+            Session {
+                bus,
+                hart,
+                prompt,
+                is_shell,
+                is_pyrunner,
+                has_pyrunner,
+            },
+        );
+
+        Ok(id)
+    }
 }
