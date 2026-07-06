@@ -1,5 +1,6 @@
+from vpod.snapshots import catalog
 import pytest
-from vpod import Sandbox
+from vpod import Sandbox, snapshots
 
 pytestmark = pytest.mark.integration
 
@@ -321,3 +322,10 @@ def test_mount_read_write(tmp_path):
         sbx.commands.run("echo written_from_guest > /mnt/out/output.txt")
 
     assert (tmp_path / "output.txt").read_text().strip() == "written_from_guest"
+
+def test_snapshot_list():
+   snapshotlist = snapshots.catalog()
+
+   print(snapshotlist)
+   assert isinstance(snapshotlist, catalog)
+   assert len(snapshotlist) > 0

@@ -63,6 +63,11 @@ _REGISTRY_TTL = 86400
 _REGISTRY_CACHE = cache_dir() / "snapshots.json"
 
 
+def catalog() -> list[dict]:
+    """Return the list of available snapshots, fetching from the registry if needed."""
+    return fetch_registry()
+
+
 def fetch_registry() -> list[dict]:
     if _REGISTRY_CACHE.exists():
         age = time.time() - _REGISTRY_CACHE.stat().st_mtime

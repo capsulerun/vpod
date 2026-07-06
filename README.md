@@ -184,13 +184,13 @@ with Sandbox.create(snapshot="vsnap-data") as sandbox:
 
 | Method | Description | Return type |
 |:---|:---|:---|
-| `snapshots.fetch_registry()` | Fetch available snapshots | list[dict] |
+| `snapshots.catalog()` | Fetch available snapshots | list[dict] |
 | `snapshots.pull(name)` | Pull a snapshot | str |
 
 ```python
 from vpod import snapshots
 
-for snap in snapshots.fetch_registry():
+for snap in snapshots.catalog():
     print(snap["name"], snap["tag"])
 
 snapshots.pull("vsnap-data")
