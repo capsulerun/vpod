@@ -327,5 +327,5 @@ def test_snapshot_list():
    snapshotlist = snapshots.catalog()
 
    print(snapshotlist)
-   assert isinstance(snapshotlist, catalog)
+   assert isinstance(snapshotlist, list)
    assert len(snapshotlist) > 0
