@@ -43,11 +43,36 @@ pub const VRING_DESC_F_WRITE: u16 = 2;
 pub struct RamView<'a> {
     ram: &'a mut Vec<u8>,
     mask: u64,
+    dirty_bitmap: Option<&'a mut Vec<u64>>,
 }
 
 impl<'a> RamView<'a> {
     pub fn new(ram: &'a mut Vec<u8>, mask: u64) -> Self {
-        Self { ram, mask }
+        Self {
+            ram,
+            mask,
+            dirty_bitmap: None,
+        }
+    }
+
+    pub fn with_dirty_bitmap(
+        ram: &'a mut Vec<u8>,
+        mask: u64,
+        dirty_bitmap: &'a mut Vec<u64>,
+    ) -> Self {
+        Self {
+            ram,
+            mask,
+            dirty_bitmap: Some(dirty_bitmap),
+        }
+    }
+
+    #[inline(always)]
+    fn mark_dirty(&mut self, idx: usize) {
+        if let Some(ref mut bitmap) = self.dirty_bitmap {
+            let page = idx >> 12;
+            bitmap[page / 64] |= 1 << (page % 64);
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -83,21 +108,29 @@ impl<'a> RamView<'a> {
 
     pub fn write_u8(&mut self, physical_address: u64, val: u8) {
         let idx = self.idx(physical_address);
+
+        self.mark_dirty(idx);
         self.ram[idx] = val;
     }
 
     pub fn write_u16(&mut self, physical_address: u64, val: u16) {
         let idx = self.idx(physical_address);
+
+        self.mark_dirty(idx);
         self.ram[idx..idx + 2].copy_from_slice(&val.to_le_bytes());
     }
 
     pub fn write_u32(&mut self, physical_address: u64, val: u32) {
         let idx = self.idx(physical_address);
+
+        self.mark_dirty(idx);
         self.ram[idx..idx + 4].copy_from_slice(&val.to_le_bytes());
     }
 
     pub fn write_u64(&mut self, physical_address: u64, val: u64) {
         let idx = self.idx(physical_address);
+
+        self.mark_dirty(idx);
         self.ram[idx..idx + 8].copy_from_slice(&val.to_le_bytes());
     }
 
@@ -108,6 +141,13 @@ impl<'a> RamView<'a> {
 
     pub fn write_bytes(&mut self, physical_address: u64, buf: &[u8]) {
         let idx = self.idx(physical_address);
+        self.mark_dirty(idx);
+
+        if buf.len() > 4096 {
+            let last_idx = idx + buf.len() - 1;
+            self.mark_dirty(last_idx);
+        }
+
         self.ram[idx..idx + buf.len()].copy_from_slice(buf);
     }
 }
