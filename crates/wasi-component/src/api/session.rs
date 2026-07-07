@@ -22,6 +22,8 @@ pub struct Session {
 pub struct SessionManager {
     sessions: RefCell<HashMap<u64, Session>>,
     next_id: Cell<u64>,
+    snapshot_cache: RefCell<Option<(String, Vec<u8>)>>,
+    base_cache: RefCell<Option<(String, machine::cow_ram::CowRam)>>,
 }
 
 unsafe impl Sync for SessionManager {}
@@ -29,6 +31,8 @@ unsafe impl Sync for SessionManager {}
 pub static SESSION_MANAGER: LazyLock<SessionManager> = LazyLock::new(|| SessionManager {
     sessions: RefCell::new(HashMap::new()),
     next_id: Cell::new(1),
+    snapshot_cache: RefCell::new(None),
+    base_cache: RefCell::new(None),
 });
 
 impl SessionManager {
@@ -39,12 +43,28 @@ impl SessionManager {
         prompt: String,
         mount_args: Vec<vm::MountArg>,
     ) -> Result<u64, String> {
-        let (mut bus, mut hart, flags) = vm::load(vm::VmConfig {
-            snapshot: snapshot_path.as_ref(),
-            disk: None,
-            mounts: mount_args.clone(),
-            capture_tx: true,
-        })?;
+        let ram_size = vm::ram_size_from_filename(std::path::Path::new(&snapshot_path))
+            .unwrap_or(256 * 1024 * 1024);
+
+        {
+            let cache = self.snapshot_cache.borrow();
+            let needs_load = match &*cache {
+                Some((path, _)) => *path != snapshot_path,
+                None => true,
+            };
+            drop(cache);
+
+            if needs_load {
+                let bytes = vm::_read_snapshot_bytes(snapshot_path.as_ref())?;
+                *self.snapshot_cache.borrow_mut() = Some((snapshot_path.clone(), bytes));
+            }
+        }
+
+        let cache = self.snapshot_cache.borrow();
+        let snapshot_bytes = &cache.as_ref().unwrap().1;
+        let (mut bus, mut hart, flags) =
+            vm::_load_from_bytes(snapshot_bytes, ram_size, &mount_args, true)?;
+        drop(cache);
 
         let is_shell = command == "/bin/sh" || command == "sh" || command == "/bin/ash";
         let is_python = command == "python3" || command == "/usr/bin/python3";
@@ -228,9 +248,9 @@ impl SessionManager {
     }
 
     pub fn suspend_session(&self, handle: u64) -> Result<Vec<u8>, String> {
-        let mut sessions = self.sessions.borrow_mut();
+        let sessions = self.sessions.borrow();
         let session = sessions
-            .remove(&handle)
+            .get(&handle)
             .ok_or_else(|| format!("invalid session handle: {handle}"))?;
 
         let mut buf = Vec::new();
@@ -251,8 +271,8 @@ impl SessionManager {
         );
 
         let meta_bytes = meta.as_bytes();
-        buf.extend_from_slice(&(meta_bytes.len() as u32).to_le_bytes());
         buf.extend_from_slice(meta_bytes);
+        buf.extend_from_slice(&(meta_bytes.len() as u32).to_le_bytes());
 
         Ok(buf)
     }
@@ -265,12 +285,30 @@ impl SessionManager {
         _prompt: String,
         mount_args: Vec<vm::MountArg>,
     ) -> Result<u64, String> {
-        let (mut bus, mut hart, _flags) = vm::load(vm::VmConfig {
-            snapshot: snapshot_path.as_ref(),
-            disk: None,
-            mounts: mount_args,
-            capture_tx: true,
-        })?;
+        let ram_size = vm::ram_size_from_filename(std::path::Path::new(&snapshot_path))
+            .unwrap_or(256 * 1024 * 1024);
+
+        {
+            let cache = self.base_cache.borrow();
+            let needs_load = match &*cache {
+                Some((path, _)) => *path != snapshot_path,
+                None => true,
+            };
+            drop(cache);
+
+            if needs_load {
+                let bytes = vm::_read_snapshot_bytes(snapshot_path.as_ref())?;
+                let (ram_bytes, real_size) = machine::snapshot::base_ram(&bytes)
+                    .map_err(|e| format!("failed to read base RAM: {e}"))?;
+                let base = machine::cow_ram::CowRam::from_base(ram_bytes, real_size);
+                *self.base_cache.borrow_mut() = Some((snapshot_path.clone(), base));
+            }
+        }
+
+        let cache = self.base_cache.borrow();
+        let base = &cache.as_ref().unwrap().1;
+        let (mut bus, mut hart) = vm::_bus_from_base(base, ram_size, &mount_args, true);
+        drop(cache);
 
         let meta_len_offset = delta.len() - 4;
         let meta_len = u32::from_le_bytes(delta[meta_len_offset..].try_into().unwrap()) as usize;
@@ -283,6 +321,17 @@ impl SessionManager {
             .map_err(|e| format!("resume failed: {e}"))?;
 
         let parts: Vec<&str> = meta_str.splitn(3, '|').collect();
+        let prompt_bytes: Vec<u8> = if parts.len() == 3 {
+            parts[2].as_bytes().to_vec()
+        } else {
+            b"# ".to_vec()
+        };
+
+        bus.uart.drain_tx();
+        bus.uart_stderr.drain_tx();
+        bus.uart_ctrl.drain_tx();
+        hart.is_waiting = false;
+        repl::sync_clock(&mut bus, &mut hart, &prompt_bytes);
         let (is_shell, is_pyrunner, has_pyrunner, prompt) = if parts.len() == 3 {
             let kind = parts[0];
             let has_py = parts[1] == "true";
@@ -308,4 +357,54 @@ impl SessionManager {
 
         Ok(id)
     }
+
+    // pub fn resume_fast(&self, handle: u64, delta: Vec<u8>) -> Result<u64, String> {
+    //     let mut sessions = self.sessions.borrow_mut();
+    //     let session = sessions
+    //         .get_mut(&handle)
+    //         .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+    //     let meta_len_offset = delta.len() - 4;
+    //     let meta_len = u32::from_le_bytes(delta[meta_len_offset..].try_into().unwrap()) as usize;
+    //     let meta_offset = meta_len_offset - meta_len;
+    //     let meta_str = String::from_utf8_lossy(&delta[meta_offset..meta_len_offset]).to_string();
+    //     let delta_bytes = &delta[..meta_offset];
+
+    //     let cache = self.snapshot_cache.borrow();
+    //     if let Some((_, ref snapshot_bytes)) = *cache {
+    //         let mut cursor = std::io::Cursor::new(snapshot_bytes);
+    //         machine::snapshot::restore(&mut session.bus, &mut session.hart, &mut cursor)
+    //             .map_err(|e| format!("base restore failed: {e}"))?;
+    //     } else {
+    //         return Err("no cached snapshot for fast resume".to_string());
+    //     }
+    //     drop(cache);
+
+    //     let mut cursor = std::io::Cursor::new(delta_bytes);
+    //     machine::snapshot::restore_delta(&mut session.bus, &mut session.hart, &mut cursor)
+    //         .map_err(|e| format!("delta restore failed: {e}"))?;
+
+    //     let parts: Vec<&str> = meta_str.splitn(3, '|').collect();
+    //     let prompt_bytes: Vec<u8> = if parts.len() == 3 {
+    //         parts[2].as_bytes().to_vec()
+    //     } else {
+    //         b"# ".to_vec()
+    //     };
+
+    //     session.bus.uart.drain_tx();
+    //     session.bus.uart_stderr.drain_tx();
+    //     session.bus.uart_ctrl.drain_tx();
+    //     session.hart.is_waiting = false;
+    //     repl::sync_clock(&mut session.bus, &mut session.hart, &prompt_bytes);
+
+    //     if parts.len() == 3 {
+    //         let kind = parts[0];
+    //         session.is_shell = kind == "shell";
+    //         session.is_pyrunner = kind == "pyrunner";
+    //         session.has_pyrunner = parts[1] == "true";
+    //         session.prompt = prompt_bytes;
+    //     }
+
+    //     Ok(handle)
+    // }
 }

@@ -14,6 +14,7 @@ pub const FLAG_SHELL_READY: u8 = 1 << 0;
 pub const FLAG_PYTHON_READY: u8 = 1 << 1;
 
 const DELTA_MAGIC: &[u8; 4] = b"VDLT";
+const DELTA_VERSION: u8 = 1;
 const PAGE_SIZE: usize = 4096;
 
 pub fn save(
@@ -29,7 +30,7 @@ pub fn save(
 
     let ram_size = bus.ram_size();
     writer.write_all(&ram_size.to_le_bytes())?;
-    writer.write_all(&bus.ram)?;
+    bus.ram.write_all_to(writer)?;
     writer.write_all(&bus.low_ram)?;
 
     save_hart(hart, writer)?;
@@ -100,7 +101,9 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
         ));
     }
 
-    reader.read_exact(&mut bus.ram)?;
+    let mut ram_bytes = vec![0u8; ram_size as usize];
+    reader.read_exact(&mut ram_bytes)?;
+    bus.ram.reset_base(ram_bytes);
 
     let mut low = vec![0u8; LOW_RAM_SIZE as usize];
     reader.read_exact(&mut low)?;
@@ -144,8 +147,33 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
     Ok(flags[0])
 }
 
+pub fn base_ram(bytes: &[u8]) -> io::Result<(Vec<u8>, u64)> {
+    const HEADER: usize = 4 + 1 + 1 + 8;
+
+    if bytes.len() < HEADER || &bytes[0..4] != MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid snapshot magic",
+        ));
+    }
+
+    let ram_field = u64::from_le_bytes(bytes[6..14].try_into().unwrap()) as usize;
+    let end = HEADER + ram_field;
+
+    if bytes.len() < end {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "snapshot truncated before end of RAM",
+        ));
+    }
+
+    let real_size = (ram_field - 8) as u64;
+    Ok((bytes[HEADER..end].to_vec(), real_size))
+}
+
 pub fn save_delta(bus: &MachineBus, hart: &Hart, writer: &mut impl Write) -> io::Result<()> {
     writer.write_all(DELTA_MAGIC)?;
+    writer.write_all(&[DELTA_VERSION])?;
 
     let dirty_pages = bus.dirty_pages();
     let page_count = dirty_pages.len() as u32;
@@ -153,8 +181,7 @@ pub fn save_delta(bus: &MachineBus, hart: &Hart, writer: &mut impl Write) -> io:
 
     for &page_idx in &dirty_pages {
         writer.write_all(&page_idx.to_le_bytes())?;
-        let offset = page_idx as usize * PAGE_SIZE;
-        writer.write_all(&bus.ram[offset..offset + PAGE_SIZE])?;
+        writer.write_all(bus.ram.page_bytes(page_idx as usize))?;
     }
 
     writer.write_all(&bus.low_ram)?;
@@ -201,6 +228,18 @@ pub fn restore_delta(
         ));
     }
 
+    let mut version = [0u8; 1];
+    reader.read_exact(&mut version)?;
+    if version[0] != DELTA_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "unsupported delta version {} (expected {})",
+                version[0], DELTA_VERSION
+            ),
+        ));
+    }
+
     let mut buf4 = [0u8; 4];
     reader.read_exact(&mut buf4)?;
     let page_count = u32::from_le_bytes(buf4) as usize;
@@ -210,8 +249,7 @@ pub fn restore_delta(
         reader.read_exact(&mut buf4)?;
         let page_idx = u32::from_le_bytes(buf4) as usize;
         reader.read_exact(&mut page_buf)?;
-        let offset = page_idx * PAGE_SIZE;
-        bus.ram[offset..offset + PAGE_SIZE].copy_from_slice(&page_buf);
+        bus.ram.apply_page(page_idx, &page_buf);
     }
 
     let mut low = vec![0u8; LOW_RAM_SIZE as usize];
@@ -251,8 +289,6 @@ pub fn restore_delta(
     let _ = bus.uart_stderr.deserialize(reader);
     let _ = bus.uart_ctrl.deserialize(reader);
     let _ = bus.uart_data.deserialize(reader);
-
-    bus.clear_dirty_bitmap();
 
     Ok(())
 }

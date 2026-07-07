@@ -18,6 +18,7 @@ except Exception:
 _engine = None
 _component = None
 _linker = None
+_instance_cache = {}
 
 
 def locate_wasm() -> Path:
@@ -78,9 +79,38 @@ def _get_or_load_component(wasm_path: Path):
     return _engine, _component, _linker
 
 
+def _resolve_exports(store, instance):
+    iface_index = instance.get_export_index(store, "vpod:sandbox/executor@0.1.0")
+    if iface_index is None:
+        raise RuntimeError("WASM component does not export 'vpod:sandbox/executor@0.1.0'")
+
+    def get_export(name: str):
+        idx = instance.get_export_index(store, name, iface_index)
+        if idx is None:
+            raise RuntimeError(f"WASM export '{name}' not found in executor interface")
+        func = instance.get_func(store, idx)
+        if func is None:
+            raise RuntimeError(f"WASM export '{name}' is not a function")
+        return lambda *args: func(store, *args)
+
+    return {name: get_export(name) for name in ("execute", "session-start", "session-exec", "session-close", "session-suspend", "session-resume")}
+
+
+def _instance_key(snap_dir: str, mount_dirs: list[str] | None) -> str:
+    parts = [snap_dir]
+    if mount_dirs:
+        parts.extend(sorted(mount_dirs))
+    return "|".join(parts)
+
+
 def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list[str] | None = None):
     from . import snapshots as _snapshots
     snap_dir = str(_snapshots.cache_dir()) if snapshot_path is None else str(snapshot_path.parent)
+
+    key = _instance_key(snap_dir, mount_dirs)
+
+    if key in _instance_cache:
+        return _instance_cache[key]
 
     engine, component, linker = _get_or_load_component(wasm_path)
 
@@ -99,20 +129,8 @@ def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list
     store.set_wasi(wasi)
 
     instance = linker.instantiate(store, component)
+    exports = _resolve_exports(store, instance)
 
-    iface_index = instance.get_export_index(store, "vpod:sandbox/executor@0.1.0")
-    if iface_index is None:
-        raise RuntimeError("WASM component does not export 'vpod:sandbox/executor@0.1.0'")
-
-    def get_export(name: str):
-        idx = instance.get_export_index(store, name, iface_index)
-        if idx is None:
-            raise RuntimeError(f"WASM export '{name}' not found in executor interface")
-        func = instance.get_func(store, idx)
-        if func is None:
-            raise RuntimeError(f"WASM export '{name}' is not a function")
-        return lambda *args: func(store, *args)
-
-    exports = {name: get_export(name) for name in ("execute", "session-start", "session-exec", "session-close", "session-suspend", "session-resume")}
+    _instance_cache[key] = (store, exports)
 
     return store, exports
