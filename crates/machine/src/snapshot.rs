@@ -101,10 +101,20 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
         ));
     }
 
-    let mut ram_bytes = vec![0u8; ram_size as usize];
-    reader.read_exact(&mut ram_bytes)?;
-    bus.ram.reset_base(ram_bytes);
+    let mut ram_bytes = vec![0u8; crate::cow_ram::CowRam::padded_len(ram_size as usize)];
+    reader.read_exact(&mut ram_bytes[..ram_size as usize])?;
+    bus.ram.set_base(ram_bytes);
 
+    restore_devices(bus, hart, reader)?;
+
+    Ok(flags[0])
+}
+
+pub fn restore_devices(
+    bus: &mut MachineBus,
+    hart: &mut Hart,
+    reader: &mut impl Read,
+) -> io::Result<()> {
     let mut low = vec![0u8; LOW_RAM_SIZE as usize];
     reader.read_exact(&mut low)?;
     bus.low_ram = low;
@@ -144,31 +154,51 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
     let _ = bus.uart_ctrl.deserialize(reader);
     let _ = bus.uart_data.deserialize(reader);
 
-    Ok(flags[0])
+    Ok(())
 }
 
-pub fn base_ram(bytes: &[u8]) -> io::Result<(Vec<u8>, u64)> {
-    const HEADER: usize = 4 + 1 + 1 + 8;
+pub fn load_base_and_tail(
+    reader: &mut impl Read,
+) -> io::Result<(crate::cow_ram::CowRam, Vec<u8>, u8)> {
+    let mut magic = [0u8; 4];
+    reader.read_exact(&mut magic)?;
 
-    if bytes.len() < HEADER || &bytes[0..4] != MAGIC {
+    if &magic != MAGIC {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "invalid snapshot magic",
         ));
     }
 
-    let ram_field = u64::from_le_bytes(bytes[6..14].try_into().unwrap()) as usize;
-    let end = HEADER + ram_field;
-
-    if bytes.len() < end {
+    let mut version = [0u8; 1];
+    reader.read_exact(&mut version)?;
+    if version[0] != VERSION {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "snapshot truncated before end of RAM",
+            format!(
+                "unsupported snapshot version {} (expected {})",
+                version[0], VERSION
+            ),
         ));
     }
 
-    let real_size = (ram_field - 8) as u64;
-    Ok((bytes[HEADER..end].to_vec(), real_size))
+    let mut flags = [0u8; 1];
+    reader.read_exact(&mut flags)?;
+
+    let mut ram_size_buf = [0u8; 8];
+    reader.read_exact(&mut ram_size_buf)?;
+
+    let logical_len = u64::from_le_bytes(ram_size_buf) as usize;
+    let real_size = (logical_len - 8) as u64;
+
+    let mut base = vec![0u8; crate::cow_ram::CowRam::padded_len(logical_len)];
+    reader.read_exact(&mut base[..logical_len])?;
+    let cow = crate::cow_ram::CowRam::from_padded(base, logical_len, real_size);
+
+    let mut tail = Vec::new();
+    reader.read_to_end(&mut tail)?;
+
+    Ok((cow, tail, flags[0]))
 }
 
 pub fn save_delta(bus: &MachineBus, hart: &Hart, writer: &mut impl Write) -> io::Result<()> {

@@ -121,6 +121,10 @@ def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list
     wasi.inherit_stdin()
     wasi.preopen_dir(snap_dir, "snap")
 
+    instances_dir = Path.home() / ".vpod" / "instances"
+    instances_dir.mkdir(parents=True, exist_ok=True)
+    wasi.preopen_dir(str(instances_dir), "instances")
+
     if mount_dirs:
         for i, dir_path in enumerate(mount_dirs):
             wasi.preopen_dir(dir_path, f"mount{i}")

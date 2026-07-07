@@ -4,7 +4,7 @@ use std::sync::Arc;
 pub const PAGE_SIZE: usize = 4096;
 
 pub struct CowRam {
-    base: Arc<[u8]>,
+    base: Arc<Vec<u8>>,
     pages: Vec<Option<Box<[u8]>>>,
     len: usize,
     mask: u64,
@@ -23,9 +23,25 @@ impl CowRam {
         base.resize(num_pages * PAGE_SIZE, 0);
 
         Self {
-            base: Arc::from(base.into_boxed_slice()),
+            base: Arc::new(base),
             pages: vec![None; num_pages],
             len,
+            mask: ram_size - 1,
+        }
+    }
+
+    pub fn padded_len(logical_len: usize) -> usize {
+        logical_len.div_ceil(PAGE_SIZE) * PAGE_SIZE
+    }
+
+    pub fn from_padded(padded: Vec<u8>, logical_len: usize, ram_size: u64) -> Self {
+        debug_assert_eq!(padded.len(), Self::padded_len(logical_len));
+        let num_pages = padded.len() / PAGE_SIZE;
+
+        Self {
+            base: Arc::new(padded),
+            pages: vec![None; num_pages],
+            len: logical_len,
             mask: ram_size - 1,
         }
     }
@@ -223,12 +239,12 @@ impl CowRam {
         Ok(())
     }
 
-    pub fn reset_base(&mut self, bytes: Vec<u8>) {
-        let num_pages = self.len.div_ceil(PAGE_SIZE);
-        let mut base = bytes;
-        base.resize(num_pages * PAGE_SIZE, 0);
 
-        self.base = Arc::from(base.into_boxed_slice());
+    pub fn set_base(&mut self, padded: Vec<u8>) {
+        debug_assert_eq!(padded.len(), Self::padded_len(self.len));
+        let num_pages = padded.len() / PAGE_SIZE;
+
+        self.base = Arc::new(padded);
         self.pages = vec![None; num_pages];
     }
 }

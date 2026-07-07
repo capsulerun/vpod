@@ -140,9 +140,9 @@ vpod --mount workspace:/workspace:rw # read and write
 | `Sandbox.create()` | Create a new sandbox |
 | `sandbox.commands.run(cmd)` | Run a command |
 | `sandbox.code.run(code)` | Run Python code |
-| `sandbox.suspend()` | Suspend session to disk, returns instance ID |
-| `Sandbox.resume(id)` | Resume a suspended instance |
-| `Sandbox.list_instances()` | List all instances |
+| `sandbox.suspend()` | Suspend session to disk, returns session ID |
+| `Sandbox.resume(id)` | Resume a suspended session |
+| `Sandbox.list_sessions()` | List all sessions |
 
 ```python
 from vpod import Sandbox

@@ -125,14 +125,14 @@ class Sandbox:
 
     def suspend(self) -> str:
         session_id = self._get_shell_session_id()
-        result = self._exports["session-suspend"](session_id)
-        delta_bytes = bytes(_unwrap_result(result))
 
         instance_id = str(uuid.uuid4())
         instance_dir = INSTANCES_DIR / instance_id
         instance_dir.mkdir(parents=True, exist_ok=True)
 
-        (instance_dir / "delta.bin").write_bytes(delta_bytes)
+        delta_rel = f"instances/{instance_id}/delta.bin"
+        _unwrap_result(self._exports["session-suspend"](session_id, delta_rel))
+
         (instance_dir / "meta.json").write_text(json.dumps({
             "snapshot": self._snapshot_path,
             "snapshot_sha256": self._snapshot_sha256(),
@@ -148,7 +148,7 @@ class Sandbox:
     def resume(cls, instance_id: str, mounts: dict[str, str] | None = None) -> "Sandbox":
         instance_dir = INSTANCES_DIR / instance_id
         meta = json.loads((instance_dir / "meta.json").read_text())
-        delta_bytes = (instance_dir / "delta.bin").read_bytes()
+        delta_rel = f"instances/{instance_id}/delta.bin"
 
         snapshot_name = meta["snapshot"].removeprefix("snap/")
         snapshot_path = snapshots.pull(snapshot_name)
@@ -179,7 +179,7 @@ class Sandbox:
 
         snap_rel = "snap/" + snapshot_path.name
         result = exports["session-resume"](
-            snap_rel, bytes(delta_bytes), _DEFAULT_SHELL, _DEFAULT_PROMPT, mount_entries
+            snap_rel, delta_rel, _DEFAULT_SHELL, _DEFAULT_PROMPT, mount_entries
         )
         session_id = int(_unwrap_result(result))
 
