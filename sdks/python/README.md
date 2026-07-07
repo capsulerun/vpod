@@ -88,7 +88,7 @@ sbx.code.run("import numpy; print(numpy.__version__)")
 |:---|:---|
 | `sandbox.suspend()` | Suspend to disk, returns instance ID |
 | `Sandbox.resume(id)` | Resume a suspended instance |
-| `Sandbox.list_sessions()` | List all instances |
+| `Sandbox.list_instances()` | List all instances |
 
 ### Shell commands (stateless)
 

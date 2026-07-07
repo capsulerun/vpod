@@ -34,12 +34,12 @@ def test_suspend_and_resume_preserves_files():
     sbx.close()
 
 
-def test_list_sessions_shows_suspended():
+def test_list_instances_shows_suspended():
     with Sandbox.create() as sbx:
         sbx.commands.run("echo test")
         instance_id = sbx.suspend()
 
-    instances = Sandbox.list_sessions()
+    instances = Sandbox.list_instances()
     ids = [e["id"] for e in instances]
     assert instance_id in ids
 
@@ -53,7 +53,7 @@ def test_resume_updates_state_to_running():
 
     sbx = Sandbox.resume(instance_id)
 
-    instances = Sandbox.list_sessions()
+    instances = Sandbox.list_instances()
     entry = next(e for e in instances if e["id"] == instance_id)
     assert entry["state"] == "RUNNING"
     sbx.close()
@@ -65,7 +65,7 @@ def test_destroy_removes_instance():
 
     Sandbox.destroy(instance_id)
 
-    instances = Sandbox.list_sessions()
+    instances = Sandbox.list_instances()
     ids = [e["id"] for e in instances]
     assert instance_id not in ids
 
