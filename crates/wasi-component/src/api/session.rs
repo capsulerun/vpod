@@ -80,7 +80,7 @@ impl SessionManager {
             &mut hart,
             &mut std::io::Cursor::new(&cached.tail),
         )
-            .map_err(|e| format!("failed to restore devices: {e}"))?;
+        .map_err(|e| format!("failed to restore devices: {e}"))?;
         drop(cache);
 
         let is_shell = command == "/bin/sh" || command == "sh" || command == "/bin/ash";
