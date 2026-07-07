@@ -111,6 +111,6 @@ def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list
             raise RuntimeError(f"WASM export '{name}' is not a function")
         return lambda *args: func(store, *args)
 
-    exports = {name: get_export(name) for name in ("execute", "session-start", "session-exec", "session-close")}
+    exports = {name: get_export(name) for name in ("execute", "session-start", "session-exec", "session-close", "session-suspend", "session-resume")}
 
     return store, exports

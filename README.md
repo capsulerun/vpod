@@ -140,6 +140,9 @@ vpod --mount workspace:/workspace:rw # read and write
 | `Sandbox.create()` | Create a new sandbox |
 | `sandbox.commands.run(cmd)` | Run a command |
 | `sandbox.code.run(code)` | Run Python code |
+| `sandbox.suspend()` | Suspend session to disk, returns instance ID |
+| `Sandbox.resume(id)` | Resume a suspended instance |
+| `Sandbox.list_instances()` | List all instances |
 
 ```python
 from vpod import Sandbox
@@ -196,6 +199,25 @@ for snap in snapshots.catalog():
 snapshots.pull("vsnap-data")
 ```
 
+
+### Suspend & Resume
+
+Pause a running sandbox and resume it later — no daemon, no background process. The VM state is serialized to disk and reconstructed on demand.
+
+```python
+from vpod import Sandbox
+
+with Sandbox.create() as sandbox:
+    sandbox.commands.run("export SECRET=42")
+    instance_id = sandbox.suspend()
+
+# Later (even from a new process):
+sandbox = Sandbox.resume(instance_id)
+result = sandbox.commands.run("echo $SECRET")
+print(result.stdout)  # 42
+```
+
+Only dirty memory pages are saved, making suspend/resume fast (~50-100ms) and storage-efficient (<1MB for short sessions).
 
 ## Limitations
 - **Emulation overhead**: No hardware acceleration in the WASM component. CPU-intensive workloads may run slower than native.

@@ -1,3 +1,4 @@
+from asyncio import selector_events
 import json
 import uuid
 from os.path import abspath
@@ -5,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import snapshots
+from .snapshots import cache_dir
 from ._component import load_component, locate_wasm
 from ._result import unwrap_result as _unwrap_result
 from .code import Code
@@ -76,7 +78,7 @@ class Sandbox:
         )
 
     @classmethod
-    def create(cls, snapshot: str = "alpine:latest", mounts: dict[str, str] | None = None) -> "Sandbox":
+    def create(cls, snapshot: str = "vsnap-base:latest", mounts: dict[str, str] | None = None) -> "Sandbox":
         return cls(snapshot, mounts=mounts)
 
     def _get_shell_session_id(self) -> int:
@@ -114,6 +116,14 @@ class Sandbox:
     def close(self) -> None:
         self.__exit__()
 
+    def _snapshot_sha256(self) -> str:
+        snapshot_name = self._snapshot_path.removeprefix("snap/")
+        snap_file = cache_dir() / snapshot_name
+        meta_file = snap_file.with_suffix(".meta")
+        if meta_file.exists():
+            return meta_file.read_text().strip()
+        return ""
+
     def suspend(self) -> str:
         session_id = self._get_shell_session_id()
         result = self._exports["session-suspend"](session_id)
@@ -126,6 +136,7 @@ class Sandbox:
         (instance_dir / "delta.bin").write_bytes(delta_bytes)
         (instance_dir / "meta.json").write_text(json.dumps({
             "snapshot": self._snapshot_path,
+            "snapshot_sha256": self._snapshot_sha256(),
             "mounts": self._mounts,
             "state": "SUSPENDED",
         }))
@@ -142,6 +153,17 @@ class Sandbox:
 
         snapshot_name = meta["snapshot"].removeprefix("snap/")
         snapshot_path = snapshots.pull(snapshot_name)
+
+        expected_hash = meta.get("snapshot_sha256", "")
+        if expected_hash:
+            meta_file = snapshot_path.with_suffix(".meta")
+            current_hash = meta_file.read_text().strip() if meta_file.exists() else ""
+            if current_hash and current_hash != expected_hash:
+                raise RuntimeError(
+                    f"Snapshot changed since suspend (expected {expected_hash[:12]}…, "
+                    f"got {current_hash[:12]}…). The delta is no longer valid."
+                )
+
         wasm_path = locate_wasm()
 
         saved_mounts = _parse_mounts(mounts) if mounts else meta.get("mounts", [])
@@ -158,7 +180,7 @@ class Sandbox:
 
         snap_rel = "snap/" + snapshot_path.name
         result = exports["session-resume"](
-            snap_rel, list(delta_bytes), _DEFAULT_SHELL, _DEFAULT_PROMPT, mount_entries
+            snap_rel, bytes(delta_bytes), _DEFAULT_SHELL, _DEFAULT_PROMPT, mount_entries
         )
         session_id = int(_unwrap_result(result))
 
@@ -168,20 +190,21 @@ class Sandbox:
         instance._store = store
         instance._exports = exports
         instance._shell_session_id = session_id
-        instance._in_context = False
+        instance._in_context = True
         instance.commands = Commands(exports, snap_rel, instance._get_shell_session_id)
         instance.code = Code(exports, snap_rel, instance._get_code_session_id)
 
         cls._update_manifest(instance_id, "RUNNING")
         return instance
 
-    def destroy(self, instance_id: str) -> None:
+    @staticmethod
+    def destroy(instance_id: str) -> None:
         """Remove a suspended instance from disk."""
         import shutil
         instance_dir = INSTANCES_DIR / instance_id
         if instance_dir.exists():
             shutil.rmtree(instance_dir)
-        self._remove_from_manifest(instance_id)
+        Sandbox._remove_from_manifest(instance_id)
 
     @staticmethod
     def list_instances() -> list[dict]:

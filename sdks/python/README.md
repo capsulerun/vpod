@@ -68,6 +68,28 @@ with Sandbox.create(snapshot="vsnap-data", mounts=mounts) as sbx:
     sbx.code.run("print('Pandas is ready!')")
 ```
 
+### Suspend & Resume
+
+Pause a running sandbox and resume it later — no daemon, no background process. Only dirty memory pages are saved, making it fast and storage-efficient.
+
+```python
+from vpod import Sandbox
+
+with Sandbox.create() as sbx:
+    sbx.commands.run("pip install numpy")
+    instance_id = sbx.suspend()
+
+# Later (even from a new process):
+sbx = Sandbox.resume(instance_id)
+sbx.code.run("import numpy; print(numpy.__version__)")
+```
+
+| Method | Description |
+|:---|:---|
+| `sandbox.suspend()` | Suspend to disk, returns instance ID |
+| `Sandbox.resume(id)` | Resume a suspended instance |
+| `Sandbox.list_instances()` | List all instances |
+
 ### Shell commands (stateless)
 
 If you just need a quick one-off execution without preserving state:
