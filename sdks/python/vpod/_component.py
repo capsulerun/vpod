@@ -17,6 +17,7 @@ except Exception:
 
 _engine = None
 _component = None
+_linker = None
 
 
 def locate_wasm() -> Path:
@@ -62,7 +63,7 @@ def _load_or_compile_component(engine: Engine, wasm_path: Path) -> Component:
 
 
 def _get_or_load_component(wasm_path: Path):
-    global _engine, _component
+    global _engine, _component, _linker
 
     if _engine is None:
         _engine = Engine()
@@ -70,14 +71,18 @@ def _get_or_load_component(wasm_path: Path):
     if _component is None:
         _component = _load_or_compile_component(_engine, wasm_path)
 
-    return _engine, _component
+    if _linker is None:
+        _linker = Linker(_engine)
+        _linker.add_wasip2()
+
+    return _engine, _component, _linker
 
 
 def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list[str] | None = None):
     from . import snapshots as _snapshots
     snap_dir = str(_snapshots.cache_dir()) if snapshot_path is None else str(snapshot_path.parent)
 
-    engine, component = _get_or_load_component(wasm_path)
+    engine, component, linker = _get_or_load_component(wasm_path)
 
     store = Store(engine)
     wasi = WasiConfig()
@@ -92,9 +97,6 @@ def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list
 
     wasi_config_inherit_network(wasi.ptr())
     store.set_wasi(wasi)
-
-    linker = Linker(engine)
-    linker.add_wasip2()
 
     instance = linker.instantiate(store, component)
 

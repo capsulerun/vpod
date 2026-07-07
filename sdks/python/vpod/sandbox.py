@@ -1,4 +1,3 @@
-from asyncio import selector_events
 import json
 import uuid
 from os.path import abspath
@@ -207,7 +206,7 @@ class Sandbox:
         Sandbox._remove_from_manifest(instance_id)
 
     @staticmethod
-    def list_instances() -> list[dict]:
+    def list_sessions() -> list[dict]:
         """List all suspended/running instances."""
         manifest_path = INSTANCES_DIR / "manifest.json"
         if not manifest_path.exists():
