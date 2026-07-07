@@ -1,4 +1,5 @@
 import json
+import os
 import uuid
 from os.path import abspath
 from pathlib import Path
@@ -150,8 +151,17 @@ class Sandbox:
         meta = json.loads((instance_dir / "meta.json").read_text())
         delta_rel = f"instances/{instance_id}/delta.bin"
 
-        snapshot_name = meta["snapshot"].removeprefix("snap/").removesuffix(".snap")
-        snapshot_path = snapshots.pull(snapshot_name)
+
+        snapshot_file = meta["snapshot"].removeprefix("snap/")
+        override = os.environ.get("VPOD_SNAPSHOT")
+        if override and Path(override).exists():
+            snapshot_path = Path(override)
+        else:
+            cached = cache_dir() / snapshot_file
+            snapshot_path = (
+                cached if cached.exists()
+                else snapshots.pull(snapshot_file.removesuffix(".snap"))
+            )
 
         expected_hash = meta.get("snapshot_sha256", "")
         if expected_hash:
