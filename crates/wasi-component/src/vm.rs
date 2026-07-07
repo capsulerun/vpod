@@ -91,57 +91,17 @@ fn detect_compression(path: &Path) -> Result<Compression, String> {
     }
 }
 
-pub fn _read_snapshot_bytes(path: &Path) -> Result<Vec<u8>, String> {
+pub fn _read_base_and_tail(path: &Path) -> Result<(CowRam, Vec<u8>, u8), String> {
     let file = std::fs::File::open(path)
         .map_err(|e| format!("failed to open snapshot {:?}: {e}", path))?;
 
-    let mut bytes = Vec::new();
     match detect_compression(path)? {
         Compression::Lz4 => {
-            BufReader::new(FrameDecoder::new(file))
-                .read_to_end(&mut bytes)
-                .map_err(|e| format!("failed to read snapshot: {e}"))?;
+            snapshot::load_base_and_tail(&mut BufReader::new(FrameDecoder::new(file)))
         }
-        Compression::Raw => {
-            BufReader::new(file)
-                .read_to_end(&mut bytes)
-                .map_err(|e| format!("failed to read snapshot: {e}"))?;
-        }
+        Compression::Raw => snapshot::load_base_and_tail(&mut BufReader::new(file)),
     }
-    Ok(bytes)
-}
-
-pub fn _load_from_bytes(
-    snapshot_bytes: &[u8],
-    ram_size: u64,
-    mounts: &[MountArg],
-    capture_tx: bool,
-) -> Result<(MachineBus, Hart, u8), String> {
-    let mut bus = MachineBus::new(ram_size, CowRam::new(ram_size));
-    bus.attach_net();
-    bus.attach_fs(vec![]);
-    let mut hart = Hart::new(0x1000);
-
-    let mut cursor = std::io::Cursor::new(snapshot_bytes);
-    let flags = snapshot::restore(&mut bus, &mut hart, &mut cursor)
-        .map_err(|e| format!("failed to restore snapshot: {e}"))?;
-
-    for (i, m) in mounts.iter().enumerate() {
-        if let Some(fs) = bus.fs_devices.get_mut(i) {
-            fs.set_mounts(vec![Mount {
-                host_path: PathBuf::from(&m.alias),
-                tag: format!("vfs{}", i),
-                writable: m.writable,
-            }]);
-        }
-    }
-
-    bus.uart.capture_tx.set(capture_tx);
-    bus.uart_stderr.capture_tx.set(true);
-    bus.uart_ctrl.capture_tx.set(true);
-    bus.uart_data.capture_tx.set(true);
-
-    Ok((bus, hart, flags))
+    .map_err(|e| format!("failed to load snapshot base: {e}"))
 }
 
 pub fn _bus_from_base(

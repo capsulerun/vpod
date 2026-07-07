@@ -23,6 +23,6 @@ interface executor {
     session-exec: func(handle: u64, code: string) -> result<execution-result, string>;
     session-close: func(handle: u64);
 
-    session-suspend: func(handle: u64) -> result<list<u8>, string>;
-    session-resume: func(snapshot-path: string, delta: list<u8>, command: string, prompt: string, mounts: list<mount-entry>) -> result<u64, string>;
+    session-suspend: func(handle: u64, delta-path: string) -> result<u64, string>;
+    session-resume: func(snapshot-path: string, delta-path: string, command: string, prompt: string, mounts: list<mount-entry>) -> result<u64, string>;
 }

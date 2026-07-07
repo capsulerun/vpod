@@ -150,7 +150,7 @@ class Sandbox:
         meta = json.loads((instance_dir / "meta.json").read_text())
         delta_rel = f"instances/{instance_id}/delta.bin"
 
-        snapshot_name = meta["snapshot"].removeprefix("snap/")
+        snapshot_name = meta["snapshot"].removeprefix("snap/").removesuffix(".snap")
         snapshot_path = snapshots.pull(snapshot_name)
 
         expected_hash = meta.get("snapshot_sha256", "")

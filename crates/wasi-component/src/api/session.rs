@@ -19,11 +19,17 @@ pub struct Session {
     pub has_pyrunner: bool,
 }
 
+struct CachedBase {
+    path: String,
+    base: machine::cow_ram::CowRam,
+    tail: Vec<u8>,
+    flags: u8,
+}
+
 pub struct SessionManager {
     sessions: RefCell<HashMap<u64, Session>>,
     next_id: Cell<u64>,
-    snapshot_cache: RefCell<Option<(String, Vec<u8>)>>,
-    base_cache: RefCell<Option<(String, machine::cow_ram::CowRam)>>,
+    base_cache: RefCell<Option<CachedBase>>,
 }
 
 unsafe impl Sync for SessionManager {}
@@ -31,11 +37,27 @@ unsafe impl Sync for SessionManager {}
 pub static SESSION_MANAGER: LazyLock<SessionManager> = LazyLock::new(|| SessionManager {
     sessions: RefCell::new(HashMap::new()),
     next_id: Cell::new(1),
-    snapshot_cache: RefCell::new(None),
     base_cache: RefCell::new(None),
 });
 
 impl SessionManager {
+    fn ensure_base(&self, snapshot_path: &str) -> Result<(), String> {
+        let cache = self.base_cache.borrow();
+        let hit = matches!(&*cache, Some(c) if c.path == snapshot_path);
+        drop(cache);
+
+        if !hit {
+            let (base, tail, flags) = vm::_read_base_and_tail(snapshot_path.as_ref())?;
+            *self.base_cache.borrow_mut() = Some(CachedBase {
+                path: snapshot_path.to_string(),
+                base,
+                tail,
+                flags,
+            });
+        }
+        Ok(())
+    }
+
     pub fn start_session(
         &self,
         snapshot_path: String,
@@ -46,24 +68,19 @@ impl SessionManager {
         let ram_size = vm::ram_size_from_filename(std::path::Path::new(&snapshot_path))
             .unwrap_or(256 * 1024 * 1024);
 
-        {
-            let cache = self.snapshot_cache.borrow();
-            let needs_load = match &*cache {
-                Some((path, _)) => *path != snapshot_path,
-                None => true,
-            };
-            drop(cache);
+        self.ensure_base(&snapshot_path)?;
 
-            if needs_load {
-                let bytes = vm::_read_snapshot_bytes(snapshot_path.as_ref())?;
-                *self.snapshot_cache.borrow_mut() = Some((snapshot_path.clone(), bytes));
-            }
-        }
+        let cache = self.base_cache.borrow();
+        let cached = cache.as_ref().unwrap();
+        let flags = cached.flags;
+        let (mut bus, mut hart) = vm::_bus_from_base(&cached.base, ram_size, &mount_args, true);
 
-        let cache = self.snapshot_cache.borrow();
-        let snapshot_bytes = &cache.as_ref().unwrap().1;
-        let (mut bus, mut hart, flags) =
-            vm::_load_from_bytes(snapshot_bytes, ram_size, &mount_args, true)?;
+        machine::snapshot::restore_devices(
+            &mut bus,
+            &mut hart,
+            &mut std::io::Cursor::new(&cached.tail),
+        )
+            .map_err(|e| format!("failed to restore devices: {e}"))?;
         drop(cache);
 
         let is_shell = command == "/bin/sh" || command == "sh" || command == "/bin/ash";
@@ -288,26 +305,11 @@ impl SessionManager {
         let ram_size = vm::ram_size_from_filename(std::path::Path::new(&snapshot_path))
             .unwrap_or(256 * 1024 * 1024);
 
-        {
-            let cache = self.base_cache.borrow();
-            let needs_load = match &*cache {
-                Some((path, _)) => *path != snapshot_path,
-                None => true,
-            };
-            drop(cache);
-
-            if needs_load {
-                let bytes = vm::_read_snapshot_bytes(snapshot_path.as_ref())?;
-                let (ram_bytes, real_size) = machine::snapshot::base_ram(&bytes)
-                    .map_err(|e| format!("failed to read base RAM: {e}"))?;
-                let base = machine::cow_ram::CowRam::from_base(ram_bytes, real_size);
-                *self.base_cache.borrow_mut() = Some((snapshot_path.clone(), base));
-            }
-        }
+        self.ensure_base(&snapshot_path)?;
 
         let cache = self.base_cache.borrow();
-        let base = &cache.as_ref().unwrap().1;
-        let (mut bus, mut hart) = vm::_bus_from_base(base, ram_size, &mount_args, true);
+        let cached = cache.as_ref().unwrap();
+        let (mut bus, mut hart) = vm::_bus_from_base(&cached.base, ram_size, &mount_args, true);
         drop(cache);
 
         let meta_len_offset = delta.len() - 4;

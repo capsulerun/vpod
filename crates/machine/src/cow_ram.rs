@@ -239,7 +239,6 @@ impl CowRam {
         Ok(())
     }
 
-
     pub fn set_base(&mut self, padded: Vec<u8>) {
         debug_assert_eq!(padded.len(), Self::padded_len(self.len));
         let num_pages = padded.len() / PAGE_SIZE;
