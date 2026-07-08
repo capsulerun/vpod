@@ -140,9 +140,11 @@ vpod --mount workspace:/workspace:rw # read and write
 | `Sandbox.create()` | Create a new sandbox |
 | `sandbox.commands.run(cmd)` | Run a command |
 | `sandbox.code.run(code)` | Run Python code |
-| `sandbox.suspend()` | Suspend session to disk, returns session ID |
-| `Sandbox.resume(id)` | Resume a suspended session |
+| `sandbox.close()` | Shut down the running sandbox (suspended instances are unaffected) |
+| `sandbox.suspend()` | Suspend to disk, returns an instance ID |
+| `Sandbox.resume(id)` | Resume a suspended instance |
 | `Sandbox.list_instances()` | List all instances |
+| `Sandbox.destroy(id)` | Delete a suspended instance from disk |
 
 ```python
 from vpod import Sandbox
@@ -212,12 +214,15 @@ with Sandbox.create() as sandbox:
     instance_id = sandbox.suspend()
 
 # Later (even from a new process):
-sandbox = Sandbox.resume(instance_id)
-result = sandbox.commands.run("echo $SECRET")
-print(result.stdout)  # 42
+with Sandbox.resume(instance_id) as sandbox:
+    result = sandbox.commands.run("echo $SECRET")
+    print(result.stdout)  # 42
+
+# Delete the suspended instance from disk when you no longer need it
+Sandbox.destroy(instance_id)
 ```
 
-Only dirty memory pages are saved, making suspend/resume fast (~50-100ms) and storage-efficient (<1MB for short sessions).
+Only what changed is saved, so suspending is quick and the saved state stays small.
 
 ## Limitations
 - **Emulation overhead**: No hardware acceleration in the WASM component. CPU-intensive workloads may run slower than native.
