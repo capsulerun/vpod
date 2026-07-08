@@ -17,6 +17,8 @@ except Exception:
 
 _engine = None
 _component = None
+_linker = None
+_instance_cache = {}
 
 
 def locate_wasm() -> Path:
@@ -62,7 +64,7 @@ def _load_or_compile_component(engine: Engine, wasm_path: Path) -> Component:
 
 
 def _get_or_load_component(wasm_path: Path):
-    global _engine, _component
+    global _engine, _component, _linker
 
     if _engine is None:
         _engine = Engine()
@@ -70,34 +72,14 @@ def _get_or_load_component(wasm_path: Path):
     if _component is None:
         _component = _load_or_compile_component(_engine, wasm_path)
 
-    return _engine, _component
+    if _linker is None:
+        _linker = Linker(_engine)
+        _linker.add_wasip2()
+
+    return _engine, _component, _linker
 
 
-def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list[str] | None = None):
-    from . import snapshots as _snapshots
-    snap_dir = str(_snapshots.cache_dir()) if snapshot_path is None else str(snapshot_path.parent)
-
-    engine, component = _get_or_load_component(wasm_path)
-
-    store = Store(engine)
-    wasi = WasiConfig()
-    wasi.inherit_stdout()
-    wasi.inherit_stderr()
-    wasi.inherit_stdin()
-    wasi.preopen_dir(snap_dir, "snap")
-
-    if mount_dirs:
-        for i, dir_path in enumerate(mount_dirs):
-            wasi.preopen_dir(dir_path, f"mount{i}")
-
-    wasi_config_inherit_network(wasi.ptr())
-    store.set_wasi(wasi)
-
-    linker = Linker(engine)
-    linker.add_wasip2()
-
-    instance = linker.instantiate(store, component)
-
+def _resolve_exports(store, instance):
     iface_index = instance.get_export_index(store, "vpod:sandbox/executor@0.1.0")
     if iface_index is None:
         raise RuntimeError("WASM component does not export 'vpod:sandbox/executor@0.1.0'")
@@ -111,6 +93,48 @@ def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list
             raise RuntimeError(f"WASM export '{name}' is not a function")
         return lambda *args: func(store, *args)
 
-    exports = {name: get_export(name) for name in ("execute", "session-start", "session-exec", "session-close")}
+    return {name: get_export(name) for name in ("execute", "session-start", "session-exec", "session-close", "session-suspend", "session-resume")}
+
+
+def _instance_key(snap_dir: str, mount_dirs: list[str] | None) -> str:
+    parts = [snap_dir]
+    if mount_dirs:
+        parts.extend(sorted(mount_dirs))
+    return "|".join(parts)
+
+
+def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list[str] | None = None):
+    from . import snapshots as _snapshots
+    snap_dir = str(_snapshots.cache_dir()) if snapshot_path is None else str(snapshot_path.parent)
+
+    key = _instance_key(snap_dir, mount_dirs)
+
+    if key in _instance_cache:
+        return _instance_cache[key]
+
+    engine, component, linker = _get_or_load_component(wasm_path)
+
+    store = Store(engine)
+    wasi = WasiConfig()
+    wasi.inherit_stdout()
+    wasi.inherit_stderr()
+    wasi.inherit_stdin()
+    wasi.preopen_dir(snap_dir, "snap")
+
+    instances_dir = Path.home() / ".vpod" / "instances"
+    instances_dir.mkdir(parents=True, exist_ok=True)
+    wasi.preopen_dir(str(instances_dir), "instances")
+
+    if mount_dirs:
+        for i, dir_path in enumerate(mount_dirs):
+            wasi.preopen_dir(dir_path, f"mount{i}")
+
+    wasi_config_inherit_network(wasi.ptr())
+    store.set_wasi(wasi)
+
+    instance = linker.instantiate(store, component)
+    exports = _resolve_exports(store, instance)
+
+    _instance_cache[key] = (store, exports)
 
     return store, exports

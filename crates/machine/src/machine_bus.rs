@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::clint::{CLINT_BASE, CLINT_SIZE, Clint, TIMER_FREQUENCY};
+use crate::cow_ram::CowRam;
 use crate::dtb;
 use crate::plic::{PLIC_BASE, PLIC_SIZE, Plic};
 use crate::uart::Uart;
@@ -22,7 +23,7 @@ use riscv_core::csr::{MIP_MEIP, MIP_MSIP, MIP_MTIP, MIP_SEIP};
 use riscv_core::{Hart, SystemBus};
 
 pub struct MachineBus {
-    pub ram: Vec<u8>,
+    pub ram: CowRam,
     ram_mask: u64,
     pub low_ram: Vec<u8>,
     pub uart: Uart,
@@ -38,13 +39,14 @@ pub struct MachineBus {
 }
 
 impl MachineBus {
-    pub fn new(ram_size: u64) -> Self {
+    pub fn new(ram_size: u64, ram: CowRam) -> Self {
         assert!(
             ram_size.is_power_of_two(),
             "ram_size must be a power of two"
         );
+
         Self {
-            ram: vec![0u8; ram_size as usize + 8],
+            ram,
             ram_mask: ram_size - 1,
             low_ram: vec![0u8; LOW_RAM_SIZE as usize],
             uart: Uart::new(),
@@ -94,9 +96,12 @@ impl MachineBus {
         self.ram.len() as u64
     }
 
+    pub fn dirty_pages(&self) -> Vec<u32> {
+        self.ram.dirty_pages()
+    }
+
     pub fn load_ram(&mut self, offset: u64, data: &[u8]) {
-        let start = offset as usize;
-        self.ram[start..start + data.len()].copy_from_slice(data);
+        self.ram.write_from(offset as usize, data);
     }
 
     pub fn load_low_ram(&mut self, offset: u64, data: &[u8]) {
@@ -141,7 +146,9 @@ impl MachineBus {
         if let Some(network_device) = &mut self.net {
             let mask = self.ram_mask;
             let mut ram = RamView::new(&mut self.ram, mask);
+
             network_device.poll_rx(&mut ram);
+
             self.plic
                 .set_irq(VIRTIO_NET_IRQ, network_device.mmio.int_status != 0);
         }
@@ -188,6 +195,7 @@ impl MachineBus {
     pub fn flush_console_rx(&mut self) {
         let mask = self.ram_mask;
         let mut ram = RamView::new(&mut self.ram, mask);
+
         self.console.flush_rx(&mut ram);
     }
 
@@ -199,20 +207,18 @@ impl MachineBus {
     #[inline(always)]
     fn ram_write_u8(&mut self, physical_address: u64, value: u8) {
         let index = self.ram_index(physical_address);
-        unsafe {
-            *self.ram.get_unchecked_mut(index) = value;
-        }
+        self.ram.write_u8(index, value);
     }
 
     #[inline(always)]
     fn ram_read_u8(&self, physical_address: u64) -> u8 {
         let index = self.ram_index(physical_address);
-
-        unsafe { *self.ram.get_unchecked(index) }
+        self.ram.read_u8(index)
     }
 
     fn virtio_device_slot(&self, address: u64) -> Option<usize> {
         let num_slots = 3 + VIRTIO_MAX_FS;
+
         if (VIRTIO_BASE..VIRTIO_BASE + VIRTIO_SIZE * num_slots as u64).contains(&address) {
             Some(((address - VIRTIO_BASE) / VIRTIO_SIZE) as usize)
         } else {
@@ -285,9 +291,8 @@ impl SystemBus for MachineBus {
     fn read_word(&mut self, address: u64) -> u32 {
         if address >= RAM_BASE && address + 3 < RAM_BASE + self.ram.len() as u64 {
             let index = (address - RAM_BASE) as usize;
-            return unsafe {
-                u32::from_le_bytes(*(self.ram.as_ptr().add(index) as *const [u8; 4]))
-            };
+
+            return self.ram.read_u32(index);
         }
 
         if (CLINT_BASE..CLINT_BASE + CLINT_SIZE - 3).contains(&address) {
@@ -329,9 +334,8 @@ impl SystemBus for MachineBus {
     fn read_doubleword(&mut self, address: u64) -> u64 {
         if address >= RAM_BASE && address + 7 < RAM_BASE + self.ram.len() as u64 {
             let index = (address - RAM_BASE) as usize;
-            return unsafe {
-                u64::from_le_bytes(*(self.ram.as_ptr().add(index) as *const [u8; 8]))
-            };
+
+            return self.ram.read_u64(index);
         }
 
         (self.read_word(address) as u64) | ((self.read_word(address + 4) as u64) << 32)
@@ -384,9 +388,8 @@ impl SystemBus for MachineBus {
 
         if address >= RAM_BASE && address + 3 < RAM_BASE + self.ram.len() as u64 {
             let index = (address - RAM_BASE) as usize;
-            unsafe {
-                *(self.ram.as_mut_ptr().add(index) as *mut [u8; 4]) = value.to_le_bytes();
-            }
+
+            self.ram.write_u32(index, value);
             return;
         }
 
@@ -456,9 +459,7 @@ impl SystemBus for MachineBus {
     fn write_doubleword(&mut self, address: u64, value: u64) {
         if address >= RAM_BASE && address + 7 < RAM_BASE + self.ram.len() as u64 {
             let index = (address - RAM_BASE) as usize;
-            unsafe {
-                *(self.ram.as_mut_ptr().add(index) as *mut [u8; 8]) = value.to_le_bytes();
-            }
+            self.ram.write_u64(index, value);
             return;
         }
 
@@ -572,11 +573,7 @@ pub fn boot(
 
     let _ = std::fs::write("/tmp/vpod.dtb", &dtb_data);
 
-    let dtb_magic = u32::from_le_bytes(
-        bus.ram[dtb_offset as usize..dtb_offset as usize + 4]
-            .try_into()
-            .unwrap(),
-    );
+    let dtb_magic = bus.ram.read_u32(dtb_offset as usize);
 
     eprintln!(
         "[boot] entry={:#x} kernel={:#x}+{:#x} initrd={:#x}..{:#x} dtb={:#x} dtb_magic={:#010x}({}) dtb_size={}",

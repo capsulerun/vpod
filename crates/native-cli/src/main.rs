@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use lz4_flex::frame::FrameEncoder;
 
+use machine::cow_ram::CowRam;
 use machine::machine_bus::{MachineBus, boot};
 use machine::snapshot;
 use riscv_core::Hart;
@@ -114,7 +115,7 @@ fn main() {
     }
 
     let ram_size = ram_mb * 1024 * 1024;
-    let mut bus = MachineBus::new(ram_size);
+    let mut bus = MachineBus::new(ram_size, CowRam::new(ram_size));
     let mut hart = Hart::new(0x1000);
 
     if let Some(path) = &disk_path {

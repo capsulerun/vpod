@@ -1,4 +1,5 @@
 use lz4_flex::frame::FrameDecoder;
+use machine::cow_ram::CowRam;
 use machine::machine_bus::MachineBus;
 use machine::snapshot;
 use machine::virtio::fs::Mount;
@@ -48,7 +49,7 @@ pub struct VmConfig<'a> {
     pub capture_tx: bool,
 }
 
-fn ram_size_from_filename(snapshot_path: &Path) -> Option<u64> {
+pub fn ram_size_from_filename(snapshot_path: &Path) -> Option<u64> {
     let stem = snapshot_path.file_stem()?.to_str()?;
     for part in stem.rsplit('-') {
         let lower = part.to_ascii_lowercase();
@@ -90,10 +91,52 @@ fn detect_compression(path: &Path) -> Result<Compression, String> {
     }
 }
 
+pub fn _read_base_and_tail(path: &Path) -> Result<(CowRam, Vec<u8>, u8), String> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| format!("failed to open snapshot {:?}: {e}", path))?;
+
+    match detect_compression(path)? {
+        Compression::Lz4 => {
+            snapshot::load_base_and_tail(&mut BufReader::new(FrameDecoder::new(file)))
+        }
+        Compression::Raw => snapshot::load_base_and_tail(&mut BufReader::new(file)),
+    }
+    .map_err(|e| format!("failed to load snapshot base: {e}"))
+}
+
+pub fn _bus_from_base(
+    base: &CowRam,
+    ram_size: u64,
+    mounts: &[MountArg],
+    capture_tx: bool,
+) -> (MachineBus, Hart) {
+    let mut bus = MachineBus::new(ram_size, base.clone_shared());
+    bus.attach_net();
+    bus.attach_fs(vec![]);
+    let hart = Hart::new(0x1000);
+
+    for (i, m) in mounts.iter().enumerate() {
+        if let Some(fs) = bus.fs_devices.get_mut(i) {
+            fs.set_mounts(vec![Mount {
+                host_path: PathBuf::from(&m.alias),
+                tag: format!("vfs{}", i),
+                writable: m.writable,
+            }]);
+        }
+    }
+
+    bus.uart.capture_tx.set(capture_tx);
+    bus.uart_stderr.capture_tx.set(true);
+    bus.uart_ctrl.capture_tx.set(true);
+    bus.uart_data.capture_tx.set(true);
+
+    (bus, hart)
+}
+
 pub fn load(config: VmConfig) -> Result<(MachineBus, Hart, u8), String> {
     let ram_size = ram_size_from_filename(config.snapshot).unwrap_or(256 * 1024 * 1024);
 
-    let mut bus = MachineBus::new(ram_size);
+    let mut bus = MachineBus::new(ram_size, CowRam::new(ram_size));
     bus.attach_net();
     bus.attach_fs(vec![]);
     let mut hart = Hart::new(0x1000);

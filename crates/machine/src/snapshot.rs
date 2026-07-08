@@ -13,6 +13,10 @@ const VERSION: u8 = 1;
 pub const FLAG_SHELL_READY: u8 = 1 << 0;
 pub const FLAG_PYTHON_READY: u8 = 1 << 1;
 
+const DELTA_MAGIC: &[u8; 4] = b"VDLT";
+const DELTA_VERSION: u8 = 1;
+const PAGE_SIZE: usize = 4096;
+
 pub fn save(
     bus: &MachineBus,
     hart: &Hart,
@@ -26,7 +30,7 @@ pub fn save(
 
     let ram_size = bus.ram_size();
     writer.write_all(&ram_size.to_le_bytes())?;
-    writer.write_all(&bus.ram)?;
+    bus.ram.write_all_to(writer)?;
     writer.write_all(&bus.low_ram)?;
 
     save_hart(hart, writer)?;
@@ -97,8 +101,20 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
         ));
     }
 
-    reader.read_exact(&mut bus.ram)?;
+    let mut ram_bytes = vec![0u8; crate::cow_ram::CowRam::padded_len(ram_size as usize)];
+    reader.read_exact(&mut ram_bytes[..ram_size as usize])?;
+    bus.ram.set_base(ram_bytes);
 
+    restore_devices(bus, hart, reader)?;
+
+    Ok(flags[0])
+}
+
+pub fn restore_devices(
+    bus: &mut MachineBus,
+    hart: &mut Hart,
+    reader: &mut impl Read,
+) -> io::Result<()> {
     let mut low = vec![0u8; LOW_RAM_SIZE as usize];
     reader.read_exact(&mut low)?;
     bus.low_ram = low;
@@ -138,7 +154,173 @@ pub fn restore(bus: &mut MachineBus, hart: &mut Hart, reader: &mut impl Read) ->
     let _ = bus.uart_ctrl.deserialize(reader);
     let _ = bus.uart_data.deserialize(reader);
 
-    Ok(flags[0])
+    Ok(())
+}
+
+pub fn load_base_and_tail(
+    reader: &mut impl Read,
+) -> io::Result<(crate::cow_ram::CowRam, Vec<u8>, u8)> {
+    let mut magic = [0u8; 4];
+    reader.read_exact(&mut magic)?;
+
+    if &magic != MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid snapshot magic",
+        ));
+    }
+
+    let mut version = [0u8; 1];
+    reader.read_exact(&mut version)?;
+    if version[0] != VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "unsupported snapshot version {} (expected {})",
+                version[0], VERSION
+            ),
+        ));
+    }
+
+    let mut flags = [0u8; 1];
+    reader.read_exact(&mut flags)?;
+
+    let mut ram_size_buf = [0u8; 8];
+    reader.read_exact(&mut ram_size_buf)?;
+
+    let logical_len = u64::from_le_bytes(ram_size_buf) as usize;
+    let real_size = (logical_len - 8) as u64;
+
+    let mut base = vec![0u8; crate::cow_ram::CowRam::padded_len(logical_len)];
+    reader.read_exact(&mut base[..logical_len])?;
+    let cow = crate::cow_ram::CowRam::from_padded(base, logical_len, real_size);
+
+    let mut tail = Vec::new();
+    reader.read_to_end(&mut tail)?;
+
+    Ok((cow, tail, flags[0]))
+}
+
+pub fn save_delta(bus: &MachineBus, hart: &Hart, writer: &mut impl Write) -> io::Result<()> {
+    writer.write_all(DELTA_MAGIC)?;
+    writer.write_all(&[DELTA_VERSION])?;
+
+    let dirty_pages = bus.dirty_pages();
+    let page_count = dirty_pages.len() as u32;
+    writer.write_all(&page_count.to_le_bytes())?;
+
+    for &page_idx in &dirty_pages {
+        writer.write_all(&page_idx.to_le_bytes())?;
+        writer.write_all(bus.ram.page_bytes(page_idx as usize))?;
+    }
+
+    writer.write_all(&bus.low_ram)?;
+    save_hart(hart, writer)?;
+
+    bus.clint.serialize(writer)?;
+    bus.plic.save_state(writer)?;
+    bus.uart.serialize(writer)?;
+
+    bus.console.mmio.serialize(writer)?;
+
+    let has_net = bus.net.is_some();
+    writer.write_all(&[has_net as u8])?;
+
+    if let Some(net) = &bus.net {
+        net.mmio.serialize(writer)?;
+    }
+
+    let num_fs = bus.fs_devices.len() as u8;
+    writer.write_all(&[num_fs])?;
+    for fs in &bus.fs_devices {
+        fs.mmio.serialize(writer)?;
+    }
+
+    bus.uart_stderr.serialize(writer)?;
+    bus.uart_ctrl.serialize(writer)?;
+    bus.uart_data.serialize(writer)?;
+
+    Ok(())
+}
+
+pub fn restore_delta(
+    bus: &mut MachineBus,
+    hart: &mut Hart,
+    reader: &mut impl Read,
+) -> io::Result<()> {
+    let mut magic = [0u8; 4];
+    reader.read_exact(&mut magic)?;
+
+    if &magic != DELTA_MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid delta magic",
+        ));
+    }
+
+    let mut version = [0u8; 1];
+    reader.read_exact(&mut version)?;
+    if version[0] != DELTA_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "unsupported delta version {} (expected {})",
+                version[0], DELTA_VERSION
+            ),
+        ));
+    }
+
+    let mut buf4 = [0u8; 4];
+    reader.read_exact(&mut buf4)?;
+    let page_count = u32::from_le_bytes(buf4) as usize;
+
+    let mut page_buf = [0u8; PAGE_SIZE];
+    for _ in 0..page_count {
+        reader.read_exact(&mut buf4)?;
+        let page_idx = u32::from_le_bytes(buf4) as usize;
+        reader.read_exact(&mut page_buf)?;
+        bus.ram.apply_page(page_idx, &page_buf);
+    }
+
+    let mut low = vec![0u8; LOW_RAM_SIZE as usize];
+    reader.read_exact(&mut low)?;
+    bus.low_ram = low;
+
+    restore_hart(hart, reader)?;
+    bus.clint.deserialize(reader)?;
+    bus.plic.restore_state(reader)?;
+    bus.uart.deserialize(reader)?;
+    bus.console.mmio.deserialize(reader)?;
+
+    let mut has_net = [0u8; 1];
+    reader.read_exact(&mut has_net)?;
+    if has_net[0] != 0 {
+        if let Some(net) = &mut bus.net {
+            net.mmio.deserialize(reader)?;
+        } else {
+            let mut skip = VirtioMmio::new(0, 0, 2);
+            skip.deserialize(reader)?;
+        }
+    }
+
+    let mut num_fs_buf = [0u8; 1];
+    if reader.read_exact(&mut num_fs_buf).is_ok() {
+        let num_fs = num_fs_buf[0] as usize;
+        for i in 0..num_fs {
+            if let Some(fs) = bus.fs_devices.get_mut(i) {
+                fs.mmio.deserialize(reader)?;
+            } else {
+                let mut skip = VirtioMmio::new(0, 0, 2);
+                skip.deserialize(reader)?;
+            }
+        }
+    }
+
+    let _ = bus.uart_stderr.deserialize(reader);
+    let _ = bus.uart_ctrl.deserialize(reader);
+    let _ = bus.uart_data.deserialize(reader);
+
+    Ok(())
 }
 
 fn save_hart(hart: &Hart, writer: &mut impl Write) -> io::Result<()> {

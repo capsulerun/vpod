@@ -1,5 +1,7 @@
 pub mod clint;
+pub mod cow_ram;
 pub mod dtb;
+pub mod instance;
 pub mod machine_bus;
 pub mod plic;
 pub mod snapshot;
