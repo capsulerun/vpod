@@ -211,7 +211,6 @@ impl SessionManager {
                 .trim_end()
                 .to_string();
 
-
             let ctrl_bytes = session.bus.uart_ctrl.drain_tx();
             let exit_code = ctrl_bytes.first().copied().unwrap_or(0) as u32;
 
@@ -247,7 +246,6 @@ impl SessionManager {
                 .to_string();
 
             let exit_code = if session.is_shell {
-
                 let ctrl_bytes = session.bus.uart_ctrl.drain_tx();
                 match ctrl_bytes.first() {
                     Some(byte) => *byte as u32,
