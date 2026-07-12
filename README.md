@@ -10,7 +10,7 @@
   <a href="https://riscv.org/specifications/ratified/"><img src="https://img.shields.io/badge/RISCV-RV64GC-orange?logo=RISCV" alt="Risc-V"></a>
   <a href="https://wasi.dev/"><img src="https://img.shields.io/badge/Wasm%2FWASI-0.2.0-654FF0?logo=webassembly&logoColor=white" alt="Wasm/WASI 0.2 Sandbox"></a>
 
-[Getting Started](#getting-started) • [Documentation](#documentation) • [Issues](https://github.com/capsulerun/vpod/issues/new) • [Contributing](#contributing)
+[Getting Started](#getting-started) • [Documentation](https://docs.vpod.sh/) • [Issues](https://github.com/capsulerun/vpod/issues/new) • [Contributing](#contributing)
 
 ![demo](assets/demo.gif)
 </div>
@@ -109,120 +109,8 @@ with Sandbox.create() as sandbox:
 > [!IMPORTANT]
 > The first call to `Sandbox.create()` downloads the default snapshot (`alpine`) and caches it locally if not already present.
 
-## Documentation
-
-Full reference for the CLI and Python SDK.
-
-### CLI
-
-| Command | Description |
-|:---|:---|
-| `vpod` | Start an interactive shell with default snapshot |
-| `vpod <snapshot>` | Start an interactive shell with a specific snapshot |
-| `vpod pull <snapshot>` | Pull a snapshot |
-| `vpod list` | List available snapshots |
-
-#### Options
-
-##### `--mount` or `-m`
-Create a link between your host and your sandbox by mounting a directory. You can configure read-only or read-write permissions for better access control.
-
-```bash
-vpod --mount workspace:/workspace # read only
-vpod --mount workspace:/workspace:rw # read and write
-```
-
-
-### Python SDK
-
-| Method | Description |
-|:---|:---|
-| `Sandbox.create()` | Create a new sandbox |
-| `sandbox.commands.run(cmd)` | Run a command |
-| `sandbox.code.run(code)` | Run Python code |
-| `sandbox.close()` | Shut down the running sandbox (suspended instances are unaffected) |
-| `sandbox.suspend()` | Suspend to disk, returns an instance ID |
-| `Sandbox.resume(id)` | Resume a suspended instance |
-| `Sandbox.list_instances()` | List all instances |
-| `Sandbox.destroy(id)` | Delete a suspended instance from disk |
-
-```python
-from vpod import Sandbox
-
-with Sandbox.create() as sandbox:
-    sandbox.commands.run("echo 'from shell' > /tmp/shared.txt")
-    sandbox.code.run("print(open('/tmp/shared.txt').read().strip())")
-```
-
-#### `Sandbox.create()` parameters
-
-##### `snapshot`
-
-```python
-sandbox = Sandbox.create(snapshot="alpine")
-```
-
-##### `mounts`
-
-```python
-sandbox = Sandbox.create(mounts={"workspace": "/workspace:rw", "docs": "/docs" })
-```
-
-
-
-#### Snapshots
-
-| Name | tag | Description | Memory Limit (RAM) |
-|:---|:---|:---|:---|
-| `alpine` | 3.23.0 | Minimal Alpine Linux snapshot. | 256 MB |
-| `vsnap-base` | 1.0.0 | Alpine-based snapshot with Python pre-installed. | 256 MB |
-| `vsnap-data` | 1.0.0 | Alpine-based snapshot with `numpy`, `pandas`, and `scipy` pre‑installed. | 512 MB |
-
-```python
-with Sandbox.create(snapshot="vsnap-data") as sandbox:
-    sandbox.code.run("import pandas as pd; import numpy as np")
-    r = sandbox.code.run("s = pd.Series([1, 2, 3, 4, 5]); print(s.sum(), s.mean())")
-    print(r.text)
-```
-
-#### Snapshot API
-
-| Method | Description | Return type |
-|:---|:---|:---|
-| `snapshots.catalog()` | Fetch available snapshots | list[dict] |
-| `snapshots.pull(name)` | Pull a snapshot | str |
-
-```python
-from vpod import snapshots
-
-for snap in snapshots.catalog():
-    print(snap["name"], snap["tag"])
-
-snapshots.pull("vsnap-data")
-```
-
-
-### Suspend & Resume
-
-Pause a running sandbox and resume it later — no daemon, no background process. The VM state is serialized to disk and reconstructed on demand.
-
-```python
-from vpod import Sandbox
-
-with Sandbox.create() as sandbox:
-    sandbox.commands.run("export SECRET=42")
-    instance_id = sandbox.suspend()
-
-# Later (even from a new process):
-with Sandbox.resume(instance_id) as sandbox:
-    result = sandbox.commands.run("echo $SECRET")
-    print(result.stdout)  # 42
-
-# Delete the suspended instance from disk when you no longer need it
-Sandbox.destroy(instance_id)
-```
-
-Only what changed is saved, so suspending is quick and the saved state stays small.
+## Documentations
+Refer to the [Vpod Documentation](https://docs.vpod.sh/) for more informations.
 
 ## Limitations
 - **Emulation overhead**: No hardware acceleration in the WASM component. CPU-intensive workloads may run slower than native.
