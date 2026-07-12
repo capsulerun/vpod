@@ -1166,11 +1166,7 @@ pub fn raw_store<B: SystemBus>(
 
 #[inline(always)]
 pub fn effective_satp(priv_mode: PrivMode, satp: u64) -> u64 {
-    if priv_mode == PrivMode::M {
-        0
-    } else {
-        satp
-    }
+    if priv_mode == PrivMode::M { 0 } else { satp }
 }
 
 #[cfg(test)]
@@ -1188,7 +1184,6 @@ mod tests {
 
     #[test]
     fn block_loop_sum() {
-
         let mut mem = mem_with(&[
             (0x00, 0x00000093), // addi x1, x0, 0
             (0x04, 0x00500113), // addi x2, x0, 5
