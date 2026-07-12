@@ -14,11 +14,16 @@ const QUIET_PERIOD_NS: u64 = 150_000_000; // 150 ms
 pub fn sync_clock(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     let now = wall_clock::now();
     let date_cmd = format!("date -s @{}\n", now.seconds);
+
     for byte in date_cmd.bytes() {
         bus.uart.push_rx(byte);
     }
+
     wait_for_prompt(bus, hart, prompt);
+
     bus.uart.drain_tx();
+    bus.uart_stderr.drain_tx();
+    bus.uart_ctrl.drain_tx();
 }
 
 pub fn shell_init(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
@@ -27,6 +32,7 @@ pub fn shell_init(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     for byte in b"stty -echo\n" {
         bus.uart.push_rx(*byte);
     }
+
     wait_for_prompt(bus, hart, prompt);
     bus.uart.drain_tx();
 
@@ -37,6 +43,7 @@ pub fn shell_init(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     for byte in init_cmd.bytes() {
         bus.uart.push_rx(byte);
     }
+
     wait_for_prompt(bus, hart, prompt);
     bus.uart.drain_tx();
     bus.uart_stderr.drain_tx();
