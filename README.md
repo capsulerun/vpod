@@ -110,7 +110,7 @@ with Sandbox.create() as sandbox:
 > The first call to `Sandbox.create()` downloads the default snapshot (`alpine`) and caches it locally if not already present.
 
 ## Documentations
-Refer to the [Vpod Documentation](https://docs.vpod.sh/) for more informations.
+Refer to the [Documentation](https://docs.vpod.sh/) for more informations.
 
 ## Limitations
 - **Emulation overhead**: No hardware acceleration in the WASM component. CPU-intensive workloads may run slower than native.
