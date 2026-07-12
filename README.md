@@ -109,7 +109,6 @@ with Sandbox.create() as sandbox:
 > [!IMPORTANT]
 > The first call to `Sandbox.create()` downloads the default snapshot (`alpine`) and caches it locally if not already present.
 
-## Documentations
 For more details, see the [full documentation](https://docs.vpod.sh/).
 
 ## Limitations
