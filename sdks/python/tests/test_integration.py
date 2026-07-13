@@ -275,6 +275,14 @@ def test_network_dns_resolves():
         )
         assert result.success, f"exit={result.exit_code} stderr={result.stderr}"
 
+def test_network_https_fetches_body():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run(
+            "wget -qO- -T 15 -t 1 https://kfuckkfmkyxe0l-tests.vpod.sh; echo"
+        )
+        assert result.success, f"exit={result.exit_code} stderr={result.stderr}"
+        assert "VPOD_TEST_OK" in result.stdout, f"stdout={result.stdout!r}"
+
 def test_shared_vm_shell_writes_python_reads():
     with Sandbox.create() as sbx:
         sbx.commands.run("echo 'shared_value' > /tmp/shared.txt")
