@@ -43,7 +43,10 @@ impl Guest for Executor {
             .to_string();
 
         let ctrl_bytes = bus.uart_ctrl.drain_tx();
-        let exit_code = ctrl_bytes.first().copied().unwrap_or(0) as u32;
+        let exit_code = match ctrl_bytes.first() {
+            Some(byte) => *byte as u32,
+            None => 124,
+        };
 
         Ok(ExecutionResult {
             stdout,

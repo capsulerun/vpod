@@ -247,7 +247,10 @@ impl SessionManager {
 
             let exit_code = if session.is_shell {
                 let ctrl_bytes = session.bus.uart_ctrl.drain_tx();
-                ctrl_bytes.first().copied().unwrap_or(0) as u32
+                match ctrl_bytes.first() {
+                    Some(byte) => *byte as u32,
+                    None => 124,
+                }
             } else {
                 0
             };

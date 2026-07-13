@@ -1,5 +1,6 @@
 // Performs the mathematical and logical calculations requested by the instruction.
 
+use crate::block::{self, BlockCache};
 use crate::csr::{
     Csr, MSTATUS_FS, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP, MSTATUS_SIE, MSTATUS_SPIE,
     MSTATUS_SPP, PrivMode,
@@ -70,6 +71,7 @@ pub struct ExecContext<'a, B: SystemBus> {
     pub icache_tags: &'a mut Box<[u64; ICACHE_SIZE]>,
     pub icache_data: &'a mut Box<[u32; ICACHE_SIZE]>,
     pub is_waiting: &'a mut bool,
+    pub blocks: &'a mut BlockCache,
 }
 
 fn invalidate_fetch_cache<B: SystemBus>(ctx: &mut ExecContext<B>) {
@@ -79,11 +81,62 @@ fn invalidate_fetch_cache<B: SystemBus>(ctx: &mut ExecContext<B>) {
 }
 
 pub fn run<B: SystemBus>(ctx: &mut ExecContext<B>, max_steps: u64) -> StepResult {
-    for _ in 0..max_steps {
+    let mut remaining = max_steps as i64;
+
+    while remaining > 0 {
+        if let Some(irq) = ctx.csr.pending_interrupt(*ctx.priv_mode) {
+            *ctx.fetch_vpage = u64::MAX;
+            *ctx.is_waiting = false;
+            match take_interrupt(ctx, irq) {
+                StepResult::Ok => {}
+                other => return other,
+            }
+            remaining -= 1;
+            continue;
+        }
+
+        let pc = ctx.regs.pc;
+        let effective_satp = block::effective_satp(*ctx.priv_mode, ctx.csr.satp);
+
+        let virtual_page = pc >> 12;
+        let fetch_pa = if virtual_page == *ctx.fetch_vpage && effective_satp == *ctx.fetch_satp {
+            (*ctx.fetch_ppage << 12) | (pc & 0xfff)
+        } else {
+            match ctx.mmu.translate_fetch(pc, effective_satp, ctx.bus) {
+                Ok(pa) => {
+                    *ctx.fetch_vpage = virtual_page;
+                    *ctx.fetch_ppage = pa >> 12;
+                    *ctx.fetch_satp = effective_satp;
+                    pa
+                }
+                Err(fault) => {
+                    match trap_from_mmu(ctx, fault) {
+                        StepResult::Ok => {}
+                        other => return other,
+                    }
+                    remaining -= 1;
+                    continue;
+                }
+            }
+        };
+
+        if let Some(cached) = ctx.blocks.lookup(fetch_pa) {
+            remaining -= block::exec_block(ctx, &cached, pc, effective_satp) as i64;
+            continue;
+        }
+
+        if let Some(decoded) = block::decode_block(ctx.bus, fetch_pa) {
+            let cached = ctx.blocks.insert(fetch_pa, decoded);
+            remaining -= block::exec_block(ctx, &cached, pc, effective_satp) as i64;
+            continue;
+        }
+
         match step(ctx) {
             StepResult::Ok => {}
             other => return other,
         }
+
+        remaining -= 1;
     }
 
     StepResult::Ok
@@ -353,6 +406,8 @@ fn exec_full<B: SystemBus>(
                             Ok(physical_address) => physical_address,
                             Err(fault) => return trap_from_mmu(ctx, fault),
                         };
+
+                    ctx.blocks.notify_store(byte_physical_address);
                     ctx.bus
                         .write_byte(byte_physical_address, bytes[byte_index as usize]);
                 }
@@ -366,6 +421,7 @@ fn exec_full<B: SystemBus>(
                         Err(fault) => return trap_from_mmu(ctx, fault),
                     };
 
+                ctx.blocks.notify_store(physical_address);
                 match inst.funct3() {
                     FUNCT3_SB => ctx.bus.write_byte(physical_address, source_value as u8),
                     FUNCT3_SH => ctx
@@ -544,6 +600,11 @@ fn exec_full<B: SystemBus>(
         OP_AMO => return exec_amo(ctx, inst, raw),
 
         OP_FENCE => {
+            if inst.funct3() == 0x1 {
+                ctx.blocks.flush_all();
+                invalidate_fetch_cache(ctx);
+            }
+
             ctx.regs.pc = pc.wrapping_add(4);
         }
 
@@ -577,6 +638,8 @@ fn exec_amo<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32)
         Ok(pa) => pa,
         Err(f) => return trap_from_mmu(ctx, f),
     };
+
+    ctx.blocks.notify_store(pa);
 
     match funct5 {
         0x02 => {
@@ -837,6 +900,7 @@ fn cross_page_store_dw<B: SystemBus>(
     if va & 0xFFF <= 0xFF8 {
         match ctx.mmu.translate_store(va, satp, ctx.bus) {
             Ok(pa) => {
+                ctx.blocks.notify_store(pa);
                 ctx.bus.write_doubleword(pa, val);
                 DwStoreResult::Ok
             }
@@ -848,7 +912,10 @@ fn cross_page_store_dw<B: SystemBus>(
         for i in 0..8u64 {
             let bva = va.wrapping_add(i);
             match ctx.mmu.translate_store(bva, satp, ctx.bus) {
-                Ok(bpa) => ctx.bus.write_byte(bpa, bytes[i as usize]),
+                Ok(bpa) => {
+                    ctx.blocks.notify_store(bpa);
+                    ctx.bus.write_byte(bpa, bytes[i as usize])
+                }
                 Err(f) => return DwStoreResult::Fault(trap_from_mmu(ctx, f)),
             }
         }
@@ -866,6 +933,7 @@ fn cross_page_store_dw_result<B: SystemBus>(
 ) -> Result<(), MmuFault> {
     if va & 0xFFF <= 0xFF8 {
         let pa = ctx.mmu.translate_store(va, satp, ctx.bus)?;
+        ctx.blocks.notify_store(pa);
         ctx.bus.write_doubleword(pa, val);
     } else {
         let bytes = val.to_le_bytes();
@@ -873,6 +941,7 @@ fn cross_page_store_dw_result<B: SystemBus>(
         for i in 0..8u64 {
             let bva = va.wrapping_add(i);
             let bpa = ctx.mmu.translate_store(bva, satp, ctx.bus)?;
+            ctx.blocks.notify_store(bpa);
             ctx.bus.write_byte(bpa, bytes[i as usize]);
         }
     }
@@ -951,6 +1020,7 @@ fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResu
                 Err(f) => return trap_from_mmu(ctx, f),
             };
 
+            ctx.blocks.notify_store(pa);
             ctx.bus.write_word(pa, ctx.regs.read(rs2) as u32);
             ctx.regs.pc = pc.wrapping_add(2);
         }
@@ -1162,6 +1232,7 @@ fn exec_compressed<B: SystemBus>(ctx: &mut ExecContext<B>, raw: u16) -> StepResu
                 Err(f) => return trap_from_mmu(ctx, f),
             };
 
+            ctx.blocks.notify_store(pa);
             ctx.bus.write_word(pa, ctx.regs.read(rs2) as u32);
             ctx.regs.pc = pc.wrapping_add(2);
         }
@@ -1535,6 +1606,7 @@ fn store_fp<B: SystemBus>(
                 }
             };
             let val = ctx.regs.read_f32(inst.rs2());
+            ctx.blocks.notify_store(pa);
             ctx.bus.write_word(pa, val);
         }
         0x3 => {

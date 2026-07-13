@@ -396,6 +396,8 @@ fn restore_hart(hart: &mut Hart, reader: &mut impl Read) -> io::Result<()> {
     reader.read_exact(&mut buffer_u64)?;
     hart.fetch_satp = u64::from_le_bytes(buffer_u64);
 
+    hart.invalidate_icache();
+
     restore_csr(hart, reader)
 }
 

@@ -174,6 +174,7 @@ _real_stdout = sys.stdout
 _real_stderr = sys.stderr
 _data_out = open("/dev/ttyS3", "w")
 _data_in = open("/dev/ttyS3", "r", buffering=1)
+_exit_code_out = open("/dev/ttyS2", "wb", buffering=0)
 
 while True:
     _line = _data_in.readline()
@@ -190,12 +191,18 @@ while True:
     _buf = io.StringIO()
     sys.stdout = _buf
     sys.stderr = _buf
+    _exit_code = 0
     try:
         exec(compile(_code, "<vpod>", "exec"), _globals)
-    except SystemExit:
-        pass
+    except SystemExit as _e:
+        if isinstance(_e.code, int):
+            _exit_code = _e.code & 0xFF
+        elif _e.code is not None:
+            _buf.write(str(_e.code) + "\n")
+            _exit_code = 1
     except Exception:
         _buf.write(traceback.format_exc())
+        _exit_code = 1
     finally:
         sys.stdout = _real_stdout
         sys.stderr = _real_stderr
@@ -203,6 +210,7 @@ while True:
     _val = _buf.getvalue()
     if _val:
         _data_out.write(_val)
+    _exit_code_out.write(bytes([_exit_code]))
     _data_out.write(_sentinel + "\n")
     _data_out.flush()
 PYRUNNER_EOF
@@ -229,7 +237,8 @@ cat "$PART_MINI" "$PART_OVL" > "$OUT"
 rm -f "$PART_MINI" "$PART_OVL"
 echo "   Done: $OUT ($(du -sh "$OUT" | cut -f1))"
 
-SNAP="$ROOT/dist/vsnap-base-${RAM_MB}mb.snap"
+# SNAP="$ROOT/dist/vsnap-base-${RAM_MB}mb.snap"
+SNAP="$ROOT/dist/alpine-3.23.0-256mb.snap"
 BOOTARGS="root=/dev/ram0 rw console=ttyS0 earlycon init=/sbin/init"
 
 echo "── Booting guest to pre-install ca-certificates + python3..."
