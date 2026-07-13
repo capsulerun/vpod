@@ -1,5 +1,6 @@
 import pytest
 from vpod import Sandbox
+from vpod.sandbox import INSTANCES_DIR
 
 pytestmark = pytest.mark.integration
 
@@ -47,15 +48,15 @@ def test_list_instances_shows_suspended():
     assert entry["state"] == "SUSPENDED"
 
 
-def test_resume_updates_state_to_running():
+def test_resume_consumes_instance():
     with Sandbox.create() as sbx:
         instance_id = sbx.suspend()
 
     sbx = Sandbox.resume(instance_id)
 
-    instances = Sandbox.list_instances()
-    entry = next(e for e in instances if e["id"] == instance_id)
-    assert entry["state"] == "RUNNING"
+    ids = [e["id"] for e in Sandbox.list_instances()]
+    assert instance_id not in ids
+    assert not (INSTANCES_DIR / instance_id).exists()
     sbx.close()
 
 
