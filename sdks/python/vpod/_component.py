@@ -57,10 +57,22 @@ def _load_or_compile_component(engine: Engine, wasm_path: Path) -> Component:
     try:
         serialized = component.serialize()
         cache_path.write_bytes(serialized)
+        _prune_stale_cwasm(cache_path)
     except Exception:
         pass
 
     return component
+
+
+def _prune_stale_cwasm(active_cache_path: Path) -> None:
+    caches = sorted(
+        active_cache_path.parent.glob("component-*.cwasm"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+    for stale in caches[2:]:
+        stale.unlink(missing_ok=True)
 
 
 def _get_or_load_component(wasm_path: Path):

@@ -203,7 +203,8 @@ class Sandbox:
         instance.commands = Commands(exports, snap_rel, instance._get_shell_session_id)
         instance.code = Code(exports, snap_rel, instance._get_code_session_id)
 
-        cls._update_manifest(instance_id, "RUNNING")
+
+        Sandbox.destroy(instance_id)
         return instance
 
     @staticmethod
@@ -217,7 +218,7 @@ class Sandbox:
 
     @staticmethod
     def list_instances() -> list[dict]:
-        """List all suspended/running instances."""
+        """List all suspended instances."""
         manifest_path = INSTANCES_DIR / "manifest.json"
         if not manifest_path.exists():
             return []
