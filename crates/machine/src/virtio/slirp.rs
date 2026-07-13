@@ -308,8 +308,7 @@ impl SlirpBackend {
 
             if req.created.elapsed() > DNS_RELAY_TIMEOUT {
                 if let Some(question) = parse_dns_question(&req.query) {
-                    let servfail =
-                        build_dns_reply(&req.query, &question, &[], DNS_RCODE_SERVFAIL);
+                    let servfail = build_dns_reply(&req.query, &question, &[], DNS_RCODE_SERVFAIL);
                     let udp_reply = make_udp_payload(53, req.src_port, &servfail);
                     self.rx_pending.push_back(make_ip_frame(
                         &req.guest_mac,
@@ -1160,7 +1159,10 @@ mod tests {
         let question = parse_dns_question(&query).unwrap();
         let reply = build_dns_reply(&query, &question, &[], DNS_RCODE_SERVFAIL);
 
-        assert_eq!(u16::from_be_bytes([reply[2], reply[3]]) & 0x000F, DNS_RCODE_SERVFAIL);
+        assert_eq!(
+            u16::from_be_bytes([reply[2], reply[3]]) & 0x000F,
+            DNS_RCODE_SERVFAIL
+        );
         assert_eq!(u16::from_be_bytes([reply[6], reply[7]]), 0);
     }
 
@@ -1169,7 +1171,10 @@ mod tests {
         let query = example_com_query(DNS_QTYPE_AAAA);
         let reply = answer_dns_with_host_resolver(&query).unwrap();
 
-        assert_eq!(u16::from_be_bytes([reply[2], reply[3]]) & 0x000F, DNS_RCODE_NOERROR);
+        assert_eq!(
+            u16::from_be_bytes([reply[2], reply[3]]) & 0x000F,
+            DNS_RCODE_NOERROR
+        );
         assert_eq!(u16::from_be_bytes([reply[6], reply[7]]), 0); // no answers
     }
 }
