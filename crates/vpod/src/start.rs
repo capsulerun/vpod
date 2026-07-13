@@ -168,6 +168,34 @@ fn cwasm_cache_path(version: &str) -> PathBuf {
         .join(format!("component-{version}-{hash}.cwasm"))
 }
 
+fn prune_stale_cwasm(active_cache: &Path) {
+    let Some(parent) = active_cache.parent() else {
+        return;
+    };
+
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+
+    let mut caches: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?;
+            if !name.starts_with("component-") || !name.ends_with(".cwasm") {
+                return None;
+            }
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .collect();
+
+    caches.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    for (_, stale) in caches.into_iter().skip(2) {
+        fs::remove_file(stale).ok();
+    }
+}
+
 fn load_component(engine: &Engine, version: &str) -> Result<Component> {
     let cache = cwasm_cache_path(version);
 
@@ -187,6 +215,7 @@ fn load_component(engine: &Engine, version: &str) -> Result<Component> {
 
     if let Ok(bytes) = component.serialize() {
         fs::write(&cache, bytes).ok();
+        prune_stale_cwasm(&cache);
     }
 
     Ok(component)

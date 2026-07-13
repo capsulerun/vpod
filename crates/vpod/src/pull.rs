@@ -92,3 +92,65 @@ pub fn pull(snap: &Snapshot) -> Result<PathBuf> {
     eprintln!("Pulled {} → {}", snap.display_name(), dest.display());
     Ok(dest)
 }
+
+pub fn prune_stale(registry_snapshots: &[Snapshot]) {
+    let known_ids: std::collections::HashSet<&str> =
+        registry_snapshots.iter().map(|s| s.id.as_str()).collect();
+    let referenced = snapshots_referenced_by_instances();
+
+    let Ok(entries) = fs::read_dir(cache_dir()) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        let is_snapshot_artifact = path
+            .extension()
+            .is_some_and(|ext| ext == "snap" || ext == "raw");
+        let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+
+        if is_snapshot_artifact && !known_ids.contains(id) && !referenced.contains(id) {
+            fs::remove_file(&path).ok();
+            fs::remove_file(path.with_extension("meta")).ok();
+        }
+
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name.ends_with(".tmp") {
+            fs::remove_file(&path).ok();
+        }
+    }
+}
+
+fn snapshots_referenced_by_instances() -> std::collections::HashSet<String> {
+    let mut referenced = std::collections::HashSet::new();
+    let Some(home) = dirs::home_dir() else {
+        return referenced;
+    };
+
+    let instances_dir = home.join(".vpod").join("instances");
+    let Ok(entries) = fs::read_dir(&instances_dir) else {
+        return referenced;
+    };
+
+    for entry in entries.flatten() {
+        let meta_path = entry.path().join("meta.json");
+        let Ok(meta_text) = fs::read_to_string(&meta_path) else {
+            continue;
+        };
+        let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_text) else {
+            continue;
+        };
+
+        if let Some(snapshot_ref) = meta.get("snapshot").and_then(|v| v.as_str()) {
+            let id = snapshot_ref
+                .trim_start_matches("snap/")
+                .trim_end_matches(".snap");
+            referenced.insert(id.to_string());
+        }
+    }
+
+    referenced
+}

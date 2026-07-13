@@ -78,6 +78,7 @@ fn main() -> Result<()> {
                 );
             } else {
                 pull::pull(snap)?;
+                pull::prune_stale(&snapshots);
             }
         }
 
@@ -156,7 +157,9 @@ fn resolve_snapshot(name: &str, reg_url: &str) -> Result<(String, registry::Snap
         let path = if pull::is_cached(snap) {
             pull::snapshot_path(snap)
         } else {
-            pull::pull(snap)?
+            let path = pull::pull(snap)?;
+            pull::prune_stale(&snapshots);
+            path
         };
 
         let mut snap = snap.clone();
