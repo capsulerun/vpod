@@ -1107,8 +1107,6 @@ fn checksum(data: &[u8]) -> u16 {
 mod tests {
     use super::*;
 
-    /// Standard query for example.com, type A: 12-byte header, labels,
-    /// qtype, qclass.
     fn example_com_query(qtype: u16) -> Vec<u8> {
         let mut query = vec![
             0xAB, 0xCD, // transaction id

@@ -164,7 +164,12 @@ impl SessionManager {
         Ok(id)
     }
 
-    pub fn exec_code(&self, handle: u64, code: String) -> Result<ExecutionResult, String> {
+    pub fn exec_code(
+        &self,
+        handle: u64,
+        code: String,
+        timeout: Option<u64>,
+    ) -> Result<ExecutionResult, String> {
         let mut sessions = self.sessions.borrow_mut();
         let session = sessions
             .get_mut(&handle)
@@ -200,7 +205,7 @@ impl SessionManager {
                 &mut session.bus,
                 &mut session.hart,
                 b"",
-                120,
+                timeout.unwrap_or(120),
                 false,
                 Some(PYRUNNER_SENTINEL),
                 true,
@@ -234,7 +239,7 @@ impl SessionManager {
                 &mut session.bus,
                 &mut session.hart,
                 &session.prompt,
-                30,
+                timeout.unwrap_or(30),
                 session.is_shell,
                 None,
                 false,

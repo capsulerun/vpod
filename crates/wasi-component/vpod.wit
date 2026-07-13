@@ -1,4 +1,4 @@
-package vpod:sandbox@0.1.0;
+package vpod:sandbox@0.2.0;
 
 world library {
     export executor;
@@ -17,10 +17,8 @@ interface executor {
         writable: bool,
     }
 
-    execute: func(snapshot-path: string, code: string) -> result<execution-result, string>;
-
     session-start: func(snapshot-path: string, command: string, prompt: string, mounts: list<mount-entry>) -> result<u64, string>;
-    session-exec: func(handle: u64, code: string) -> result<execution-result, string>;
+    session-exec: func(handle: u64, code: string, timeout: option<u64>) -> result<execution-result, string>;
     session-close: func(handle: u64);
 
     session-suspend: func(handle: u64, delta-path: string) -> result<u64, string>;
