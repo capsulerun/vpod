@@ -278,7 +278,7 @@ def test_network_dns_resolves():
 def test_network_https_fetches_body():
     with Sandbox.create() as sbx:
         result = sbx.commands.run(
-            "wget -qO- -T 15 -t 1 https://kfuckkfmkyxe0l-tests.vpod.sh; echo"
+            "wget -qO- -T 15 -t 1 https://kfuckkfmkyxe0l-tests.vpod.sh"
         )
         assert result.success, f"exit={result.exit_code} stderr={result.stderr}"
         assert "VPOD_TEST_OK" in result.stdout, f"stdout={result.stdout!r}"
