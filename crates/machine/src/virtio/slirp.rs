@@ -1,11 +1,8 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddrV4, TcpStream, UdpSocket};
-// use std::time::Instant;
-
-#[cfg(not(target_family = "wasm"))]
-use std::time::Duration;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream, ToSocketAddrs, UdpSocket};
+use std::time::{Duration, Instant};
 
 use super::net::NetworkBackend;
 
@@ -117,6 +114,8 @@ struct DnsPending {
     guest_mac: [u8; 6],
     src_ip: [u8; 4],
     src_port: u16,
+    query: Vec<u8>,
+    created: Instant,
 }
 
 pub struct SlirpBackend {
@@ -289,18 +288,9 @@ impl SlirpBackend {
     }
 
     fn poll_dns(&mut self) {
-        let mut ready = Vec::new();
-
-        // #[cfg(not(target_family = "wasm"))]
-        // let mut expired = Vec::new();
+        let mut finished = Vec::new();
 
         for (i, req) in self.dns_pending.iter().enumerate() {
-            // #[cfg(not(target_family = "wasm"))]
-            // if req.created.elapsed() > Duration::from_secs(5) {
-            //     expired.push(i);
-            //     continue;
-            // }
-
             let mut buf = [0u8; 2048];
 
             if let Ok((n, _)) = req.sock.recv_from(&mut buf) {
@@ -312,16 +302,28 @@ impl SlirpBackend {
                     IP_PROTO_UDP,
                     &udp_reply,
                 ));
-                ready.push(i);
+                finished.push(i);
+                continue;
+            }
+
+            if req.created.elapsed() > DNS_RELAY_TIMEOUT {
+                if let Some(question) = parse_dns_question(&req.query) {
+                    let servfail =
+                        build_dns_reply(&req.query, &question, &[], DNS_RCODE_SERVFAIL);
+                    let udp_reply = make_udp_payload(53, req.src_port, &servfail);
+                    self.rx_pending.push_back(make_ip_frame(
+                        &req.guest_mac,
+                        &GW_IP,
+                        &req.src_ip,
+                        IP_PROTO_UDP,
+                        &udp_reply,
+                    ));
+                }
+                finished.push(i);
             }
         }
 
-        // #[cfg(not(target_family = "wasm"))]
-        // for i in expired.into_iter().rev() {
-        //     self.dns_pending.swap_remove(i);
-        // }
-
-        for i in ready.into_iter().rev() {
+        for i in finished.into_iter().rev() {
             self.dns_pending.swap_remove(i);
         }
     }
@@ -422,6 +424,18 @@ impl SlirpBackend {
         if dst_ip == GW_IP && dst_port == 53 {
             let guest_mac: [u8; 6] = eth_src(frame).try_into().unwrap();
 
+            if let Some(reply) = answer_dns_with_host_resolver(data) {
+                let udp_reply = make_udp_payload(53, src_port, &reply);
+                self.rx_pending.push_back(make_ip_frame(
+                    &guest_mac,
+                    &GW_IP,
+                    &src_ip,
+                    IP_PROTO_UDP,
+                    &udp_reply,
+                ));
+                return;
+            }
+
             if let Ok(sock) = UdpSocket::bind("0.0.0.0:0") {
                 sock.set_nonblocking(true).ok();
 
@@ -450,8 +464,8 @@ impl SlirpBackend {
                         guest_mac,
                         src_ip,
                         src_port,
-                        // #[cfg(not(target_family = "wasm"))]
-                        // created: std::time::Instant::now(),
+                        query: data.to_vec(),
+                        created: Instant::now(),
                     });
                 }
             }
@@ -856,6 +870,129 @@ fn make_udp_payload(src_port: u16, dst_port: u16, data: &[u8]) -> Vec<u8> {
     udp
 }
 
+const DNS_RELAY_TIMEOUT: Duration = Duration::from_secs(5);
+const DNS_QTYPE_A: u16 = 1;
+const DNS_QTYPE_AAAA: u16 = 28;
+const DNS_RCODE_NOERROR: u16 = 0;
+const DNS_RCODE_SERVFAIL: u16 = 2;
+const DNS_MAX_ANSWERS: usize = 4;
+
+struct DnsQuestion {
+    hostname: String,
+    qtype: u16,
+    question_end: usize,
+}
+
+fn parse_dns_question(query: &[u8]) -> Option<DnsQuestion> {
+    if query.len() < 12 {
+        return None;
+    }
+
+    let question_count = u16::from_be_bytes([query[4], query[5]]);
+    if question_count != 1 {
+        return None;
+    }
+
+    let mut position = 12;
+    let mut hostname = String::new();
+
+    loop {
+        let label_len = *query.get(position)? as usize;
+        if label_len == 0 {
+            position += 1;
+            break;
+        }
+
+        if label_len & 0xC0 != 0 {
+            return None;
+        }
+
+        let label = query.get(position + 1..position + 1 + label_len)?;
+        if !hostname.is_empty() {
+            hostname.push('.');
+        }
+        hostname.push_str(std::str::from_utf8(label).ok()?);
+        if hostname.len() > 253 {
+            return None;
+        }
+
+        position += 1 + label_len;
+    }
+
+    let qtype = u16::from_be_bytes([*query.get(position)?, *query.get(position + 1)?]);
+    let question_end = position + 4; // qtype + qclass
+
+    if query.len() < question_end {
+        return None;
+    }
+
+    Some(DnsQuestion {
+        hostname,
+        qtype,
+        question_end,
+    })
+}
+
+fn answer_dns_with_host_resolver(query: &[u8]) -> Option<Vec<u8>> {
+    let question = parse_dns_question(query)?;
+
+    match question.qtype {
+        DNS_QTYPE_A => {
+            let resolved = (question.hostname.as_str(), 0u16).to_socket_addrs().ok()?;
+            let ipv4_addresses: Vec<[u8; 4]> = resolved
+                .filter_map(|address| match address {
+                    SocketAddr::V4(v4) => Some(v4.ip().octets()),
+                    SocketAddr::V6(_) => None,
+                })
+                .take(DNS_MAX_ANSWERS)
+                .collect();
+
+            if ipv4_addresses.is_empty() {
+                return None;
+            }
+
+            Some(build_dns_reply(
+                query,
+                &question,
+                &ipv4_addresses,
+                DNS_RCODE_NOERROR,
+            ))
+        }
+
+        DNS_QTYPE_AAAA => Some(build_dns_reply(query, &question, &[], DNS_RCODE_NOERROR)),
+        _ => None,
+    }
+}
+
+fn build_dns_reply(
+    query: &[u8],
+    question: &DnsQuestion,
+    ipv4_answers: &[[u8; 4]],
+    rcode: u16,
+) -> Vec<u8> {
+    let mut reply = Vec::with_capacity(question.question_end + ipv4_answers.len() * 16);
+
+    reply.extend_from_slice(&query[0..2]); // transaction id
+    let flags: u16 = 0x8180 | rcode; // response + recursion desired + available
+    reply.extend_from_slice(&flags.to_be_bytes());
+    reply.extend_from_slice(&1u16.to_be_bytes()); // questions
+    reply.extend_from_slice(&(ipv4_answers.len() as u16).to_be_bytes());
+    reply.extend_from_slice(&0u16.to_be_bytes()); // authority records
+    reply.extend_from_slice(&0u16.to_be_bytes()); // additional records
+    reply.extend_from_slice(&query[12..question.question_end]);
+
+    for address in ipv4_answers {
+        reply.extend_from_slice(&[0xC0, 0x0C]); // pointer to question name
+        reply.extend_from_slice(&DNS_QTYPE_A.to_be_bytes());
+        reply.extend_from_slice(&1u16.to_be_bytes()); // class IN
+        reply.extend_from_slice(&60u32.to_be_bytes()); // ttl
+        reply.extend_from_slice(&4u16.to_be_bytes()); // rdata length
+        reply.extend_from_slice(address);
+    }
+
+    reply
+}
+
 // to refacto the function in order to avoid to many argument
 #[allow(clippy::too_many_arguments)]
 fn make_tcp_frame(
@@ -965,4 +1102,74 @@ fn checksum(data: &[u8]) -> u16 {
     }
 
     !(sum as u16)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Standard query for example.com, type A: 12-byte header, labels,
+    /// qtype, qclass.
+    fn example_com_query(qtype: u16) -> Vec<u8> {
+        let mut query = vec![
+            0xAB, 0xCD, // transaction id
+            0x01, 0x00, // recursion desired
+            0x00, 0x01, // 1 question
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        query.extend_from_slice(b"\x07example\x03com\x00");
+        query.extend_from_slice(&qtype.to_be_bytes());
+        query.extend_from_slice(&1u16.to_be_bytes()); // class IN
+        query
+    }
+
+    #[test]
+    fn parses_hostname_and_qtype() {
+        let query = example_com_query(DNS_QTYPE_A);
+        let question = parse_dns_question(&query).unwrap();
+        assert_eq!(question.hostname, "example.com");
+        assert_eq!(question.qtype, DNS_QTYPE_A);
+        assert_eq!(question.question_end, query.len());
+    }
+
+    #[test]
+    fn rejects_truncated_and_multi_question_queries() {
+        assert!(parse_dns_question(&[0u8; 5]).is_none());
+
+        let mut two_questions = example_com_query(DNS_QTYPE_A);
+        two_questions[5] = 2;
+        assert!(parse_dns_question(&two_questions).is_none());
+    }
+
+    #[test]
+    fn reply_echoes_id_and_question_with_answers() {
+        let query = example_com_query(DNS_QTYPE_A);
+        let question = parse_dns_question(&query).unwrap();
+        let reply = build_dns_reply(&query, &question, &[[93, 184, 215, 14]], DNS_RCODE_NOERROR);
+
+        assert_eq!(&reply[0..2], &[0xAB, 0xCD]); // same transaction id
+        assert_eq!(u16::from_be_bytes([reply[2], reply[3]]) & 0x8000, 0x8000); // response bit
+        assert_eq!(u16::from_be_bytes([reply[6], reply[7]]), 1); // one answer
+        assert_eq!(&reply[12..question.question_end], &query[12..]); // question echoed
+        assert_eq!(&reply[reply.len() - 4..], &[93, 184, 215, 14]); // rdata
+    }
+
+    #[test]
+    fn servfail_reply_has_rcode_and_no_answers() {
+        let query = example_com_query(DNS_QTYPE_A);
+        let question = parse_dns_question(&query).unwrap();
+        let reply = build_dns_reply(&query, &question, &[], DNS_RCODE_SERVFAIL);
+
+        assert_eq!(u16::from_be_bytes([reply[2], reply[3]]) & 0x000F, DNS_RCODE_SERVFAIL);
+        assert_eq!(u16::from_be_bytes([reply[6], reply[7]]), 0);
+    }
+
+    #[test]
+    fn aaaa_query_gets_empty_noerror_without_touching_resolver() {
+        let query = example_com_query(DNS_QTYPE_AAAA);
+        let reply = answer_dns_with_host_resolver(&query).unwrap();
+
+        assert_eq!(u16::from_be_bytes([reply[2], reply[3]]) & 0x000F, DNS_RCODE_NOERROR);
+        assert_eq!(u16::from_be_bytes([reply[6], reply[7]]), 0); // no answers
+    }
 }
