@@ -3,7 +3,7 @@ from pathlib import Path
 
 from platformdirs import user_data_dir
 from wasmtime import Engine, Store, WasiConfig
-from wasmtime._bindings import wasi_config_inherit_network
+from wasmtime._bindings import wasi_config_allow_ip_name_lookup, wasi_config_inherit_network
 from wasmtime.component import Component, Linker
 
 _BUNDLED_WASM = Path(__file__).parent / "vpod_wasi_lib.wasm"
@@ -142,6 +142,7 @@ def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list
             wasi.preopen_dir(dir_path, f"mount{i}")
 
     wasi_config_inherit_network(wasi.ptr())
+    wasi_config_allow_ip_name_lookup(wasi.ptr(), True)
     store.set_wasi(wasi)
 
     instance = linker.instantiate(store, component)

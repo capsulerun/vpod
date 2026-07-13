@@ -268,12 +268,20 @@ def test_shell_working_directory():
         assert result.success
         assert "created_here.txt" in result.stdout
 
-# def test_network_dns_resolves():
-#     with Sandbox.create() as sbx:
-#         result = sbx.commands.run(
-#             "wget -q --spider -T 15 -t 1 http://kfuckkfmkyxe0l-tests.vpod.sh"
-#         )
-#         assert result.success, f"exit={result.exit_code} stderr={result.stderr}"
+def test_network_dns_resolves():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run(
+            "wget -q --spider -T 15 -t 1 https://kfuckkfmkyxe0l-tests.vpod.sh"
+        )
+        assert result.success, f"exit={result.exit_code} stderr={result.stderr}"
+
+def test_network_https_fetches_body():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run(
+            "wget -qO- -T 15 -t 1 https://kfuckkfmkyxe0l-tests.vpod.sh"
+        )
+        assert result.success, f"exit={result.exit_code} stderr={result.stderr}"
+        assert "VPOD_TEST_OK" in result.stdout, f"stdout={result.stdout!r}"
 
 def test_shared_vm_shell_writes_python_reads():
     with Sandbox.create() as sbx:

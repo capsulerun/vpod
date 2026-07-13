@@ -90,6 +90,7 @@ pub fn capture_output(
     let mut output = Vec::new();
     let mut last_output_ns = monotonic_clock::now();
     let mut got_output = false;
+    let mut ended_at_prompt = false;
 
     loop {
         let now = monotonic_clock::now();
@@ -142,6 +143,7 @@ pub fn capture_output(
 
             if !data_channel && output.ends_with(prompt) {
                 output.truncate(output.len() - prompt.len());
+                ended_at_prompt = true;
                 break;
             }
 
@@ -169,6 +171,7 @@ pub fn capture_output(
 
                     if output.ends_with(prompt) {
                         output.truncate(output.len() - prompt.len());
+                        ended_at_prompt = true;
                         break;
                     }
                 }
@@ -177,7 +180,7 @@ pub fn capture_output(
         }
     }
 
-    if !data_channel && !output.is_empty() && !output.ends_with(b"\n") {
+    if !data_channel && !ended_at_prompt && !output.is_empty() && !output.ends_with(b"\n") {
         if let Some(pos) = output.iter().rposition(|&b| b == b'\n') {
             output.truncate(pos + 1);
         } else {
