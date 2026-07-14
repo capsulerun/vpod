@@ -112,7 +112,7 @@ def _resolve_exports(store, instance):
             raise RuntimeError(f"WASM export '{name}' is not a function")
         return lambda *args: func(store, *args)
 
-    return {name: get_export(name) for name in ("session-start", "session-exec", "session-close", "session-suspend", "session-resume", "http-fetch")}
+    return {name: get_export(name) for name in ("session-start", "session-exec", "session-close", "session-suspend", "session-resume")}
 
 
 def _instance_key(snap_dir: str, mount_dirs: list[str] | None) -> str:
