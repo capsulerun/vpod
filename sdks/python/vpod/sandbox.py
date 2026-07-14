@@ -11,6 +11,7 @@ from ._component import load_component, locate_wasm
 from ._result import unwrap_result as _unwrap_result
 from .code import Code
 from .commands import Commands
+from .install import Install
 
 INSTANCES_DIR = Path.home() / ".vpod" / "instances"
 
@@ -39,19 +40,6 @@ _DEFAULT_PROMPT = "# "
 
 
 class Sandbox:
-    """
-    Stateless usage:
-        sandbox = Sandbox.create()
-        result = sandbox.commands.run("echo hello")
-
-    Persistent session:
-        with Sandbox.create() as sandbox:
-            sandbox.commands.run("export FOO=bar")
-            result = sandbox.commands.run("echo $FOO")
-
-            execution = sandbox.code.run("print(2 + 2)")
-            print(execution.text)  # 4
-    """
 
     def __init__(self, snapshot: str = "alpine:latest", mounts: dict[str, str] | None = None):
         snapshot_path = snapshots.pull(snapshot)
@@ -75,6 +63,10 @@ class Sandbox:
             self._exports,
             self._snapshot_path,
             self._get_code_session_id,
+        )
+
+        self.install = Install(
+            self._exports
         )
 
     @classmethod
