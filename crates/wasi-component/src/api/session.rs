@@ -19,6 +19,7 @@ pub struct Session {
     pub is_shell: bool,
     pub is_pyrunner: bool,
     pub has_pyrunner: bool,
+    pub pyrunner_dirty: bool,
 }
 
 struct CachedBase {
@@ -160,6 +161,7 @@ impl SessionManager {
                 is_shell,
                 is_pyrunner: use_pyrunner,
                 has_pyrunner: python_ready,
+                pyrunner_dirty: false,
             },
         );
 
@@ -195,6 +197,11 @@ impl SessionManager {
         };
 
         if use_pyrunner {
+            if session.pyrunner_dirty {
+                restart_pyrunner(session);
+                session.pyrunner_dirty = false;
+            }
+
             let b64 = base64::engine::general_purpose::STANDARD.encode(code.as_bytes());
             for byte in b64.bytes() {
                 session.bus.uart_data.push_rx(byte);
@@ -220,7 +227,7 @@ impl SessionManager {
             let exit_code = match ctrl_bytes.first() {
                 Some(byte) => *byte as u32,
                 None => {
-                    restart_pyrunner(session);
+                    session.pyrunner_dirty = true;
                     124
                 }
             };
@@ -291,10 +298,15 @@ impl SessionManager {
     }
 
     pub fn suspend_session(&self, handle: u64) -> Result<Vec<u8>, String> {
-        let sessions = self.sessions.borrow();
+        let mut sessions = self.sessions.borrow_mut();
         let session = sessions
-            .get(&handle)
+            .get_mut(&handle)
             .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+        if session.pyrunner_dirty {
+            restart_pyrunner(session);
+            session.pyrunner_dirty = false;
+        }
 
         let mut buf = Vec::new();
         machine::snapshot::save_delta(&session.bus, &session.hart, &mut buf)
@@ -380,6 +392,7 @@ impl SessionManager {
                 is_shell,
                 is_pyrunner,
                 has_pyrunner,
+                pyrunner_dirty: false,
             },
         );
 
@@ -400,6 +413,9 @@ fn restart_pyrunner(session: &mut Session) {
     session.bus.uart_ctrl.drain_tx();
     session.bus.uart_data.drain_tx();
 
+    repl::settle(&mut session.bus, &mut session.hart, 2_000_000_000);
+    session.bus.uart_data.drain_tx();
+
     let probe = base64::engine::general_purpose::STANDARD.encode(b"pass");
     for byte in probe.bytes() {
         session.bus.uart_data.push_rx(byte);
@@ -410,7 +426,7 @@ fn restart_pyrunner(session: &mut Session) {
         &mut session.bus,
         &mut session.hart,
         b"",
-        30,
+        10,
         false,
         Some(PYRUNNER_SENTINEL),
         true,

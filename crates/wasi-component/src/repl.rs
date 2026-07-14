@@ -50,6 +50,25 @@ pub fn shell_init(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     bus.uart_ctrl.drain_tx();
 }
 
+pub fn settle(bus: &mut MachineBus, hart: &mut Hart, wall_ns: u64) {
+    let deadline = monotonic_clock::now() + wall_ns;
+
+    while monotonic_clock::now() < deadline {
+        if hart.is_waiting {
+            hart.is_waiting = false;
+        }
+
+        bus.clint.advance_by_instructions(STEP);
+        bus.poll(hart);
+
+        if let StepResult::Trap(_) | StepResult::Halt = hart.run(bus, STEP) {
+            return;
+        }
+
+        bus.uart.drain_tx();
+    }
+}
+
 pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     let mut buffer = Vec::new();
 
