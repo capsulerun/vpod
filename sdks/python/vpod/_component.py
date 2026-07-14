@@ -3,7 +3,12 @@ from pathlib import Path
 
 from platformdirs import user_data_dir
 from wasmtime import Engine, Store, WasiConfig
-from wasmtime._bindings import wasi_config_allow_ip_name_lookup, wasi_config_inherit_network
+from wasmtime._bindings import (
+    wasi_config_allow_ip_name_lookup,
+    wasi_config_inherit_network,
+    wasmtime_component_linker_add_wasi_http,
+    wasmtime_context_set_wasi_http,
+)
 from wasmtime.component import Component, Linker
 
 _BUNDLED_WASM = Path(__file__).parent / "vpod_wasi_lib.wasm"
@@ -88,6 +93,8 @@ def _get_or_load_component(wasm_path: Path):
         _linker = Linker(_engine)
         _linker.add_wasip2()
 
+        wasmtime_component_linker_add_wasi_http(_linker.ptr())
+
     return _engine, _component, _linker
 
 
@@ -105,7 +112,7 @@ def _resolve_exports(store, instance):
             raise RuntimeError(f"WASM export '{name}' is not a function")
         return lambda *args: func(store, *args)
 
-    return {name: get_export(name) for name in ("session-start", "session-exec", "session-close", "session-suspend", "session-resume")}
+    return {name: get_export(name) for name in ("session-start", "session-exec", "session-close", "session-suspend", "session-resume", "http-fetch")}
 
 
 def _instance_key(snap_dir: str, mount_dirs: list[str] | None) -> str:
@@ -144,6 +151,8 @@ def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list
     wasi_config_inherit_network(wasi.ptr())
     wasi_config_allow_ip_name_lookup(wasi.ptr(), True)
     store.set_wasi(wasi)
+
+    wasmtime_context_set_wasi_http(store._context())
 
     instance = linker.instantiate(store, component)
     exports = _resolve_exports(store, instance)
