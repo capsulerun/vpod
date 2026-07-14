@@ -17,24 +17,6 @@ interface executor {
         writable: bool,
     }
 
-    record http-header {
-        name: string,
-        value: string,
-    }
-
-    record http-response {
-        status: u16,
-        headers: list<http-header>,
-        body: list<u8>,
-    }
-
-    http-fetch: func(
-        method: string,
-        url: string,
-        headers: list<http-header>,
-        body: option<list<u8>>,
-    ) -> result<http-response, string>;
-
     session-start: func(snapshot-path: string, command: string, prompt: string, mounts: list<mount-entry>) -> result<u64, string>;
     session-exec: func(handle: u64, code: string, timeout: option<u64>) -> result<execution-result, string>;
     session-close: func(handle: u64);

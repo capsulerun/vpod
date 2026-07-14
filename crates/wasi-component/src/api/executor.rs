@@ -1,8 +1,5 @@
-use crate::api::http;
 use crate::api::session::SESSION_MANAGER;
-use crate::exports::vpod::sandbox::executor::{
-    ExecutionResult, Guest, HttpHeader, HttpResponse, MountEntry,
-};
+use crate::exports::vpod::sandbox::executor::{ExecutionResult, Guest, MountEntry};
 use crate::vm;
 
 pub struct Executor;
@@ -36,15 +33,6 @@ impl Guest for Executor {
 
     fn session_close(handle: u64) {
         SESSION_MANAGER.close_session(handle);
-    }
-
-    fn http_fetch(
-        method: String,
-        url: String,
-        headers: Vec<HttpHeader>,
-        body: Option<Vec<u8>>,
-    ) -> Result<HttpResponse, String> {
-        http::fetch(method, url, headers, body)
     }
 
     fn session_suspend(handle: u64, delta_path: String) -> Result<u64, String> {

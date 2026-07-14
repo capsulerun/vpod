@@ -249,31 +249,6 @@ def test_session_survives_after_code_timeout():
         assert result.success
         assert "42" in result.text
 
-
-# http tests
-
-def test_http_get():
-    with Sandbox.create() as sbx:
-        r = sbx.http.get("https://kfuckkfmkyxe0l-tests.vpod.sh")
-        assert r.status == 200
-        assert r.ok
-        assert "VPOD_TEST_OK" in r.text
-
-
-def test_http_get_stateless():
-    sbx = Sandbox.create()
-    r = sbx.http.get("https://kfuckkfmkyxe0l-tests.vpod.sh")
-    assert r.ok
-    assert "VPOD_TEST_OK" in r.text
-
-
-def test_http_bad_scheme_errors():
-    import pytest as _pytest
-    with Sandbox.create() as sbx:
-        with _pytest.raises(Exception):
-            sbx.http.get("ftp://example.com")
-
-
 # --- stderr tests ---
 
 def test_stateless_stderr_captured():
