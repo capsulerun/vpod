@@ -11,6 +11,7 @@ from ._component import load_component, locate_wasm
 from ._result import unwrap_result as _unwrap_result
 from .code import Code
 from .commands import Commands
+from .http import Http
 
 INSTANCES_DIR = Path.home() / ".vpod" / "instances"
 
@@ -39,19 +40,6 @@ _DEFAULT_PROMPT = "# "
 
 
 class Sandbox:
-    """
-    Stateless usage:
-        sandbox = Sandbox.create()
-        result = sandbox.commands.run("echo hello")
-
-    Persistent session:
-        with Sandbox.create() as sandbox:
-            sandbox.commands.run("export FOO=bar")
-            result = sandbox.commands.run("echo $FOO")
-
-            execution = sandbox.code.run("print(2 + 2)")
-            print(execution.text)  # 4
-    """
 
     def __init__(self, snapshot: str = "alpine:latest", mounts: dict[str, str] | None = None):
         snapshot_path = snapshots.pull(snapshot)
@@ -76,6 +64,8 @@ class Sandbox:
             self._snapshot_path,
             self._get_code_session_id,
         )
+
+        self.http = Http(self._exports)
 
     @classmethod
     def create(cls, snapshot: str = "vsnap-base:latest", mounts: dict[str, str] | None = None) -> "Sandbox":
@@ -202,6 +192,7 @@ class Sandbox:
         instance._in_context = True
         instance.commands = Commands(exports, snap_rel, instance._get_shell_session_id)
         instance.code = Code(exports, snap_rel, instance._get_code_session_id)
+        instance.http = Http(exports)
 
 
         Sandbox.destroy(instance_id)
