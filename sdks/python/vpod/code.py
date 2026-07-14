@@ -10,7 +10,7 @@ class Code:
         self._snapshot_path = snapshot_path
         self._get_session_id = get_session_id
 
-    def run(self, code: str) -> CodeExecution:
+    def run(self, code: str, timeout: int = 120) -> CodeExecution:
         """Run Python code in a persistent REPL. State lives in memory across calls."""
         session_id = self._get_session_id()
         if session_id is None:
@@ -19,9 +19,16 @@ class Code:
                 "Use 'with Sandbox.create() as sandbox:'"
             )
 
-        result = unwrap_result(self._exports["session-exec"](session_id, "\x00" + code))
+        result = unwrap_result(self._exports["session-exec"](session_id, "\x00" + code, timeout))
         output = result.stdout if hasattr(result, 'stdout') else str(result)
         stderr = result.stderr if hasattr(result, 'stderr') else ""
+
+        if getattr(result, "exit-code", 0) == 124:
+            return CodeExecution(
+                text=output,
+                error=f"Timed out after {timeout}s",
+                logs=output.splitlines(),
+            )
 
         return self._parse_output(output, stderr)
 

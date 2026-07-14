@@ -102,8 +102,12 @@ pub fn capture_output(
             hart.is_waiting = false;
 
             if !bus.has_pending_io() {
+                let before = monotonic_clock::now();
                 let timeout = monotonic_clock::subscribe_duration(NET_YIELD_NS);
                 poll::poll(&[&timeout]);
+
+                let idle_ns = monotonic_clock::now().saturating_sub(before);
+                bus.clint.advance_by_nanos(idle_ns);
 
                 if !data_channel
                     && sentinel.is_none()

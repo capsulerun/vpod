@@ -92,9 +92,9 @@ def _get_or_load_component(wasm_path: Path):
 
 
 def _resolve_exports(store, instance):
-    iface_index = instance.get_export_index(store, "vpod:sandbox/executor@0.1.0")
+    iface_index = instance.get_export_index(store, "vpod:sandbox/executor@0.2.0")
     if iface_index is None:
-        raise RuntimeError("WASM component does not export 'vpod:sandbox/executor@0.1.0'")
+        raise RuntimeError("WASM component does not export 'vpod:sandbox/executor@0.2.0'")
 
     def get_export(name: str):
         idx = instance.get_export_index(store, name, iface_index)
@@ -105,7 +105,7 @@ def _resolve_exports(store, instance):
             raise RuntimeError(f"WASM export '{name}' is not a function")
         return lambda *args: func(store, *args)
 
-    return {name: get_export(name) for name in ("execute", "session-start", "session-exec", "session-close", "session-suspend", "session-resume")}
+    return {name: get_export(name) for name in ("session-start", "session-exec", "session-close", "session-suspend", "session-resume")}
 
 
 def _instance_key(snap_dir: str, mount_dirs: list[str] | None) -> str:

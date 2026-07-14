@@ -203,6 +203,53 @@ def test_session_exit_code_command_not_found():
         assert not result.success
 
 
+# timeout tests
+
+def test_timeout_returns_124():
+    import time
+    with Sandbox.create() as sbx:
+        start = time.time()
+        result = sbx.commands.run("sleep 30", timeout=3)
+        elapsed = time.time() - start
+
+        assert result.exit_code == 124
+        assert not result.success
+        assert elapsed < 20, f"took {elapsed:.1f}s"
+
+
+def test_within_timeout_succeeds():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("sleep 1; echo done", timeout=30)
+        assert result.success
+        assert "done" in result.stdout
+
+
+def test_session_survives_after_timeout():
+    with Sandbox.create() as sbx:
+        timed_out = sbx.commands.run("sleep 30", timeout=3)
+        assert timed_out.exit_code == 124
+
+        result = sbx.commands.run("echo alive")
+        assert result.success
+        assert "alive" in result.stdout
+
+
+def test_code_timeout_returns_124():
+    with Sandbox.create() as sbx:
+        result = sbx.code.run("import time; time.sleep(30)", timeout=3)
+        assert not result.success
+
+
+def test_session_survives_after_code_timeout():
+    with Sandbox.create() as sbx:
+        timed_out = sbx.code.run("import time; time.sleep(30)", timeout=3)
+        assert not timed_out.success
+
+        result = sbx.code.run("print(6 * 7)")
+        assert result.success
+        assert "42" in result.text
+
+
 # --- stderr tests ---
 
 def test_stateless_stderr_captured():

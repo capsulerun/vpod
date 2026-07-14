@@ -34,6 +34,11 @@ impl Clint {
         self.instruction_counter %= INSTRUCTIONS_PER_TICK;
     }
 
+    pub fn advance_by_nanos(&mut self, nanos: u64) {
+        const NANOS_PER_TICK: u64 = 1_000_000_000 / TIMER_FREQUENCY;
+        self.mtime += nanos / NANOS_PER_TICK;
+    }
+
     pub fn mtime(&self) -> u64 {
         self.mtime
     }
