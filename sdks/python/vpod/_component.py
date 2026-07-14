@@ -99,9 +99,9 @@ def _get_or_load_component(wasm_path: Path):
 
 
 def _resolve_exports(store, instance):
-    iface_index = instance.get_export_index(store, "vpod:sandbox/executor@0.2.0")
+    iface_index = instance.get_export_index(store, "vpod:sandbox/executor@0.1.0")
     if iface_index is None:
-        raise RuntimeError("WASM component does not export 'vpod:sandbox/executor@0.2.0'")
+        raise RuntimeError("WASM component does not export 'vpod:sandbox/executor@0.1.0'")
 
     def get_export(name: str):
         idx = instance.get_export_index(store, name, iface_index)
