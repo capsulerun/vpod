@@ -42,7 +42,7 @@ impl MountArg {
     }
 }
 
-pub struct VmConfig<'a> {
+pub struct _VmConfig<'a> {
     pub snapshot: &'a Path,
     pub disk: Option<&'a Path>,
     pub mounts: Vec<MountArg>,
@@ -133,7 +133,7 @@ pub fn _bus_from_base(
     (bus, hart)
 }
 
-pub fn load(config: VmConfig) -> Result<(MachineBus, Hart, u8), String> {
+pub fn _load(config: _VmConfig) -> Result<(MachineBus, Hart, u8), String> {
     let ram_size = ram_size_from_filename(config.snapshot).unwrap_or(256 * 1024 * 1024);
 
     let mut bus = MachineBus::new(ram_size, CowRam::new(ram_size));

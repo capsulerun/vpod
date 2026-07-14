@@ -10,6 +10,8 @@ use crate::vm;
 use machine::machine_bus::MachineBus;
 use riscv_core::Hart;
 
+const PYRUNNER_SENTINEL: &str = "---VPOD_DONE---";
+
 pub struct Session {
     pub bus: MachineBus,
     pub hart: Hart,
@@ -17,6 +19,7 @@ pub struct Session {
     pub is_shell: bool,
     pub is_pyrunner: bool,
     pub has_pyrunner: bool,
+    pub pyrunner_dirty: bool,
 }
 
 struct CachedBase {
@@ -158,13 +161,19 @@ impl SessionManager {
                 is_shell,
                 is_pyrunner: use_pyrunner,
                 has_pyrunner: python_ready,
+                pyrunner_dirty: false,
             },
         );
 
         Ok(id)
     }
 
-    pub fn exec_code(&self, handle: u64, code: String) -> Result<ExecutionResult, String> {
+    pub fn exec_code(
+        &self,
+        handle: u64,
+        code: String,
+        timeout: Option<u64>,
+    ) -> Result<ExecutionResult, String> {
         let mut sessions = self.sessions.borrow_mut();
         let session = sessions
             .get_mut(&handle)
@@ -174,8 +183,6 @@ impl SessionManager {
         session.bus.uart_stderr.drain_tx();
         session.bus.uart_ctrl.drain_tx();
         session.bus.uart_data.drain_tx();
-
-        const PYRUNNER_SENTINEL: &str = "---VPOD_DONE---";
 
         let use_pyrunner = if code.starts_with('\0') {
             session.has_pyrunner
@@ -190,6 +197,11 @@ impl SessionManager {
         };
 
         if use_pyrunner {
+            if session.pyrunner_dirty {
+                restart_pyrunner(session);
+                session.pyrunner_dirty = false;
+            }
+
             let b64 = base64::engine::general_purpose::STANDARD.encode(code.as_bytes());
             for byte in b64.bytes() {
                 session.bus.uart_data.push_rx(byte);
@@ -200,7 +212,7 @@ impl SessionManager {
                 &mut session.bus,
                 &mut session.hart,
                 b"",
-                120,
+                timeout.unwrap_or(120),
                 false,
                 Some(PYRUNNER_SENTINEL),
                 true,
@@ -212,7 +224,13 @@ impl SessionManager {
                 .to_string();
 
             let ctrl_bytes = session.bus.uart_ctrl.drain_tx();
-            let exit_code = ctrl_bytes.first().copied().unwrap_or(0) as u32;
+            let exit_code = match ctrl_bytes.first() {
+                Some(byte) => *byte as u32,
+                None => {
+                    session.pyrunner_dirty = true;
+                    124
+                }
+            };
 
             Ok(ExecutionResult {
                 stdout,
@@ -234,7 +252,7 @@ impl SessionManager {
                 &mut session.bus,
                 &mut session.hart,
                 &session.prompt,
-                30,
+                timeout.unwrap_or(30),
                 session.is_shell,
                 None,
                 false,
@@ -245,15 +263,27 @@ impl SessionManager {
                 .trim_end()
                 .to_string();
 
+            let mut timed_out = false;
             let exit_code = if session.is_shell {
                 let ctrl_bytes = session.bus.uart_ctrl.drain_tx();
                 match ctrl_bytes.first() {
                     Some(byte) => *byte as u32,
-                    None => 124,
+                    None => {
+                        timed_out = true;
+                        124
+                    }
                 }
             } else {
                 0
             };
+
+            if session.is_shell && timed_out {
+                session.bus.uart.push_rx(0x03);
+                repl::wait_for_prompt(&mut session.bus, &mut session.hart, &session.prompt);
+                session.bus.uart.drain_tx();
+                session.bus.uart_stderr.drain_tx();
+                session.bus.uart_ctrl.drain_tx();
+            }
 
             Ok(ExecutionResult {
                 stdout,
@@ -268,10 +298,15 @@ impl SessionManager {
     }
 
     pub fn suspend_session(&self, handle: u64) -> Result<Vec<u8>, String> {
-        let sessions = self.sessions.borrow();
+        let mut sessions = self.sessions.borrow_mut();
         let session = sessions
-            .get(&handle)
+            .get_mut(&handle)
             .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+        if session.pyrunner_dirty {
+            restart_pyrunner(session);
+            session.pyrunner_dirty = false;
+        }
 
         let mut buf = Vec::new();
         machine::snapshot::save_delta(&session.bus, &session.hart, &mut buf)
@@ -357,59 +392,47 @@ impl SessionManager {
                 is_shell,
                 is_pyrunner,
                 has_pyrunner,
+                pyrunner_dirty: false,
             },
         );
 
         Ok(id)
     }
+}
 
-    // pub fn resume_fast(&self, handle: u64, delta: Vec<u8>) -> Result<u64, String> {
-    //     let mut sessions = self.sessions.borrow_mut();
-    //     let session = sessions
-    //         .get_mut(&handle)
-    //         .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+fn restart_pyrunner(session: &mut Session) {
+    let restart = b"pkill -9 -f pyrunner.py; python3 /usr/lib/vpod/pyrunner.py &\n";
+    for byte in restart {
+        session.bus.uart.push_rx(*byte);
+    }
 
-    //     let meta_len_offset = delta.len() - 4;
-    //     let meta_len = u32::from_le_bytes(delta[meta_len_offset..].try_into().unwrap()) as usize;
-    //     let meta_offset = meta_len_offset - meta_len;
-    //     let meta_str = String::from_utf8_lossy(&delta[meta_offset..meta_len_offset]).to_string();
-    //     let delta_bytes = &delta[..meta_offset];
+    repl::wait_for_prompt(&mut session.bus, &mut session.hart, &session.prompt);
 
-    //     let cache = self.snapshot_cache.borrow();
-    //     if let Some((_, ref snapshot_bytes)) = *cache {
-    //         let mut cursor = std::io::Cursor::new(snapshot_bytes);
-    //         machine::snapshot::restore(&mut session.bus, &mut session.hart, &mut cursor)
-    //             .map_err(|e| format!("base restore failed: {e}"))?;
-    //     } else {
-    //         return Err("no cached snapshot for fast resume".to_string());
-    //     }
-    //     drop(cache);
+    session.bus.uart.drain_tx();
+    session.bus.uart_stderr.drain_tx();
+    session.bus.uart_ctrl.drain_tx();
+    session.bus.uart_data.drain_tx();
 
-    //     let mut cursor = std::io::Cursor::new(delta_bytes);
-    //     machine::snapshot::restore_delta(&mut session.bus, &mut session.hart, &mut cursor)
-    //         .map_err(|e| format!("delta restore failed: {e}"))?;
+    repl::settle(&mut session.bus, &mut session.hart, 2_000_000_000);
+    session.bus.uart_data.drain_tx();
 
-    //     let parts: Vec<&str> = meta_str.splitn(3, '|').collect();
-    //     let prompt_bytes: Vec<u8> = if parts.len() == 3 {
-    //         parts[2].as_bytes().to_vec()
-    //     } else {
-    //         b"# ".to_vec()
-    //     };
+    let probe = base64::engine::general_purpose::STANDARD.encode(b"pass");
+    for byte in probe.bytes() {
+        session.bus.uart_data.push_rx(byte);
+    }
+    session.bus.uart_data.push_rx(b'\n');
 
-    //     session.bus.uart.drain_tx();
-    //     session.bus.uart_stderr.drain_tx();
-    //     session.bus.uart_ctrl.drain_tx();
-    //     session.hart.is_waiting = false;
-    //     repl::sync_clock(&mut session.bus, &mut session.hart, &prompt_bytes);
+    let _ = repl::capture_output(
+        &mut session.bus,
+        &mut session.hart,
+        b"",
+        10,
+        false,
+        Some(PYRUNNER_SENTINEL),
+        true,
+    );
 
-    //     if parts.len() == 3 {
-    //         let kind = parts[0];
-    //         session.is_shell = kind == "shell";
-    //         session.is_pyrunner = kind == "pyrunner";
-    //         session.has_pyrunner = parts[1] == "true";
-    //         session.prompt = prompt_bytes;
-    //     }
-
-    //     Ok(handle)
-    // }
+    session.bus.uart_data.drain_tx();
+    session.bus.uart_stderr.drain_tx();
+    session.bus.uart_ctrl.drain_tx();
 }

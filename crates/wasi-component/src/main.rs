@@ -42,7 +42,7 @@ fn main() {
     });
 
     let mount_args = mounts.clone();
-    let (mut bus, mut hart, flags) = vm::load(vm::VmConfig {
+    let (mut bus, mut hart, flags) = vm::_load(vm::_VmConfig {
         snapshot: &snap,
         disk: disk_path.as_deref(),
         mounts,

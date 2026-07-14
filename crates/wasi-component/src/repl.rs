@@ -50,6 +50,25 @@ pub fn shell_init(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     bus.uart_ctrl.drain_tx();
 }
 
+pub fn settle(bus: &mut MachineBus, hart: &mut Hart, wall_ns: u64) {
+    let deadline = monotonic_clock::now() + wall_ns;
+
+    while monotonic_clock::now() < deadline {
+        if hart.is_waiting {
+            hart.is_waiting = false;
+        }
+
+        bus.clint.advance_by_instructions(STEP);
+        bus.poll(hart);
+
+        if let StepResult::Trap(_) | StepResult::Halt = hart.run(bus, STEP) {
+            return;
+        }
+
+        bus.uart.drain_tx();
+    }
+}
+
 pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     let mut buffer = Vec::new();
 
@@ -102,8 +121,12 @@ pub fn capture_output(
             hart.is_waiting = false;
 
             if !bus.has_pending_io() {
+                let before = monotonic_clock::now();
                 let timeout = monotonic_clock::subscribe_duration(NET_YIELD_NS);
                 poll::poll(&[&timeout]);
+
+                let idle_ns = monotonic_clock::now().saturating_sub(before);
+                bus.clint.advance_by_nanos(idle_ns);
 
                 if !data_channel
                     && sentinel.is_none()

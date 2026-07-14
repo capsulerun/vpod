@@ -10,10 +10,11 @@ class Commands:
         self._snapshot_path = snapshot_path
         self._get_session_id = get_session_id
 
-    def run(self, command: str) -> CommandResult:
+    def run(self, command: str, timeout: int = 120) -> CommandResult:
         session_id = self._get_session_id()
         exec = self._exports["session-exec"]
-        result = unwrap_result(exec(session_id, command))
+        result = unwrap_result(exec(session_id, command, timeout))
+
         return CommandResult(
             stdout=result.stdout,
             stderr=result.stderr or "",

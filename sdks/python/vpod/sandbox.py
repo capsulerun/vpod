@@ -39,19 +39,6 @@ _DEFAULT_PROMPT = "# "
 
 
 class Sandbox:
-    """
-    Stateless usage:
-        sandbox = Sandbox.create()
-        result = sandbox.commands.run("echo hello")
-
-    Persistent session:
-        with Sandbox.create() as sandbox:
-            sandbox.commands.run("export FOO=bar")
-            result = sandbox.commands.run("echo $FOO")
-
-            execution = sandbox.code.run("print(2 + 2)")
-            print(execution.text)  # 4
-    """
 
     def __init__(self, snapshot: str = "alpine:latest", mounts: dict[str, str] | None = None):
         snapshot_path = snapshots.pull(snapshot)
@@ -202,7 +189,6 @@ class Sandbox:
         instance._in_context = True
         instance.commands = Commands(exports, snap_rel, instance._get_shell_session_id)
         instance.code = Code(exports, snap_rel, instance._get_code_session_id)
-
 
         Sandbox.destroy(instance_id)
         return instance
