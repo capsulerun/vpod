@@ -1,6 +1,5 @@
 /*
- * vpod ssl_client, replacement for busybox's ssl_client that does
- * no TLS.
+ * vpod ssl_client, replacement for busybox's ssl_client that does no TLS.
  */
 
 #include <arpa/inet.h>
