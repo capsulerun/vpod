@@ -69,6 +69,28 @@ pub fn settle(bus: &mut MachineBus, hart: &mut Hart, wall_ns: u64) {
     }
 }
 
+pub fn drain_ctrl_with_grace(bus: &mut MachineBus, hart: &mut Hart) -> Vec<u8> {
+    for _ in 0..2000u32 {
+        let bytes = bus.uart_ctrl.drain_tx();
+        if !bytes.is_empty() {
+            return bytes;
+        }
+
+        if hart.is_waiting {
+            hart.is_waiting = false;
+        }
+
+        bus.clint.advance_by_instructions(STEP);
+        bus.poll(hart);
+
+        if let StepResult::Trap(_) | StepResult::Halt = hart.run(bus, STEP) {
+            break;
+        }
+    }
+
+    bus.uart_ctrl.drain_tx()
+}
+
 pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     let mut buffer = Vec::new();
 

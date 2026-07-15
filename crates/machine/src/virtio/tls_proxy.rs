@@ -465,34 +465,47 @@ impl TlsProxy {
             return;
         };
 
-        while client.wants_write() {
+        let handshook = !client.is_handshaking();
+        while !self.upstream_closed && client.wants_write() {
             match client.write_tls(sock) {
                 Ok(0) => break,
                 Ok(_) => {}
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(_) => {
+                    if handshook {
+                        self.upstream_closed = true;
+                        break;
+                    }
+
                     self.failed = true;
                     return;
                 }
             }
         }
 
-        loop {
+        while !self.upstream_closed {
             match client.read_tls(sock) {
                 Ok(0) => {
                     self.upstream_closed = true;
-                    break;
                 }
                 Ok(_) => {
                     if client.process_new_packets().is_err() {
-                        self.failed = true;
-                        return;
+                        if handshook {
+                            self.upstream_closed = true;
+                        } else {
+                            self.failed = true;
+                            return;
+                        }
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(_) => {
-                    self.failed = true;
-                    return;
+                    if handshook {
+                        self.upstream_closed = true;
+                    } else {
+                        self.failed = true;
+                        return;
+                    }
                 }
             }
         }
@@ -636,6 +649,92 @@ pub(crate) fn spawn_test_upstream(
         while conn.wants_write() {
             conn.write_tls(&mut sock).unwrap();
         }
+    });
+
+    (port, up_ca_cert, handle)
+}
+
+#[cfg(test)]
+pub(crate) fn spawn_test_upstream_rst(
+    reply: &'static [u8],
+) -> (u16, String, std::thread::JoinHandle<()>) {
+    use std::net::TcpListener;
+
+    let (up_ca_key, up_ca_cert) = generate_ca_pems();
+    let (leaf_der, leaf_key) = mint_leaf_with_ca(&up_ca_key, &up_ca_cert, "localhost");
+    let up_server_cfg =
+        ServerConfig::builder_with_provider(Arc::new(rustls_rustcrypto::provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![CertificateDer::from(leaf_der)],
+                PrivateKeyDer::try_from(leaf_key).unwrap(),
+            )
+            .unwrap();
+    let up_server_cfg = Arc::new(up_server_cfg);
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let handle = std::thread::spawn(move || {
+        listener.set_nonblocking(false).ok();
+
+        let (mut sock, _) = listener.accept().unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(10))).ok();
+
+        let mut conn = ServerConnection::new(up_server_cfg).unwrap();
+        let mut req = Vec::new();
+        loop {
+            if conn.wants_write() {
+                conn.write_tls(&mut sock).unwrap();
+                continue;
+            }
+
+            if conn.is_handshaking() {
+                conn.read_tls(&mut sock).unwrap();
+                conn.process_new_packets().unwrap();
+                continue;
+            }
+
+            let mut buf = [0u8; 1024];
+            match conn.reader().read(&mut buf) {
+                Ok(n) if n > 0 => {
+                    req.extend_from_slice(&buf[..n]);
+                    if req.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            conn.read_tls(&mut sock).unwrap();
+            conn.process_new_packets().unwrap();
+        }
+        conn.writer().write_all(reply).unwrap();
+        while conn.wants_write() {
+            conn.write_tls(&mut sock).unwrap();
+        }
+
+        std::thread::sleep(Duration::from_millis(500));
+
+        {
+            use std::os::fd::AsRawFd;
+            let linger = libc::linger {
+                l_onoff: 1,
+                l_linger: 0,
+            };
+            unsafe {
+                libc::setsockopt(
+                    sock.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_LINGER,
+                    &linger as *const libc::linger as *const libc::c_void,
+                    std::mem::size_of::<libc::linger>() as libc::socklen_t,
+                );
+            }
+        }
+        drop(sock);
     });
 
     (port, up_ca_cert, handle)

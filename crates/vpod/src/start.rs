@@ -306,6 +306,7 @@ pub fn run(cfg: RunConfig) -> Result<()> {
     let mut builder = WasiCtxBuilder::new();
     builder.inherit_stdin().inherit_stdout().inherit_stderr();
     builder.args(&wasm_args);
+
     builder.preopened_dir(&snap_dir, "snap", DirPerms::READ, FilePerms::READ)?;
 
     for (i, mount) in cfg.mounts.iter().enumerate() {

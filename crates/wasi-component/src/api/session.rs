@@ -223,7 +223,7 @@ impl SessionManager {
                 .trim_end()
                 .to_string();
 
-            let ctrl_bytes = session.bus.uart_ctrl.drain_tx();
+            let ctrl_bytes = repl::drain_ctrl_with_grace(&mut session.bus, &mut session.hart);
             let exit_code = match ctrl_bytes.first() {
                 Some(byte) => *byte as u32,
                 None => {
@@ -265,7 +265,7 @@ impl SessionManager {
 
             let mut timed_out = false;
             let exit_code = if session.is_shell {
-                let ctrl_bytes = session.bus.uart_ctrl.drain_tx();
+                let ctrl_bytes = repl::drain_ctrl_with_grace(&mut session.bus, &mut session.hart);
                 match ctrl_bytes.first() {
                     Some(byte) => *byte as u32,
                     None => {

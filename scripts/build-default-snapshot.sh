@@ -46,14 +46,14 @@ echo ""
 
 echo "── Checking host tools..."
 MISSING=""
-for cmd in curl bsdtar cpio gzip cargo; do
+for cmd in curl bsdtar cpio gzip cargo zig; do
     command -v "$cmd" >/dev/null || MISSING="$MISSING $cmd"
 done
 if [ -n "$MISSING" ]; then
     echo "ERROR: missing tools:$MISSING"
-    echo "  macOS  : brew install libarchive"
-    echo "  Debian : apt install libarchive-tools bsdtar cpio"
-    echo "  Fedora : dnf install bsdtar libarchive"
+    echo "  macOS  : brew install libarchive zig"
+    echo "  Debian : apt install libarchive-tools bsdtar cpio zig"
+    echo "  Fedora : dnf install bsdtar libarchive zig"
     echo "  Windows: use WSL2 and follow the Linux instructions"
     exit 1
 fi
@@ -121,6 +121,42 @@ printf 'https://dl-cdn.alpinelinux.org/alpine/v%s/main\nhttps://dl-cdn.alpinelin
     "$ALPINE_MINOR" "$ALPINE_MINOR" > "$OVERLAY/etc/apk/repositories"
 echo 'nameserver 8.8.8.8' > "$OVERLAY/etc/resolv.conf"
 
+# vpod TLS-terminating proxy (phase 1): ship the proxy's CA so the guest trusts
+# the leaf certs it mints for :443. update-ca-certificates (run below, after the
+# ca-certificates package is installed) merges this into the system bundle.
+mkdir -p "$OVERLAY/usr/local/share/ca-certificates"
+cp "$ROOT/crates/machine/assets/tls/vpod-ca-cert.pem" \
+    "$OVERLAY/usr/local/share/ca-certificates/vpod-ca.crt"
+
+# Minimal trust bundle: just the vpod CA. The env vars in /sbin/init point
+# tools here so they skip parsing the full Mozilla bundle (see comment there).
+mkdir -p "$OVERLAY/etc/ssl/vpod"
+cp "$ROOT/crates/machine/assets/tls/vpod-ca-cert.pem" \
+    "$OVERLAY/etc/ssl/vpod/ca-only.pem"
+
+# vpod ssl_client: replaces busybox's for wget https. Speaks the plaintext
+# preamble to the vpod proxy instead of doing ~1s of emulated TLS per
+# connection. The original is preserved as ssl_client.real for non-443
+# destinations (see guest/vpod-ssl-client/vpod_ssl_client.c). The swap itself
+# happens in the guest setup step below, after the base rootfs is unpacked.
+echo "── Cross-compiling vpod ssl_client (riscv64-musl, static)..."
+zig cc -target riscv64-linux-musl -Os -static -s \
+    -o "$OVERLAY/usr/lib/vpod/vpod-ssl-client" \
+    "$ROOT/guest/vpod-ssl-client/vpod_ssl_client.c"
+chmod +x "$OVERLAY/usr/lib/vpod/vpod-ssl-client"
+
+# vpod libssl shim: the ssl_client equivalent for OpenSSL clients (python,
+# pip, apk, node). LD_PRELOAD'd (see /sbin/init), it intercepts SSL_* on :443
+# and speaks the plaintext preamble to the proxy instead of doing guest TLS —
+# real upstream TLS happens host-side. Delegates to real libssl for non-443,
+# memory-BIO clients, and when VPOD_REAL_TLS=1
+# (see guest/vpod-libssl-shim/vpod_libssl_shim.c).
+echo "── Cross-compiling vpod libssl shim (riscv64-musl, shared)..."
+zig cc -target riscv64-linux-musl -Os -shared -fPIC -s \
+    -o "$OVERLAY/usr/lib/vpod/vpod-libssl-shim.so" \
+    "$ROOT/guest/vpod-libssl-shim/vpod_libssl_shim.c"
+chmod +x "$OVERLAY/usr/lib/vpod/vpod-libssl-shim.so"
+
 cat > "$OVERLAY/sbin/init" << 'INIT_EOF'
 #!/bin/sh
 
@@ -156,17 +192,42 @@ if [ -c /dev/hvc0 ]; then
 fi
 
 export TERM=dumb
-export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+# All :443 traffic terminates at the vpod proxy, so the only certificate the
+# guest ever needs to verify is one minted by the vpod CA. Pointing every tool
+# at a bundle containing *only* that CA makes trust-store loading ~free:
+# parsing the full ~150-cert Mozilla bundle cost a measured ~0.76s per
+# `ssl.create_default_context()` under emulation, paid on every urlopen().
+# The full system bundle stays untouched at /etc/ssl/certs/ca-certificates.crt
+# for the passthrough fallback (tools doing real TLS to real origins).
+export SSL_CERT_FILE=/etc/ssl/vpod/ca-only.pem
+export REQUESTS_CA_BUNDLE=/etc/ssl/vpod/ca-only.pem
+export PIP_CERT=/etc/ssl/vpod/ca-only.pem
+export NODE_EXTRA_CA_CERTS=/etc/ssl/vpod/ca-only.pem
+# LD_PRELOAD the libssl shim for every process so OpenSSL clients (python,
+# pip, apk, node) skip guest-side TLS on :443. Gated on the file existing so a
+# missing/failed shim can never make exec unusable; VPOD_REAL_TLS=1 disables
+# it per-process. Non-OpenSSL tools load it as a no-op.
+if [ -f /usr/lib/vpod/vpod-libssl-shim.so ]; then
+    export LD_PRELOAD=/usr/lib/vpod/vpod-libssl-shim.so
+fi
 export ENV=''
 unset HISTFILE
 set +o history 2>/dev/null || true
-exec setsid sh -c 'HISTFILE=/dev/null HISTSIZE=0 SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt exec sh </dev/ttyS0 >/dev/ttyS0 2>&1'
+exec setsid sh -c 'HISTFILE=/dev/null HISTSIZE=0 SSL_CERT_FILE=/etc/ssl/vpod/ca-only.pem exec sh </dev/ttyS0 >/dev/ttyS0 2>&1'
 INIT_EOF
 chmod +x "$OVERLAY/sbin/init"
 ln -sf /sbin/init "$OVERLAY/init"
 
 cat > "$OVERLAY/usr/lib/vpod/pyrunner.py" << 'PYRUNNER_EOF'
 import sys, io, traceback, base64
+
+# Pre-import the https stack while the snapshot is being built: these imports
+# cost a measured ~2.5s under emulation, and pyrunner is live when the snapshot
+# is taken, so every session inherits them already warm.
+try:
+    import ssl, urllib.request
+except ImportError:
+    pass
 
 _globals = {}
 _sentinel = "---VPOD_DONE---"
@@ -242,6 +303,13 @@ SNAP="$ROOT/dist/alpine-3.23.0-256mb.snap"
 BOOTARGS="root=/dev/ram0 rw console=ttyS0 earlycon init=/sbin/init"
 
 echo "── Booting guest to pre-install ca-certificates + python3..."
+
+# A stable, cert-specific line from the vpod CA PEM. The guest greps its trust
+# bundle for this after installing, so we can prove the CA actually landed
+# (a silently-missing CA = confusing HTTPS breakage at runtime, not build time).
+CA_MARKER="$(sed -n '2p' "$ROOT/crates/machine/assets/tls/vpod-ca-cert.pem")"
+BUILD_LOG="$ROOT/dist/.snapshot-build.log"
+
 "$VPOD" \
     "$KERNEL" \
     --bios "$OPENSBI_FW" \
@@ -249,9 +317,25 @@ echo "── Booting guest to pre-install ca-certificates + python3..."
     --ram "$RAM_MB" \
     --bootargs "$BOOTARGS" \
     --net \
-    --setup "date -s '$(date -u '+%Y-%m-%d %H:%M:%S')'; sed -i 's|https://|http://|g' /etc/apk/repositories; apk update --allow-untrusted; apk add --allow-untrusted ca-certificates python3; sed -i 's|http://|https://|g' /etc/apk/repositories; sync" \
+    --setup "date -s '$(date -u '+%Y-%m-%d %H:%M:%S')'; sed -i 's|https://|http://|g' /etc/apk/repositories; apk update --allow-untrusted; apk add --allow-untrusted ca-certificates python3; update-ca-certificates; grep -qF '$CA_MARKER' /etc/ssl/certs/ca-certificates.crt || cat /usr/local/share/ca-certificates/vpod-ca.crt >> /etc/ssl/certs/ca-certificates.crt; if grep -qF '$CA_MARKER' /etc/ssl/certs/ca-certificates.crt; then echo VPOD_CA_INSTALLED; else echo VPOD_CA_FAILED; fi; sed -i 's|http://|https://|g' /etc/apk/repositories; cp /usr/bin/ssl_client /usr/bin/ssl_client.real && cp /usr/lib/vpod/vpod-ssl-client /usr/bin/ssl_client && chmod +x /usr/bin/ssl_client && echo VPOD_SSL_CLIENT_SWAPPED; sync" \
     --snapshot-save "$SNAP" \
-    --snapshot-python
+    --snapshot-python 2>&1 | tee "$BUILD_LOG"
+
+if ! grep -q VPOD_CA_INSTALLED "$BUILD_LOG"; then
+    echo "" >&2
+    echo "error: the vpod proxy CA is not in the guest trust store." >&2
+    echo "       HTTPS interception (:443) would fail at runtime. Aborting the build." >&2
+    echo "       (see $BUILD_LOG for the guest setup output)" >&2
+    exit 1
+fi
+if ! grep -q VPOD_SSL_CLIENT_SWAPPED "$BUILD_LOG"; then
+    echo "" >&2
+    echo "error: the vpod ssl_client was not installed over busybox's." >&2
+    echo "       wget https would pay the full guest-TLS cost. Aborting the build." >&2
+    echo "       (see $BUILD_LOG for the guest setup output)" >&2
+    exit 1
+fi
+rm -f "$BUILD_LOG"
 
 echo ""
 echo "=== Done ==="

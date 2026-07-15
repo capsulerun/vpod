@@ -195,6 +195,7 @@ struct PlainBridge {
     upstream_closed: bool,
     timing: Option<Timing>,
     upstream_hs_done: bool,
+    marked_upstream_hs: bool,
     first_reply: bool,
 }
 
@@ -231,6 +232,7 @@ impl PlainBridge {
             upstream_closed: false,
             timing,
             upstream_hs_done: false,
+            marked_upstream_hs: false,
             first_reply: false,
         };
         if let Some(t) = &bridge.timing {
@@ -267,12 +269,22 @@ impl PlainBridge {
             return;
         }
 
-        while self.client.wants_write() {
+        if !self.client.is_handshaking() {
+            self.upstream_hs_done = true;
+        }
+
+        while !self.upstream_closed && self.client.wants_write() {
             match self.client.write_tls(&mut self.upstream) {
                 Ok(0) => break,
                 Ok(_) => {}
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(e) => {
+                    if self.upstream_hs_done {
+                        log::debug!("plain_bridge: upstream write ended: {e}");
+                        self.upstream_closed = true;
+                        break;
+                    }
+
                     log::warn!("plain_bridge: upstream write error: {e}");
                     self.failed = true;
                     return;
@@ -280,31 +292,40 @@ impl PlainBridge {
             }
         }
 
-        loop {
+        while !self.upstream_closed {
             match self.client.read_tls(&mut self.upstream) {
                 Ok(0) => {
                     self.upstream_closed = true;
-                    break;
                 }
                 Ok(_) => {
                     if let Err(e) = self.client.process_new_packets() {
-                        log::warn!("plain_bridge: upstream tls error: {e}");
-                        self.failed = true;
-                        return;
+                        if self.upstream_hs_done {
+                            log::debug!("plain_bridge: upstream closed uncleanly: {e}");
+                            self.upstream_closed = true;
+                        } else {
+                            log::warn!("plain_bridge: upstream tls error: {e}");
+                            self.failed = true;
+                            return;
+                        }
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(e) => {
-                    log::warn!("plain_bridge: upstream read error: {e}");
-                    self.failed = true;
-                    return;
+                    if self.upstream_hs_done {
+                        log::debug!("plain_bridge: upstream read ended: {e}");
+                        self.upstream_closed = true;
+                    } else {
+                        log::warn!("plain_bridge: upstream read error: {e}");
+                        self.failed = true;
+                        return;
+                    }
                 }
             }
         }
 
         if let Some(t) = &mut self.timing {
-            if !self.upstream_hs_done && !self.client.is_handshaking() {
-                self.upstream_hs_done = true;
+            if self.upstream_hs_done && !self.marked_upstream_hs {
+                self.marked_upstream_hs = true;
                 t.mark("upstream handshake done");
             }
         }
@@ -330,7 +351,9 @@ impl PlainBridge {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tls_proxy::{ca_cert_pem, client_config_trusting, spawn_test_upstream};
+    use super::super::tls_proxy::{
+        ca_cert_pem, client_config_trusting, spawn_test_upstream, spawn_test_upstream_rst,
+    };
     use super::*;
     use std::time::Duration;
 
@@ -371,6 +394,45 @@ mod tests {
             "expected upstream reply, got {got:?}"
         );
         assert!(gateway.eof(), "upstream close must surface as EOF");
+    }
+
+    #[test]
+    fn abrupt_upstream_rst_still_delivers_full_reply() {
+        const BODY_LEN: usize = 8000;
+        static BIG_REPLY: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+        let reply: &'static [u8] = BIG_REPLY.get_or_init(|| {
+            let mut v = format!("HTTP/1.0 200 OK\r\nContent-Length: {BODY_LEN}\r\n\r\n").into_bytes();
+            v.extend(std::iter::repeat(b'x').take(BODY_LEN));
+            v
+        });
+
+        let (port, up_ca, up) = spawn_test_upstream_rst(reply);
+        let ctx = TlsContext::new().unwrap();
+        let mut gateway =
+            HttpsGateway::new_test(&ctx, [127, 0, 0, 1], client_config_trusting(&up_ca));
+
+        let wire = format!("VPOD-CONNECT localhost {port}\nGET / HTTP/1.0\r\n\r\n");
+        gateway.push_from_guest(wire.as_bytes());
+
+        let mut got = Vec::new();
+        for _ in 0..5000 {
+            drain(&mut gateway, &mut got);
+            if gateway.eof() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        drain(&mut gateway, &mut got);
+        let _ = up.join();
+
+        assert!(!gateway.failed(), "RST after data must not fail the bridge");
+        assert_eq!(
+            got.len(),
+            reply.len(),
+            "reply truncated: got {} of {} bytes",
+            got.len(),
+            reply.len()
+        );
     }
 
     #[test]
