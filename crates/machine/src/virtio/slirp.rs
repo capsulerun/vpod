@@ -4,7 +4,64 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant};
 
+use super::https_gateway::HttpsGateway;
 use super::net::NetworkBackend;
+use super::tls_proxy::TlsContext;
+
+const HTTPS_PORT: u16 = 443;
+
+enum Transport {
+    Raw(TcpStream),
+    Https(Box<HttpsGateway>),
+}
+
+impl Transport {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Transport::Raw(s) => s.write(buf),
+            Transport::Https(g) => {
+                g.push_from_guest(buf);
+                if g.failed() {
+                    Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+                } else {
+                    Ok(buf.len())
+                }
+            }
+        }
+    }
+
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Transport::Raw(s) => s.read(buf),
+            Transport::Https(g) => {
+                if g.failed() {
+                    return Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe));
+                }
+                match g.pull_to_guest(buf) {
+                    Some(n) => Ok(n),
+                    None if g.eof() => Ok(0),
+                    None => Err(std::io::Error::from(std::io::ErrorKind::WouldBlock)),
+                }
+            }
+        }
+    }
+
+    fn has_pending(&self) -> bool {
+        match self {
+            Transport::Raw(_) => false,
+            Transport::Https(g) => g.has_pending(),
+        }
+    }
+
+    fn shutdown_write(&mut self) {
+        match self {
+            Transport::Raw(s) => {
+                s.shutdown(std::net::Shutdown::Write).ok();
+            }
+            Transport::Https(g) => g.shutdown_write(),
+        }
+    }
+}
 
 const GW_IP: [u8; 4] = [10, 0, 2, 2];
 const GUEST_IP: [u8; 4] = [10, 0, 2, 15];
@@ -69,7 +126,7 @@ enum TcpState {
 
 struct TcpConn {
     state: TcpState,
-    stream: TcpStream,
+    transport: Transport,
     guest_mac: [u8; 6],
     src_ip: [u8; 4],
     dst_ip: [u8; 4],
@@ -125,10 +182,19 @@ pub struct SlirpBackend {
     udp_conns: HashMap<UdpKey, UdpConn>,
     dns_pending: Vec<DnsPending>,
     dhcp_xid: u32,
+    tls: Option<TlsContext>,
 }
 
 impl SlirpBackend {
     pub fn new(guest_mac: [u8; 6]) -> Self {
+        let tls = match TlsContext::new() {
+            Ok(ctx) => Some(ctx),
+            Err(e) => {
+                log::warn!("tls_proxy: disabled, terminator init failed: {e}");
+                None
+            }
+        };
+
         Self {
             guest_mac,
             rx_pending: VecDeque::new(),
@@ -136,6 +202,7 @@ impl SlirpBackend {
             udp_conns: HashMap::new(),
             dns_pending: Vec::new(),
             dhcp_xid: 0,
+            tls,
         }
     }
 
@@ -151,7 +218,7 @@ impl SlirpBackend {
                         while !conn.write_buf.is_empty() {
                             let (a, b) = conn.write_buf.as_slices();
                             let slice = if !a.is_empty() { a } else { b };
-                            match conn.stream.write(slice) {
+                            match conn.transport.write(slice) {
                                 Ok(n) => {
                                     conn.write_buf.drain(..n);
                                 }
@@ -170,7 +237,7 @@ impl SlirpBackend {
                         if !remove {
                             let mut buf = [0u8; 16384];
                             loop {
-                                match conn.stream.read(&mut buf) {
+                                match conn.transport.read(&mut buf) {
                                     Ok(0) => {
                                         if conn.snd_buf.is_empty() {
                                             frames.push(make_tcp_frame(
@@ -598,33 +665,40 @@ impl SlirpBackend {
 
             let wnd_shift = parse_wnd_scale(payload, tcp_hlen);
 
-            let addr = SocketAddrV4::new(Ipv4Addr::from(dst_ip), dst_port);
+            let transport = if dst_port == HTTPS_PORT && self.tls.is_some() {
+                let ctx = self.tls.as_ref().unwrap();
+                Transport::Https(Box::new(HttpsGateway::new(ctx, dst_ip)))
+            } else {
+                let addr = SocketAddrV4::new(Ipv4Addr::from(dst_ip), dst_port);
 
-            #[cfg(target_family = "wasm")]
-            let stream_result = TcpStream::connect(addr);
+                #[cfg(target_family = "wasm")]
+                let stream_result = TcpStream::connect(addr);
 
-            #[cfg(not(target_family = "wasm"))]
-            let stream_result = TcpStream::connect_timeout(&addr.into(), Duration::from_secs(5));
+                #[cfg(not(target_family = "wasm"))]
+                let stream_result =
+                    TcpStream::connect_timeout(&addr.into(), Duration::from_secs(5));
 
-            let stream = match stream_result {
-                Ok(s) => s,
-                Err(_) => {
-                    self.rx_pending.push_back(make_tcp_frame(
-                        &src_mac,
-                        &dst_ip,
-                        &src_ip,
-                        dst_port,
-                        src_port,
-                        0,
-                        seq_guest.wrapping_add(1),
-                        RST | ACK,
-                        &[],
-                    ));
-                    return;
-                }
+                let stream = match stream_result {
+                    Ok(s) => s,
+                    Err(_) => {
+                        self.rx_pending.push_back(make_tcp_frame(
+                            &src_mac,
+                            &dst_ip,
+                            &src_ip,
+                            dst_port,
+                            src_port,
+                            0,
+                            seq_guest.wrapping_add(1),
+                            RST | ACK,
+                            &[],
+                        ));
+                        return;
+                    }
+                };
+                stream.set_nonblocking(true).ok();
+                stream.set_nodelay(true).ok();
+                Transport::Raw(stream)
             };
-            stream.set_nonblocking(true).ok();
-            stream.set_nodelay(true).ok();
 
             let isn_host: u32 = generate_isn(&src_ip, src_port, &dst_ip, dst_port);
 
@@ -644,7 +718,7 @@ impl SlirpBackend {
                 key,
                 TcpConn {
                     state: TcpState::Established,
-                    stream,
+                    transport,
                     guest_mac: src_mac,
                     src_ip,
                     dst_ip,
@@ -711,7 +785,14 @@ impl SlirpBackend {
                     ACK,
                     &[],
                 ));
-                conn.state = TcpState::Closed;
+                match conn.state {
+                    TcpState::Established => {
+                        conn.transport.shutdown_write();
+                    }
+                    TcpState::FinWait | TcpState::Closed => {
+                        conn.state = TcpState::Closed;
+                    }
+                }
             }
         } else {
             self.rx_pending.push_back(make_tcp_frame(
@@ -757,7 +838,7 @@ impl NetworkBackend for SlirpBackend {
         for conn in self.tcp_conns.values() {
             match conn.state {
                 TcpState::Established | TcpState::FinWait => {
-                    if !conn.snd_buf.is_empty() {
+                    if !conn.snd_buf.is_empty() || conn.transport.has_pending() {
                         return true;
                     }
                 }
