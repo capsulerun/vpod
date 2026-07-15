@@ -665,8 +665,8 @@ impl SlirpBackend {
 
             let wnd_shift = parse_wnd_scale(payload, tcp_hlen);
 
-            let transport = if dst_port == HTTPS_PORT && self.tls.is_some() {
-                let ctx = self.tls.as_ref().unwrap();
+            let tls_ctx = self.tls.as_ref().filter(|_| dst_port == HTTPS_PORT);
+            let transport = if let Some(ctx) = tls_ctx {
                 Transport::Https(Box::new(HttpsGateway::new(ctx, dst_ip)))
             } else {
                 let addr = SocketAddrV4::new(Ipv4Addr::from(dst_ip), dst_port);

@@ -285,11 +285,12 @@ impl TlsProxy {
     }
 
     pub fn push_from_guest(&mut self, mut bytes: &[u8]) {
-        if let Some(t) = &mut self.timing {
-            if !t.first_guest_bytes && !bytes.is_empty() {
-                t.first_guest_bytes = true;
-                t.mark("first guest bytes (ClientHello)");
-            }
+        if let Some(t) = &mut self.timing
+            && !t.first_guest_bytes
+            && !bytes.is_empty()
+        {
+            t.first_guest_bytes = true;
+            t.mark("first guest bytes (ClientHello)");
         }
         while !bytes.is_empty() {
             match self.server.read_tls(&mut bytes) {
@@ -331,23 +332,25 @@ impl TlsProxy {
             return;
         }
 
-        if let Some(t) = &mut self.timing {
-            if !t.guest_hs_done && !self.server.is_handshaking() {
-                t.guest_hs_done = true;
-                t.mark("guest handshake done");
-            }
+        if let Some(t) = &mut self.timing
+            && !t.guest_hs_done
+            && !self.server.is_handshaking()
+        {
+            t.guest_hs_done = true;
+            t.mark("guest handshake done");
         }
 
-        if self.client.is_none() && !self.server.is_handshaking() {
-            if let Some(sni) = self.server.server_name().map(|s| s.to_string()) {
-                self.connect_upstream(&sni);
+        if self.client.is_none()
+            && !self.server.is_handshaking()
+            && let Some(sni) = self.server.server_name().map(|s| s.to_string())
+        {
+            self.connect_upstream(&sni);
 
-                if let (Some(t), true) = (&mut self.timing, self.client.is_some()) {
-                    if !t.upstream_connected {
-                        t.upstream_connected = true;
-                        t.mark("upstream TCP connected");
-                    }
-                }
+            if let (Some(t), true) = (&mut self.timing, self.client.is_some())
+                && !t.upstream_connected
+            {
+                t.upstream_connected = true;
+                t.mark("upstream TCP connected");
             }
         }
 
@@ -409,18 +412,22 @@ impl TlsProxy {
             }
         }
 
-        if let Some(t) = &mut self.timing {
-            if !t.serverhello_sent && wrote_to_guest && self.server.is_handshaking() {
-                t.serverhello_sent = true;
-                t.mark("ServerHello flight sent to guest");
-            }
+        if let Some(t) = &mut self.timing
+            && !t.serverhello_sent
+            && wrote_to_guest
+            && self.server.is_handshaking()
+        {
+            t.serverhello_sent = true;
+            t.mark("ServerHello flight sent to guest");
         }
 
-        if let Some(t) = &mut self.timing {
-            if t.upstream_hs_done && !t.first_reply && !self.to_guest.is_empty() {
-                t.first_reply = true;
-                t.mark("first reply byte to guest");
-            }
+        if let Some(t) = &mut self.timing
+            && t.upstream_hs_done
+            && !t.first_reply
+            && !self.to_guest.is_empty()
+        {
+            t.first_reply = true;
+            t.mark("first reply byte to guest");
         }
     }
 
@@ -510,11 +517,13 @@ impl TlsProxy {
             }
         }
 
-        if let Some(t) = &mut self.timing {
-            if t.upstream_connected && !t.upstream_hs_done && !client.is_handshaking() {
-                t.upstream_hs_done = true;
-                t.mark("upstream handshake done");
-            }
+        if let Some(t) = &mut self.timing
+            && t.upstream_connected
+            && !t.upstream_hs_done
+            && !client.is_handshaking()
+        {
+            t.upstream_hs_done = true;
+            t.mark("upstream handshake done");
         }
     }
 }

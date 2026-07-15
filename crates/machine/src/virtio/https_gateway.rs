@@ -16,7 +16,7 @@ const PREAMBLE_MAX: usize = 280;
 enum GatewayState {
     Sniffing(Vec<u8>),
     Tls(Box<TlsProxy>),
-    Plain(PlainBridge),
+    Plain(Box<PlainBridge>),
     Failed,
 }
 
@@ -166,7 +166,7 @@ impl HttpsGateway {
                 if !remainder.is_empty() {
                     bridge.push_from_guest(remainder);
                 }
-                self.state = GatewayState::Plain(bridge);
+                self.state = GatewayState::Plain(Box::new(bridge));
             }
             Err(e) => {
                 log::warn!("https_gateway: plaintext bridge to {host}:{port} failed: {e}");
@@ -323,11 +323,12 @@ impl PlainBridge {
             }
         }
 
-        if let Some(t) = &mut self.timing {
-            if self.upstream_hs_done && !self.marked_upstream_hs {
-                self.marked_upstream_hs = true;
-                t.mark("upstream handshake done");
-            }
+        if let Some(t) = &mut self.timing
+            && self.upstream_hs_done
+            && !self.marked_upstream_hs
+        {
+            self.marked_upstream_hs = true;
+            t.mark("upstream handshake done");
         }
 
         let mut buf = [0u8; 16384];
@@ -340,11 +341,13 @@ impl PlainBridge {
             }
         }
 
-        if let Some(t) = &mut self.timing {
-            if self.upstream_hs_done && !self.first_reply && !self.to_guest.is_empty() {
-                self.first_reply = true;
-                t.mark("first reply byte to guest (plaintext)");
-            }
+        if let Some(t) = &mut self.timing
+            && self.upstream_hs_done
+            && !self.first_reply
+            && !self.to_guest.is_empty()
+        {
+            self.first_reply = true;
+            t.mark("first reply byte to guest (plaintext)");
         }
     }
 }
@@ -401,7 +404,8 @@ mod tests {
         const BODY_LEN: usize = 8000;
         static BIG_REPLY: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
         let reply: &'static [u8] = BIG_REPLY.get_or_init(|| {
-            let mut v = format!("HTTP/1.0 200 OK\r\nContent-Length: {BODY_LEN}\r\n\r\n").into_bytes();
+            let mut v =
+                format!("HTTP/1.0 200 OK\r\nContent-Length: {BODY_LEN}\r\n\r\n").into_bytes();
             v.extend(std::iter::repeat(b'x').take(BODY_LEN));
             v
         });
