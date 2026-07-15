@@ -912,7 +912,9 @@ mod tests {
             }
 
             let mut buf = [0u8; 1024];
-            if let Ok(n) = guest.reader().read(&mut buf) && n > 0 {
+            if let Ok(n) = guest.reader().read(&mut buf)
+                && n > 0
+            {
                 got.extend_from_slice(&buf[..n]);
             }
 

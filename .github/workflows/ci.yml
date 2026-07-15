@@ -65,6 +65,11 @@ jobs:
       - name: Install bsdtar
         run: sudo apt-get update && sudo apt-get install -y libarchive-tools
 
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
+
       - name: Build Default Snapshot
         run: ./scripts/build-default-snapshot.sh
 
