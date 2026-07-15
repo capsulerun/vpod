@@ -406,7 +406,8 @@ mod tests {
         let reply: &'static [u8] = BIG_REPLY.get_or_init(|| {
             let mut v =
                 format!("HTTP/1.0 200 OK\r\nContent-Length: {BODY_LEN}\r\n\r\n").into_bytes();
-            v.extend(std::iter::repeat(b'x').take(BODY_LEN));
+
+            v.extend(std::iter::repeat_n(b'x', BODY_LEN));
             v
         });
 
