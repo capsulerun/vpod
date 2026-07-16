@@ -146,7 +146,10 @@ fn python_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
     wait_for_prompt(bus, hart, false);
     drain_all(bus);
 
-    push_line(bus, b"python3 /usr/lib/vpod/pyrunner.py &");
+    push_line(
+        bus,
+        b"PYR=/usr/bin/python3.real; [ -x $PYR ] || PYR=python3; $PYR /usr/lib/vpod/pyrunner.py &",
+    );
     wait_for_prompt(bus, hart, false);
     drain_all(bus);
 

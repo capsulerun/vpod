@@ -664,6 +664,89 @@ pub(crate) fn spawn_test_upstream(
 }
 
 #[cfg(test)]
+pub(crate) fn spawn_test_upstream_streaming(
+    body_len: usize,
+) -> (u16, String, std::thread::JoinHandle<()>) {
+    use std::net::TcpListener;
+
+    let (up_ca_key, up_ca_cert) = generate_ca_pems();
+    let (leaf_der, leaf_key) = mint_leaf_with_ca(&up_ca_key, &up_ca_cert, "localhost");
+    let up_server_cfg =
+        ServerConfig::builder_with_provider(Arc::new(rustls_rustcrypto::provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![CertificateDer::from(leaf_der)],
+                PrivateKeyDer::try_from(leaf_key).unwrap(),
+            )
+            .unwrap();
+    let up_server_cfg = Arc::new(up_server_cfg);
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let handle = std::thread::spawn(move || {
+        listener.set_nonblocking(false).ok();
+
+        let (mut sock, _) = listener.accept().unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(10))).ok();
+
+        let mut conn = ServerConnection::new(up_server_cfg).unwrap();
+        let mut req = Vec::new();
+
+        loop {
+            if conn.wants_write() {
+                conn.write_tls(&mut sock).unwrap();
+                continue;
+            }
+
+            if conn.is_handshaking() {
+                conn.read_tls(&mut sock).unwrap();
+                conn.process_new_packets().unwrap();
+                continue;
+            }
+
+            let mut buf = [0u8; 1024];
+            match conn.reader().read(&mut buf) {
+                Ok(n) if n > 0 => {
+                    req.extend_from_slice(&buf[..n]);
+                    if req.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+
+            conn.read_tls(&mut sock).unwrap();
+            conn.process_new_packets().unwrap();
+        }
+
+        let header = format!("HTTP/1.0 200 OK\r\nContent-Length: {body_len}\r\n\r\n");
+        conn.writer().write_all(header.as_bytes()).unwrap();
+        let mut sent = 0usize;
+        let chunk = vec![b'x'; 16384];
+        while sent < body_len {
+            let n = chunk.len().min(body_len - sent);
+            conn.writer().write_all(&chunk[..n]).unwrap();
+            sent += n;
+
+            while conn.wants_write() {
+                conn.write_tls(&mut sock).unwrap();
+            }
+        }
+
+        conn.send_close_notify();
+        while conn.wants_write() {
+            conn.write_tls(&mut sock).unwrap();
+        }
+    });
+
+    (port, up_ca_cert, handle)
+}
+
+#[cfg(test)]
 pub(crate) fn spawn_test_upstream_rst(
     reply: &'static [u8],
 ) -> (u16, String, std::thread::JoinHandle<()>) {
@@ -717,9 +800,11 @@ pub(crate) fn spawn_test_upstream_rst(
                 }
                 _ => {}
             }
+
             conn.read_tls(&mut sock).unwrap();
             conn.process_new_packets().unwrap();
         }
+
         conn.writer().write_all(reply).unwrap();
         while conn.wants_write() {
             conn.write_tls(&mut sock).unwrap();
@@ -753,6 +838,7 @@ pub(crate) fn spawn_test_upstream_rst(
 pub(crate) fn client_config_trusting(ca_pem: &str) -> Arc<ClientConfig> {
     let mut roots = RootCertStore::empty();
     let ca_der = Certificate::from_pem(ca_pem).unwrap().to_der().unwrap();
+
     roots.add(CertificateDer::from(ca_der)).unwrap();
     Arc::new(
         ClientConfig::builder_with_provider(Arc::new(rustls_rustcrypto::provider()))

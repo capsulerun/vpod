@@ -292,11 +292,19 @@ impl PlainBridge {
             }
         }
 
+        let mut buf = [0u8; 16384];
         while !self.upstream_closed {
-            match self.client.read_tls(&mut self.upstream) {
-                Ok(0) => {
-                    self.upstream_closed = true;
+            loop {
+                match self.client.reader().read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => self.to_guest.extend(&buf[..n]),
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(_) => break,
                 }
+            }
+
+            match self.client.read_tls(&mut self.upstream) {
+                Ok(0) => self.upstream_closed = true,
                 Ok(_) => {
                     if let Err(e) = self.client.process_new_packets() {
                         if self.upstream_hs_done {
@@ -323,15 +331,6 @@ impl PlainBridge {
             }
         }
 
-        if let Some(t) = &mut self.timing
-            && self.upstream_hs_done
-            && !self.marked_upstream_hs
-        {
-            self.marked_upstream_hs = true;
-            t.mark("upstream handshake done");
-        }
-
-        let mut buf = [0u8; 16384];
         loop {
             match self.client.reader().read(&mut buf) {
                 Ok(0) => break,
@@ -339,6 +338,14 @@ impl PlainBridge {
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(_) => break,
             }
+        }
+
+        if let Some(t) = &mut self.timing
+            && self.upstream_hs_done
+            && !self.marked_upstream_hs
+        {
+            self.marked_upstream_hs = true;
+            t.mark("upstream handshake done");
         }
 
         if let Some(t) = &mut self.timing
@@ -356,6 +363,7 @@ impl PlainBridge {
 mod tests {
     use super::super::tls_proxy::{
         ca_cert_pem, client_config_trusting, spawn_test_upstream, spawn_test_upstream_rst,
+        spawn_test_upstream_streaming,
     };
     use super::*;
     use std::time::Duration;
@@ -438,6 +446,37 @@ mod tests {
             got.len(),
             reply.len()
         );
+    }
+
+    #[test]
+    fn large_response_delivered_in_full_without_truncation() {
+        const BODY: usize = 1_000_000;
+        let (port, up_ca, up) = spawn_test_upstream_streaming(BODY);
+        let ctx = TlsContext::new().unwrap();
+        let mut gateway =
+            HttpsGateway::new_test(&ctx, [127, 0, 0, 1], client_config_trusting(&up_ca));
+
+        gateway.push_from_guest(
+            format!("VPOD-CONNECT localhost {port}\nGET / HTTP/1.0\r\n\r\n").as_bytes(),
+        );
+
+        let mut got = Vec::new();
+        for _ in 0..20000 {
+            drain(&mut gateway, &mut got);
+            if gateway.eof() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        drain(&mut gateway, &mut got);
+        let _ = up.join();
+
+        assert!(!gateway.failed(), "bridge failed on large response");
+        let body = got
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .map(|i| got.len() - (i + 4));
+        assert_eq!(body, Some(BODY), "large body truncated: {body:?} of {BODY}");
     }
 
     #[test]
