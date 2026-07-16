@@ -16,7 +16,8 @@ import traceback
 import warnings
 
 SOCK_PATH = os.environ.get("VPOD_PYD_SOCK", "/run/vpod-pyd.sock")
-SHIM_EXECUTABLE = os.environ.get("VPOD_PYD_EXECUTABLE", "/usr/bin/python3")
+
+CHILD_EXECUTABLE = os.environ.get("VPOD_PYD_EXECUTABLE", "/usr/bin/python3.real")
 MAGIC = b"VPY1"
 
 for _mod in (
@@ -268,7 +269,7 @@ def run_child(fds, req, argv0, cwd, env):
         )
         wire_stdio(fds, unbuffered)
 
-        sys.executable = SHIM_EXECUTABLE
+        sys.executable = CHILD_EXECUTABLE
         sys.argv = req.args or [argv0]
 
         if not req.ignore_env:
