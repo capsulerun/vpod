@@ -245,9 +245,6 @@ impl Timing {
 
 impl Drop for TlsProxy {
     fn drop(&mut self) {
-        // Connection torn down: the delta from here to the command's wall-clock
-        // shows how much of the command sits *outside* the TLS connection
-        // (wget/process teardown, shell, data channel) vs inside it.
         if let Some(t) = &self.timing {
             t.mark("connection closed (proxy dropped)");
         }
@@ -264,7 +261,9 @@ impl TlsProxy {
         dst_ip: [u8; 4],
         timing: Option<Timing>,
     ) -> Result<Self, String> {
-        let server = ServerConnection::new(ctx.server_config.clone()).map_err(|e| e.to_string())?;
+        let mut server = ServerConnection::new(ctx.server_config.clone()).map_err(|e| e.to_string())?;
+        server.set_buffer_limit(None);
+
         Ok(Self {
             server,
             client: None,
@@ -459,7 +458,8 @@ impl TlsProxy {
         };
 
         match ClientConnection::new(self.client_config.clone(), server_name) {
-            Ok(c) => {
+            Ok(mut c) => {
+                c.set_buffer_limit(None);
                 self.client = Some(c);
                 self.upstream = Some(stream);
             }
@@ -468,13 +468,14 @@ impl TlsProxy {
     }
 
     fn service_upstream(&mut self) {
-        let (Some(client), Some(sock)) = (self.client.as_mut(), self.upstream.as_mut()) else {
+        if self.client.is_none() || self.upstream.is_none() {
             return;
-        };
+        }
 
-        let handshook = !client.is_handshaking();
-        while !self.upstream_closed && client.wants_write() {
-            match client.write_tls(sock) {
+        let handshook = !self.client.as_ref().unwrap().is_handshaking();
+        while !self.upstream_closed && self.client.as_ref().unwrap().wants_write() {
+            let sock = self.upstream.as_mut().unwrap();
+            match self.client.as_mut().unwrap().write_tls(sock) {
                 Ok(0) => break,
                 Ok(_) => {}
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
@@ -491,12 +492,13 @@ impl TlsProxy {
         }
 
         while !self.upstream_closed {
-            match client.read_tls(sock) {
+            let sock = self.upstream.as_mut().unwrap();
+            match self.client.as_mut().unwrap().read_tls(sock) {
                 Ok(0) => {
                     self.upstream_closed = true;
                 }
                 Ok(_) => {
-                    if client.process_new_packets().is_err() {
+                    if self.client.as_mut().unwrap().process_new_packets().is_err() {
                         if handshook {
                             self.upstream_closed = true;
                         } else {
@@ -515,12 +517,32 @@ impl TlsProxy {
                     }
                 }
             }
+
+            let mut buf = [0u8; 16384];
+            loop {
+                match self.client.as_mut().unwrap().reader().read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if self.server.writer().write_all(&buf[..n]).is_err() {
+                            self.failed = true;
+                            return;
+                        }
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(_) => break,
+                }
+            }
         }
 
+        let upstream_handshaking = self
+            .client
+            .as_ref()
+            .map(|c| c.is_handshaking())
+            .unwrap_or(true);
         if let Some(t) = &mut self.timing
             && t.upstream_connected
             && !t.upstream_hs_done
-            && !client.is_handshaking()
+            && !upstream_handshaking
         {
             t.upstream_hs_done = true;
             t.mark("upstream handshake done");
@@ -540,8 +562,11 @@ impl TlsProxy {
         dst_ip: [u8; 4],
         upstream_port: u16,
     ) -> Self {
+        let mut server = ServerConnection::new(server_config).unwrap();
+        server.set_buffer_limit(None); // match with_timing so tests exercise the real relay
+
         Self {
-            server: ServerConnection::new(server_config).unwrap(),
+            server,
             client: None,
             upstream: None,
             dst_ip,
@@ -1019,5 +1044,80 @@ mod tests {
             got.windows(5).any(|w| w == b"hello"),
             "did not receive upstream reply, got {got:?}"
         );
+    }
+
+    #[test]
+    fn large_response_delivered_in_full_without_truncation() {
+        const BODY: usize = 1_000_000;
+        let (port, up_ca, up) = spawn_test_upstream_streaming(BODY);
+
+        let ctx = TlsContext::new().unwrap();
+        let mut proxy = TlsProxy::new_test(
+            ctx.server_config.clone(),
+            client_config_trusting(&up_ca),
+            [127, 0, 0, 1],
+            port,
+        );
+
+        let mut guest = ClientConnection::new(
+            client_config_trusting(CA_CERT_PEM),
+            ServerName::try_from("localhost").unwrap(),
+        )
+        .unwrap();
+
+        guest.set_buffer_limit(None);
+
+        let mut request_sent = false;
+        let mut got = Vec::new();
+        for _ in 0..40000 {
+            let mut out = Vec::new();
+            while guest.wants_write() {
+                guest.write_tls(&mut out).unwrap();
+            }
+            if !out.is_empty() {
+                proxy.push_from_guest(&out);
+            }
+
+            let mut buf = [0u8; 16384];
+            while let Some(n) = proxy.pull_to_guest(&mut buf) {
+                let mut slice = &buf[..n];
+                while !slice.is_empty() {
+                    guest.read_tls(&mut slice).unwrap();
+                    // Process + drain after every read_tls so neither the record
+                    // deframer nor the plaintext buffer overflows on a big body.
+                    guest.process_new_packets().unwrap();
+                    let mut pt = [0u8; 16384];
+                    loop {
+                        match guest.reader().read(&mut pt) {
+                            Ok(m) if m > 0 => got.extend_from_slice(&pt[..m]),
+                            _ => break,
+                        }
+                    }
+                }
+            }
+
+            if !request_sent && !guest.is_handshaking() {
+                guest.writer().write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
+                request_sent = true;
+            }
+
+            let body = got
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .map(|i| got.len() - (i + 4));
+            if body == Some(BODY) {
+                break;
+            }
+
+            assert!(!proxy.failed(), "proxy failed on large response");
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        let _ = up.join();
+        let body = got
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .map(|i| got.len() - (i + 4));
+        assert_eq!(body, Some(BODY), "large body truncated: {body:?} of {BODY}");
     }
 }
