@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
@@ -142,6 +143,8 @@ struct TcpConn {
     rcv_nxt: u32,
     rcv_wnd: u32,
     wnd_shift: u8,
+
+    ooo_buf: BTreeMap<u32, Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -324,6 +327,35 @@ impl SlirpBackend {
 
             if remove {
                 self.tcp_conns.remove(&key);
+            }
+        }
+    }
+
+    fn drain_ooo_buf(conn: &mut TcpConn) {
+        loop {
+            let mut progressed = false;
+            let seqs: Vec<u32> = conn.ooo_buf.keys().cloned().collect();
+            for seq in seqs {
+                let data_len = conn.ooo_buf[&seq].len() as u32;
+                let end_seq = seq.wrapping_add(data_len);
+                let gap = seq.wrapping_sub(conn.rcv_nxt) as i32;
+                let new_bytes = end_seq.wrapping_sub(conn.rcv_nxt) as i32;
+
+                if gap > 0 {
+                    continue;
+                }
+
+                let data = conn.ooo_buf.remove(&seq).unwrap();
+                if new_bytes > 0 {
+                    let skip = data.len() - new_bytes as usize;
+                    conn.write_buf.extend(&data[skip..]);
+                    conn.rcv_nxt = end_seq;
+                    progressed = true;
+                }
+            }
+
+            if !progressed {
+                break;
             }
         }
     }
@@ -731,6 +763,7 @@ impl SlirpBackend {
                     rcv_nxt: seq_guest.wrapping_add(1),
                     rcv_wnd: (window as u32) << wnd_shift,
                     wnd_shift,
+                    ooo_buf: BTreeMap::new(),
                 },
             );
 
@@ -752,11 +785,22 @@ impl SlirpBackend {
             if !data.is_empty() {
                 let end_seq = seq_guest.wrapping_add(data.len() as u32);
                 let new_bytes = end_seq.wrapping_sub(conn.rcv_nxt) as i32;
+                let gap = seq_guest.wrapping_sub(conn.rcv_nxt) as i32;
 
-                if new_bytes > 0 {
+                if new_bytes > 0 && gap <= 0 {
                     let skip = data.len() - new_bytes as usize;
                     conn.write_buf.extend(&data[skip..]);
                     conn.rcv_nxt = end_seq;
+                    Self::drain_ooo_buf(conn);
+                } else if gap > 0 {
+                    const MAX_OOO_BYTES: usize = 256 * 1024;
+                    let buffered: usize = conn.ooo_buf.values().map(Vec::len).sum();
+
+                    if buffered + data.len() <= MAX_OOO_BYTES {
+                        conn.ooo_buf
+                            .entry(seq_guest)
+                            .or_insert_with(|| data.to_vec());
+                    }
                 }
 
                 self.rx_pending.push_back(make_tcp_frame(
@@ -1255,5 +1299,60 @@ mod tests {
             DNS_RCODE_NOERROR
         );
         assert_eq!(u16::from_be_bytes([reply[6], reply[7]]), 0); // no answers
+    }
+
+    #[test]
+    fn out_of_order_guest_segments_are_reassembled_before_upstream_write() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let guest_mac = [0x02, 0, 0, 0, 0, 0x15];
+        let mut slirp = SlirpBackend::new(guest_mac);
+        let dst_ip = [127, 0, 0, 1];
+        let sport = 45001u16;
+        let guest_isn = 1000u32;
+
+        slirp.send(&make_tcp_frame(
+            &guest_mac,
+            &GUEST_IP,
+            &dst_ip,
+            sport,
+            port,
+            guest_isn,
+            0,
+            SYN,
+            &[],
+        ));
+        let (mut upstream, _) = listener.accept().unwrap();
+        upstream.set_nonblocking(true).unwrap();
+
+        let syn_ack = slirp.recv().expect("SYN-ACK");
+        let host_isn = u32::from_be_bytes(syn_ack[38..42].try_into().unwrap());
+        let ack = host_isn.wrapping_add(1);
+
+        let part1 = b"hello ";
+        let part2 = b"world";
+        let seq1 = guest_isn.wrapping_add(1);
+        let seq2 = seq1.wrapping_add(part1.len() as u32);
+
+        slirp.send(&make_tcp_frame(
+            &guest_mac, &GUEST_IP, &dst_ip, sport, port, seq2, ack, ACK, part2,
+        ));
+        slirp.send(&make_tcp_frame(
+            &guest_mac, &GUEST_IP, &dst_ip, sport, port, seq1, ack, ACK, part1,
+        ));
+
+        let mut got = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while got.len() < part1.len() + part2.len() && Instant::now() < deadline {
+            while slirp.recv().is_some() {}
+            let mut buf = [0u8; 64];
+            match upstream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => got.extend_from_slice(&buf[..n]),
+                Err(_) => std::thread::sleep(Duration::from_millis(5)),
+            }
+        }
+        assert_eq!(got, b"hello world");
     }
 }

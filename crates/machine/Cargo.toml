@@ -19,5 +19,8 @@ der = { version = "0.7", features = ["pem"] }
 const-oid = { version = "0.9", features = ["db"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 
+[dev-dependencies]
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring", "aws-lc-rs"] }
+
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"
