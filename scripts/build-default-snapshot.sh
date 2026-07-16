@@ -151,12 +151,6 @@ zig cc -target riscv64-linux-musl -Os -static -s \
 chmod +x "$OVERLAY/usr/lib/vpod/vpod-python-shim"
 cp "$ROOT/guest/warmpy/pydaemon.py" "$OVERLAY/usr/lib/vpod/pydaemon.py"
 
-echo "── Cross-compiling vpod libssl shim (riscv64-musl, shared)..."
-zig cc -target riscv64-linux-musl -Os -shared -fPIC -s \
-    -o "$OVERLAY/usr/lib/vpod/vpod-libssl-shim.so" \
-    "$ROOT/guest/tls/vpod_libssl_shim.c"
-chmod +x "$OVERLAY/usr/lib/vpod/vpod-libssl-shim.so"
-
 cat > "$OVERLAY/sbin/init" << 'INIT_EOF'
 #!/bin/sh
 
@@ -199,9 +193,6 @@ export REQUESTS_CA_BUNDLE=/etc/ssl/vpod/ca-only.pem
 export PIP_CERT=/etc/ssl/vpod/ca-only.pem
 export NODE_EXTRA_CA_CERTS=/etc/ssl/vpod/ca-only.pem
 
-if [ -f /usr/lib/vpod/vpod-libssl-shim.so ]; then
-    export LD_PRELOAD=/usr/lib/vpod/vpod-libssl-shim.so
-fi
 export ENV=''
 unset HISTFILE
 set +o history 2>/dev/null || true
@@ -316,7 +307,7 @@ SETUP_CMD="${SETUP_CMD}sed -i 's|https://|http://|g' /etc/apk/repositories; "
 SETUP_CMD="${SETUP_CMD}apk update --allow-untrusted; "
 
 SETUP_CMD="${SETUP_CMD}apk add --allow-untrusted ca-certificates python3 py3-pip; "
-SETUP_CMD="${SETUP_CMD}rm -f /usr/lib/python3.*/EXTERNALLY-MANAGED; mkdir -p /root; "  # pip-installable disposable guest (drop PEP 668) + writable HOME for pip cache
+SETUP_CMD="${SETUP_CMD}rm -f /usr/lib/python3.*/EXTERNALLY-MANAGED; mkdir -p /root/.cache; "
 
 SETUP_CMD="${SETUP_CMD}update-ca-certificates; "
 SETUP_CMD="${SETUP_CMD}grep -qF '$CA_MARKER' /etc/ssl/certs/ca-certificates.crt || cat /usr/local/share/ca-certificates/vpod-ca.crt >> /etc/ssl/certs/ca-certificates.crt; "
