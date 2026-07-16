@@ -22,6 +22,8 @@ RUSTC="$RUSTUP_RUSTC" "$RUSTUP_CARGO" build -p wasi-component --lib --release --
 echo "[build-wasm] building vpod host..."
 cargo build -p vpod --release
 
+cp target/wasm32-wasip2/release/vpod_wasi_lib.wasm sdks/python/vpod/vpod_wasi_lib.wasm
+
 echo "[build-wasm] done"
 echo "  cli:       target/wasm32-wasip2/release/vpod-wasi-cli.wasm"
 echo "  library:   target/wasm32-wasip2/release/vpod_wasi_lib.wasm"

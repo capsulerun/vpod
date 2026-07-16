@@ -37,8 +37,8 @@ WARM_IMPORTS_FILE = os.environ.get(
 
 def warm_heavy_tools():
     """Pre-import expensive module trees so forked children inherit them via
-    copy-on-write"""
-    modules = ["pip._internal.cli.main"]
+    copy-on-write."""
+    modules = []
     try:
         with open(WARM_IMPORTS_FILE) as f:
             for line in f:

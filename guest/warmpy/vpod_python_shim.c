@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/auxv.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/wait.h>
@@ -32,6 +33,24 @@ static void fallback(void) {
     execv(real_python(), g_argv);
     perror("vpod-python-shim: exec python3.real");
     _exit(127);
+}
+
+static void venv_passthrough(void) {
+    const char *execfn = (const char *)getauxval(AT_EXECFN);
+    if (!execfn || !*execfn) return;
+
+    char cfg[4096];
+    if (strlen(execfn) + sizeof("/../pyvenv.cfg") > sizeof(cfg)) return;
+    strcpy(cfg, execfn);
+
+    char *slash = strrchr(cfg, '/');
+    if (!slash) return;
+    strcpy(slash, "/../pyvenv.cfg");
+
+    if (access(cfg, F_OK) == 0) {
+        g_argv[0] = (char *)execfn;
+        fallback();
+    }
 }
 
 static volatile pid_t child_pid = 0;
@@ -173,6 +192,8 @@ static int send_request(int fd, int argc, char **argv) {
 
 int main(int argc, char **argv) {
     g_argv = argv;
+
+    venv_passthrough();
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) fallback();

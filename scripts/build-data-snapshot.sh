@@ -153,8 +153,13 @@ scipy.interpolate
 scipy.fft
 WARM_EOF
 
-echo "── Cross-compiling vpod python shim (riscv64-musl, static)..."
-zig cc -target riscv64-linux-musl -Os -static -s \
+mkdir -p "$OVERLAY/etc/uv"
+cat > "$OVERLAY/etc/uv/uv.toml" << 'UV_EOF'
+python-preference = "only-system"
+UV_EOF
+
+echo "── Cross-compiling vpod python shim (riscv64-musl, dynamic)..."
+zig cc -target riscv64-linux-musl -Os -dynamic -s \
     -o "$OVERLAY/usr/lib/vpod/vpod-python-shim" \
     "$ROOT/guest/warmpy/vpod_python_shim.c"
 chmod +x "$OVERLAY/usr/lib/vpod/vpod-python-shim"
@@ -317,7 +322,7 @@ SETUP_CMD="${SETUP_CMD}date -s '$NOW'; "
 SETUP_CMD="${SETUP_CMD}sed -i 's|https://|http://|g' /etc/apk/repositories; "
 SETUP_CMD="${SETUP_CMD}apk update --allow-untrusted; "
 
-SETUP_CMD="${SETUP_CMD}apk add --allow-untrusted ca-certificates python3 py3-pip py3-numpy py3-pandas py3-scipy; "
+SETUP_CMD="${SETUP_CMD}apk add --allow-untrusted ca-certificates python3 py3-pip uv py3-numpy py3-pandas py3-scipy; "
 SETUP_CMD="${SETUP_CMD}rm -f /usr/lib/python3.*/EXTERNALLY-MANAGED; mkdir -p /root/.cache; "
 
 SETUP_CMD="${SETUP_CMD}update-ca-certificates; "
