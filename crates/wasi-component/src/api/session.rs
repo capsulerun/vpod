@@ -401,7 +401,7 @@ impl SessionManager {
 }
 
 fn restart_pyrunner(session: &mut Session) {
-    let restart = b"pkill -9 -f pyrunner.py; python3 /usr/lib/vpod/pyrunner.py &\n";
+    let restart = b"pkill -9 -f pyrunner.py; PYR=/usr/bin/python3.real; [ -x $PYR ] || PYR=python3; $PYR /usr/lib/vpod/pyrunner.py &\n";
     for byte in restart {
         session.bus.uart.push_rx(*byte);
     }

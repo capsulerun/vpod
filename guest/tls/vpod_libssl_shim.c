@@ -14,6 +14,8 @@
 #include <unistd.h>
 
 typedef struct ssl_st SSL;
+typedef struct x509_st X509;
+typedef struct bio_st BIO;
 
 #define SSL_CTRL_SET_TLSEXT_HOSTNAME 55
 
@@ -101,7 +103,20 @@ static void *libssl_handle(void) {
     return handler;
 }
 
+static void *libcrypto_handle(void) {
+    static void *handler;
+
+    if (!handler)
+        handler = dlopen("libcrypto.so.3", RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
+
+    if (!handler)
+        handler = dlopen("libcrypto.so.3", RTLD_NOW | RTLD_GLOBAL);
+
+    return handler;
+}
+
 #define REAL(name) ((real_##name) ? real_##name : (real_##name = dlsym(libssl_handle(), #name)))
+#define REALC(name) ((real_##name) ? real_##name : (real_##name = dlsym(libcrypto_handle(), #name)))
 
 typedef int (*real_SSL_set_fd_t)(SSL *, int);
 typedef long (*real_SSL_ctrl_t)(SSL *, int, long, void *);
@@ -130,6 +145,22 @@ static real_SSL_free_t real_SSL_free;
 static real_SSL_get_error_t real_SSL_get_error;
 static real_SSL_get_verify_result_t real_SSL_get_verify_result;
 static real_SSL_get_fd_t real_SSL_get_fd;
+
+typedef X509 *(*real_SSL_get1_peer_certificate_t)(const SSL *);
+typedef X509 *(*real_SSL_get_peer_certificate_t)(const SSL *);
+typedef int (*real_X509_check_host_t)(X509 *, const char *, size_t, unsigned int, char **);
+typedef int (*real_X509_up_ref_t)(X509 *);
+typedef BIO *(*real_BIO_new_file_t)(const char *, const char *);
+typedef int (*real_BIO_free_t)(BIO *);
+typedef X509 *(*real_PEM_read_bio_X509_t)(BIO *, X509 **, void *, void *);
+
+static real_SSL_get1_peer_certificate_t real_SSL_get1_peer_certificate;
+static real_SSL_get_peer_certificate_t real_SSL_get_peer_certificate;
+static real_X509_check_host_t real_X509_check_host;
+static real_X509_up_ref_t real_X509_up_ref;
+static real_BIO_new_file_t real_BIO_new_file;
+static real_BIO_free_t real_BIO_free;
+static real_PEM_read_bio_X509_t real_PEM_read_bio_X509;
 
 static int write_all(int fd, const char *buf, size_t len) {
 
@@ -334,4 +365,68 @@ long SSL_get_verify_result(const SSL *ssl) {
         return 0;
 
     return REAL(SSL_get_verify_result)(ssl);
+}
+
+/*
+ * For apk's libfetch, notably etc that inspect it
+ */
+static X509 *fake_peer_cert(void) {
+    static X509 *cert;
+    static int attempted;
+
+    if (!cert && !attempted) {
+        attempted = 1;
+        const char *path = getenv("VPOD_SHIM_CERT");
+
+        if (!path || !*path)
+            path = "/etc/ssl/vpod/ca-only.pem";
+
+        BIO *bio = REALC(BIO_new_file)(path, "r");
+        if (bio) {
+            cert = REALC(PEM_read_bio_X509)(bio, NULL, NULL, NULL);
+            REALC(BIO_free)(bio);
+        }
+        log_line(cert ? "fake peer cert loaded" : "fake peer cert load FAILED");
+
+    }
+    return cert;
+}
+
+X509 *SSL_get1_peer_certificate(const SSL *ssl) {
+    struct entry *e = shim_enabled() ? find((SSL *)ssl) : NULL;
+
+    if (e && e->bridged) {
+        X509 *cert = fake_peer_cert();
+        if (cert) {
+            REALC(X509_up_ref)(cert);
+            return cert;
+        }
+    }
+
+    return REAL(SSL_get1_peer_certificate)(ssl);
+}
+
+X509 *SSL_get_peer_certificate(const SSL *ssl) {
+    struct entry *e = shim_enabled() ? find((SSL *)ssl) : NULL;
+
+    if (e && e->bridged) {
+        X509 *cert = fake_peer_cert();
+        if (cert) {
+            REALC(X509_up_ref)(cert);
+            return cert;
+        }
+    }
+
+    return REAL(SSL_get_peer_certificate)(ssl);
+}
+
+int X509_check_host(X509 *x, const char *chk, size_t chklen, unsigned int flags,
+                    char **peername) {
+    if (shim_enabled() && x && x == fake_peer_cert()) {
+        if (peername)
+            *peername = strdup(chk ? chk : "");
+        return 1;
+    }
+
+    return REALC(X509_check_host)(x, chk, chklen, flags, peername);
 }

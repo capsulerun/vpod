@@ -12,7 +12,7 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 ALPINE_VERSION="3.23.0"
 OUT="$ROOT/dist/rootfs.cpio.gz"
-RAM_MB=256
+RAM_MB=512
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -138,10 +138,19 @@ chmod +x "$OVERLAY/usr/lib/vpod/vpod-ssl-client"
 
 mkdir -p "$OVERLAY/etc/vpod"
 cat > "$OVERLAY/etc/vpod/pydaemon-warm-imports" << 'WARM_EOF'
-# Warm set for the python3 shim/daemon path (commands.run("python3 ...")
+#Warm set for the python3 shim/daemon path (commands.run("python3 ...")
+#numpy
+#pandas
 WARM_EOF
 cat > "$OVERLAY/etc/vpod/pyrunner-warm-imports" << 'WARM_EOF'
-# Warm set for pyrunner, the persistent code.run() interpreter.
+# Warm set for pyrunner, the persistent code.run() interpreter — the primary
+numpy
+pandas
+scipy
+scipy.stats
+scipy.optimize
+scipy.interpolate
+scipy.fft
 WARM_EOF
 
 echo "── Cross-compiling vpod python shim (riscv64-musl, static)..."
@@ -218,6 +227,9 @@ try:
 except ImportError:
     pass
 
+# pyrunner's own warm list (pydaemon has a separate one): pyrunner is a
+# persistent process, so one import at startup (snapshot build time) makes
+# it warm for every code.run().
 try:
     with open("/etc/vpod/pyrunner-warm-imports") as _f:
         for _line in _f:
@@ -299,11 +311,10 @@ cat "$PART_MINI" "$PART_OVL" > "$OUT"
 rm -f "$PART_MINI" "$PART_OVL"
 echo "   Done: $OUT ($(du -sh "$OUT" | cut -f1))"
 
-# SNAP="$ROOT/dist/vsnap-base-${RAM_MB}mb.snap"
-SNAP="$ROOT/dist/alpine-3.23.0-256mb.snap"
+SNAP="$ROOT/dist/vsnap-data-${RAM_MB}mb.snap"
 BOOTARGS="root=/dev/ram0 rw console=ttyS0 earlycon init=/sbin/init"
 
-echo "── Booting guest to pre-install ca-certificates + python3..."
+echo "── Booting guest to pre-install ca-certificates + python3 + data stack..."
 
 CA_MARKER="$(sed -n '2p' "$ROOT/crates/machine/assets/tls/vpod-ca-cert.pem")"
 BUILD_LOG="$ROOT/dist/.snapshot-build.log"
@@ -315,7 +326,7 @@ SETUP_CMD="${SETUP_CMD}date -s '$NOW'; "
 SETUP_CMD="${SETUP_CMD}sed -i 's|https://|http://|g' /etc/apk/repositories; "
 SETUP_CMD="${SETUP_CMD}apk update --allow-untrusted; "
 
-SETUP_CMD="${SETUP_CMD}apk add --allow-untrusted ca-certificates python3 py3-pip; "
+SETUP_CMD="${SETUP_CMD}apk add --allow-untrusted ca-certificates python3 py3-pip py3-numpy py3-pandas py3-scipy; "
 SETUP_CMD="${SETUP_CMD}rm -f /usr/lib/python3.*/EXTERNALLY-MANAGED; mkdir -p /root; "  # pip-installable disposable guest (drop PEP 668) + writable HOME for pip cache
 
 SETUP_CMD="${SETUP_CMD}update-ca-certificates; "

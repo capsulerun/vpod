@@ -121,6 +121,7 @@ For more details, see the [full documentation](https://docs.vpod.sh/quickstart).
 **Prerequisites**
 - Rust (latest stable)
 - Python 3.10+
+- Zig (latest stable)
 
 **Development setup**
 ```bash
