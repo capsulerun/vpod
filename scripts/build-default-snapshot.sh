@@ -310,7 +310,7 @@ SETUP_CMD="${SETUP_CMD}date -s '$NOW'; "
 SETUP_CMD="${SETUP_CMD}sed -i 's|https://|http://|g' /etc/apk/repositories; "
 SETUP_CMD="${SETUP_CMD}apk update --allow-untrusted; "
 
-SETUP_CMD="${SETUP_CMD}apk add --allow-untrusted ca-certificates python3 py3-pip uv; "
+SETUP_CMD="${SETUP_CMD}apk add --allow-untrusted ca-certificates python3 uv; "
 SETUP_CMD="${SETUP_CMD}rm -f /usr/lib/python3.*/EXTERNALLY-MANAGED; mkdir -p /root/.cache; "
 
 SETUP_CMD="${SETUP_CMD}update-ca-certificates; "
