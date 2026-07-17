@@ -5,6 +5,7 @@ use crate::decode::{CompressedInstruction, Instruction, sign_extend};
 use crate::execute::{ExecContext, take_exception};
 use crate::extensions as ext;
 use crate::mmu::{Mmu, MmuFault};
+use crate::perf;
 use crate::system_bus::SystemBus;
 
 pub const MAX_BLOCK_OPS: usize = 64;
@@ -243,7 +244,7 @@ impl BlockCache {
     }
 
     fn evict_page(&mut self, page: u64) {
-        crate::perf::note_store_page_eviction();
+        perf::note_store_page_eviction();
 
         for slot in &mut self.slots {
             if slot.tag != u64::MAX && slot.tag >> 12 == page {
@@ -1112,9 +1113,9 @@ pub fn raw_load<B: SystemBus>(
     virtual_address: u64,
     size: u64,
 ) -> Result<u64, MmuFault> {
-    crate::perf::note_load();
+    perf::note_load();
     if (virtual_address & 0xFFF) + size > 0x1000 {
-        crate::perf::note_cross_page();
+        perf::note_cross_page();
         let mut buf = [0u8; 8];
 
         for i in 0..size {
@@ -1145,9 +1146,9 @@ pub fn raw_store<B: SystemBus>(
     val: u64,
     size: u64,
 ) -> Result<(), MmuFault> {
-    crate::perf::note_store();
+    perf::note_store();
     if (virtual_address & 0xFFF) + size > 0x1000 {
-        crate::perf::note_cross_page();
+        perf::note_cross_page();
         let bytes = val.to_le_bytes();
 
         for i in 0..size {

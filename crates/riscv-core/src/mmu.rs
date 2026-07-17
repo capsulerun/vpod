@@ -1,5 +1,5 @@
-use crate::system_bus::SystemBus;
 use crate::perf;
+use crate::system_bus::SystemBus;
 
 const PTE_V: u64 = 1 << 0;
 const PTE_R: u64 = 1 << 1;

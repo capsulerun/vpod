@@ -9,6 +9,7 @@ use crate::decode::{Instruction, sign_extend};
 use crate::extensions as ext;
 use crate::gpr::Gpr;
 use crate::mmu::{Mmu, MmuFault};
+use crate::perf;
 use crate::system_bus::SystemBus;
 use crate::trap::{StepResult, TrapCause};
 
@@ -111,10 +112,10 @@ fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
 
         let virtual_page = pc >> 12;
         let fetch_pa = if virtual_page == *ctx.fetch_vpage && effective_satp == *ctx.fetch_satp {
-            crate::perf::note_fetch_page_hit();
+            perf::note_fetch_page_hit();
             (*ctx.fetch_ppage << 12) | (pc & 0xfff)
         } else {
-            crate::perf::note_fetch_translate();
+            perf::note_fetch_translate();
             match ctx.mmu.translate_fetch(pc, effective_satp, ctx.bus) {
                 Ok(pa) => {
                     *ctx.fetch_vpage = virtual_page;
@@ -134,26 +135,27 @@ fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
         };
 
         if let Some(cached) = ctx.blocks.lookup(fetch_pa) {
-            crate::perf::note_block_hit();
+            perf::note_block_hit();
             let priv_at_entry = *ctx.priv_mode;
             let retired = block::exec_block(ctx, &cached, pc, effective_satp);
-            crate::perf::note_retired(priv_at_entry, retired);
+            perf::note_retired(priv_at_entry, retired);
             remaining -= retired as i64;
             continue;
         }
 
         if let Some(decoded) = block::decode_block(ctx.bus, fetch_pa) {
-            crate::perf::note_block_decode();
+            perf::note_block_decode();
             let cached = ctx.blocks.insert(fetch_pa, decoded);
             let priv_at_entry = *ctx.priv_mode;
             let retired = block::exec_block(ctx, &cached, pc, effective_satp);
-            crate::perf::note_retired(priv_at_entry, retired);
+            perf::note_retired(priv_at_entry, retired);
             remaining -= retired as i64;
             continue;
         }
 
-        crate::perf::note_single_step();
-        crate::perf::note_retired(*ctx.priv_mode, 1);
+        perf::note_single_step();
+        perf::note_retired(*ctx.priv_mode, 1);
+
         match step(ctx) {
             StepResult::Ok => {}
             other => return other,
@@ -806,7 +808,8 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
             }
             0x105 => {
                 // WFI
-                crate::perf::note_wfi();
+                perf::note_wfi();
+
                 *ctx.is_waiting = true;
                 ctx.regs.pc = pc.wrapping_add(4);
 
