@@ -6,6 +6,7 @@ pub mod extensions;
 pub mod gpr;
 pub mod hart;
 pub mod mmu;
+pub mod perf;
 pub mod system_bus;
 pub mod trap;
 

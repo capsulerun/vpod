@@ -81,6 +81,17 @@ fn invalidate_fetch_cache<B: SystemBus>(ctx: &mut ExecContext<B>) {
 }
 
 pub fn run<B: SystemBus>(ctx: &mut ExecContext<B>, max_steps: u64) -> StepResult {
+    run_impl::<B, false>(ctx, max_steps)
+}
+
+pub fn run_until_wait<B: SystemBus>(ctx: &mut ExecContext<B>, max_steps: u64) -> StepResult {
+    run_impl::<B, true>(ctx, max_steps)
+}
+
+fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
+    ctx: &mut ExecContext<B>,
+    max_steps: u64,
+) -> StepResult {
     let mut remaining = max_steps as i64;
 
     while remaining > 0 {
@@ -100,8 +111,10 @@ pub fn run<B: SystemBus>(ctx: &mut ExecContext<B>, max_steps: u64) -> StepResult
 
         let virtual_page = pc >> 12;
         let fetch_pa = if virtual_page == *ctx.fetch_vpage && effective_satp == *ctx.fetch_satp {
+            crate::perf::note_fetch_page_hit();
             (*ctx.fetch_ppage << 12) | (pc & 0xfff)
         } else {
+            crate::perf::note_fetch_translate();
             match ctx.mmu.translate_fetch(pc, effective_satp, ctx.bus) {
                 Ok(pa) => {
                     *ctx.fetch_vpage = virtual_page;
@@ -121,19 +134,33 @@ pub fn run<B: SystemBus>(ctx: &mut ExecContext<B>, max_steps: u64) -> StepResult
         };
 
         if let Some(cached) = ctx.blocks.lookup(fetch_pa) {
-            remaining -= block::exec_block(ctx, &cached, pc, effective_satp) as i64;
+            crate::perf::note_block_hit();
+            let priv_at_entry = *ctx.priv_mode;
+            let retired = block::exec_block(ctx, &cached, pc, effective_satp);
+            crate::perf::note_retired(priv_at_entry, retired);
+            remaining -= retired as i64;
             continue;
         }
 
         if let Some(decoded) = block::decode_block(ctx.bus, fetch_pa) {
+            crate::perf::note_block_decode();
             let cached = ctx.blocks.insert(fetch_pa, decoded);
-            remaining -= block::exec_block(ctx, &cached, pc, effective_satp) as i64;
+            let priv_at_entry = *ctx.priv_mode;
+            let retired = block::exec_block(ctx, &cached, pc, effective_satp);
+            crate::perf::note_retired(priv_at_entry, retired);
+            remaining -= retired as i64;
             continue;
         }
 
+        crate::perf::note_single_step();
+        crate::perf::note_retired(*ctx.priv_mode, 1);
         match step(ctx) {
             StepResult::Ok => {}
             other => return other,
+        }
+
+        if STOP_ON_WFI && *ctx.is_waiting {
+            return StepResult::Ok;
         }
 
         remaining -= 1;
@@ -779,6 +806,7 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
             }
             0x105 => {
                 // WFI
+                crate::perf::note_wfi();
                 *ctx.is_waiting = true;
                 ctx.regs.pc = pc.wrapping_add(4);
 

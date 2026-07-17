@@ -1,4 +1,5 @@
 use crate::system_bus::SystemBus;
+use crate::perf;
 
 const PTE_V: u64 = 1 << 0;
 const PTE_R: u64 = 1 << 1;
@@ -115,6 +116,7 @@ impl Mmu {
         bus: &mut impl SystemBus,
     ) -> Result<u64, MmuFault> {
         if satp >> 60 == 0 {
+            perf::note_bare_translate();
             return Ok(virtual_address);
         }
 
@@ -122,9 +124,11 @@ impl Mmu {
         if let Some((ppn, flags)) = self.lookup(vpn)
             && flags & PTE_X != 0
         {
+            perf::note_tlb_hit();
             return Ok((ppn << 12) | (virtual_address & 0xfff));
         }
 
+        perf::note_tlb_walk();
         self.walk(virtual_address, satp, false, true, bus)
             .map_err(|_| MmuFault::InstructionPageFault(virtual_address))
     }
@@ -136,6 +140,7 @@ impl Mmu {
         bus: &mut impl SystemBus,
     ) -> Result<u64, MmuFault> {
         if satp >> 60 == 0 {
+            perf::note_bare_translate();
             return Ok(virtual_address);
         }
 
@@ -143,9 +148,11 @@ impl Mmu {
         if let Some((ppn, flags)) = self.lookup(vpn)
             && flags & PTE_R != 0
         {
+            perf::note_tlb_hit();
             return Ok((ppn << 12) | (virtual_address & 0xfff));
         }
 
+        perf::note_tlb_walk();
         self.walk(virtual_address, satp, false, false, bus)
             .map_err(|_| MmuFault::LoadPageFault(virtual_address))
     }
@@ -157,6 +164,7 @@ impl Mmu {
         bus: &mut impl SystemBus,
     ) -> Result<u64, MmuFault> {
         if satp >> 60 == 0 {
+            perf::note_bare_translate();
             return Ok(virtual_address);
         }
 
@@ -164,9 +172,11 @@ impl Mmu {
         if let Some((ppn, flags)) = self.lookup(vpn)
             && flags & (PTE_W | PTE_D) == (PTE_W | PTE_D)
         {
+            perf::note_tlb_hit();
             return Ok((ppn << 12) | (virtual_address & 0xfff));
         }
 
+        perf::note_tlb_walk();
         self.walk(virtual_address, satp, true, false, bus)
             .map_err(|_| MmuFault::StorePageFault(virtual_address))
     }

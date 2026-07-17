@@ -39,6 +39,25 @@ impl Clint {
         self.mtime += nanos / NANOS_PER_TICK;
     }
 
+    pub fn nanos_until_timer(&self) -> Option<u64> {
+        const NANOS_PER_TICK: u64 = 1_000_000_000 / TIMER_FREQUENCY;
+
+        if self.mtimecmp == u64::MAX || self.mtimecmp <= self.mtime {
+            None
+        } else {
+            Some((self.mtimecmp - self.mtime) * NANOS_PER_TICK)
+        }
+    }
+
+    pub fn fast_forward_to_timer(&mut self) -> bool {
+        if self.mtimecmp != u64::MAX && self.mtimecmp > self.mtime {
+            self.mtime = self.mtimecmp;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn mtime(&self) -> u64 {
         self.mtime
     }

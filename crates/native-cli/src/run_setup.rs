@@ -95,11 +95,15 @@ fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, verbose: bool) -> Vec<
     for _ in 0..8_000_000u32 {
         if hart.is_waiting {
             hart.is_waiting = false;
+
+            if !bus.net_rx_pending() {
+                bus.clint.fast_forward_to_timer();
+            }
         }
         let interval = if bus.net_rx_pending() { 4096 } else { STEP };
         bus.clint.advance_by_instructions(interval);
         bus.poll(hart);
-        match hart.run(bus, interval) {
+        match hart.run_until_wait(bus, interval) {
             StepResult::Ok => {}
             StepResult::Trap(cause) => {
                 eprintln!("[vpod-setup] trap {:?} at pc={:#x}", cause, hart.regs.pc);
@@ -161,12 +165,16 @@ fn python_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
     for _ in 0..2_000_000u32 {
         if hart.is_waiting {
             hart.is_waiting = false;
+
+            if !bus.net_rx_pending() {
+                bus.clint.fast_forward_to_timer();
+            }
         }
 
         bus.clint.advance_by_instructions(8192);
         bus.poll(hart);
 
-        match hart.run(bus, 8192) {
+        match hart.run_until_wait(bus, 8192) {
             riscv_core::StepResult::Ok => {}
             _ => break,
         }

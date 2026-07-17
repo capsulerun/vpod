@@ -58,6 +58,11 @@ pub fn poll_stdin(bus: &mut MachineBus, snap_path: Option<&PathBuf>, hart: &Hart
                 match b {
                     0x1d | 0x03 => {
                         eprintln!("\r\n[vpod] exiting.");
+
+                        if let Some(report) = riscv_core::perf::report() {
+                            eprint!("{}", report.replace('\n', "\r\n"));
+                        }
+
                         std::process::exit(0);
                     }
                     0x13 => {
@@ -65,6 +70,10 @@ pub fn poll_stdin(bus: &mut MachineBus, snap_path: Option<&PathBuf>, hart: &Hart
                             super::save_snapshot(bus, hart, path, snap_flags);
                         }
                     }
+                    0x10 => match riscv_core::perf::report() {
+                        Some(report) => eprint!("\r\n{}", report.replace('\n', "\r\n")),
+                        None => eprintln!("\r\n[vpod] perf counters empty or disabled"),
+                    },
                     _ => bus.uart.push_rx(b),
                 }
             }

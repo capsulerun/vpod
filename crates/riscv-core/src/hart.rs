@@ -90,4 +90,24 @@ impl Hart {
 
         execute::run(&mut ctx, max_steps)
     }
+
+    pub fn run_until_wait(&mut self, bus: &mut impl SystemBus, max_steps: u64) -> StepResult {
+        let mut ctx = ExecContext {
+            regs: &mut self.regs,
+            csr: &mut self.csr,
+            mmu: &mut self.mmu,
+            bus,
+            priv_mode: &mut self.priv_mode,
+            lr_addr: &mut self.lr_addr,
+            fetch_vpage: &mut self.fetch_vpage,
+            fetch_ppage: &mut self.fetch_ppage,
+            fetch_satp: &mut self.fetch_satp,
+            icache_tags: &mut self.icache_tags,
+            icache_data: &mut self.icache_data,
+            is_waiting: &mut self.is_waiting,
+            blocks: &mut self.blocks,
+        };
+
+        execute::run_until_wait(&mut ctx, max_steps)
+    }
 }
