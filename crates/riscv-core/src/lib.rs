@@ -1,3 +1,6 @@
+#[cfg(feature = "aot")]
+pub mod aot;
+
 pub mod block;
 pub mod csr;
 pub mod decode;

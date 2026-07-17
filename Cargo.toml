@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/riscv-core", "crates/machine", "crates/native-cli", "crates/wasi-component", "crates/vpod"]
+members = ["crates/riscv-core", "crates/machine", "crates/native-cli", "crates/wasi-component", "crates/vpod", "crates/vpod-translate"]
 resolver = "3"
 
 [workspace.package]

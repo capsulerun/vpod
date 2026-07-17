@@ -13,6 +13,9 @@ use crate::perf;
 use crate::system_bus::SystemBus;
 use crate::trap::{StepResult, TrapCause};
 
+#[cfg(feature = "aot")]
+use crate::aot;
+
 pub const ICACHE_SIZE: usize = 4096;
 const ICACHE_TAG_SHIFT: u32 = 1 + ICACHE_SIZE.trailing_zeros();
 
@@ -134,6 +137,27 @@ fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
             }
         };
 
+        #[cfg(feature = "aot")]
+        if let Some(key_pa) = aot_page_key(ctx, fetch_pa) {
+            let priv_at_entry = *ctx.priv_mode;
+            if let Some(retired) = aot::dispatch(
+                ctx,
+                key_pa,
+                pc,
+                effective_satp,
+                remaining as u64,
+                fetch_pa >> 12,
+            ) {
+                aot::note_dispatch(retired);
+                perf::note_retired(priv_at_entry, retired);
+                remaining -= retired as i64;
+                continue;
+            }
+        }
+
+        #[cfg(feature = "aot-trace")]
+        ctx.blocks.trace_exec(fetch_pa);
+
         if let Some(cached) = ctx.blocks.lookup(fetch_pa) {
             perf::note_block_hit();
             let priv_at_entry = *ctx.priv_mode;
@@ -145,10 +169,13 @@ fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
 
         if let Some(decoded) = block::decode_block(ctx.bus, fetch_pa) {
             perf::note_block_decode();
+
             let cached = ctx.blocks.insert(fetch_pa, decoded);
             let priv_at_entry = *ctx.priv_mode;
             let retired = block::exec_block(ctx, &cached, pc, effective_satp);
+
             perf::note_retired(priv_at_entry, retired);
+
             remaining -= retired as i64;
             continue;
         }
@@ -169,6 +196,28 @@ fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
     }
 
     StepResult::Ok
+}
+
+#[cfg(feature = "aot")]
+pub(crate) fn aot_page_key<B: SystemBus>(ctx: &mut ExecContext<B>, fetch_pa: u64) -> Option<u64> {
+    use crate::block::AotResolve;
+
+    let page = fetch_pa >> 12;
+    match ctx.blocks.aot_resolve(page) {
+        AotResolve::Hit(orig) => Some((orig << 12) | (fetch_pa & 0xfff)),
+        AotResolve::Miss => None,
+        AotResolve::Unknown => {
+            let base = page << 12;
+            let mut hash = 0xcbf2_9ce4_8422_2325u64;
+            for i in 0..512u64 {
+                hash ^= ctx.bus.read_doubleword(base + i * 8);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            ctx.blocks
+                .aot_record_hash(page, hash)
+                .map(|orig| (orig << 12) | (fetch_pa & 0xfff))
+        }
+    }
 }
 
 pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {

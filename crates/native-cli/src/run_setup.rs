@@ -18,6 +18,7 @@ pub fn run(
     bus.uart.capture_tx.set(true);
     bus.uart_data.capture_tx.set(true);
 
+    push_line(bus, b"");
     wait_for_prompt(bus, hart, true);
 
     for (i, cmd) in cmds.iter().enumerate() {

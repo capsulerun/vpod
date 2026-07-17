@@ -113,7 +113,9 @@ pub fn _bus_from_base(
     let mut bus = MachineBus::new(ram_size, base.clone_shared());
     bus.attach_net();
     bus.attach_fs(vec![]);
-    let hart = Hart::new(0x1000);
+
+    let mut hart = Hart::new(0x1000);
+    hart.blocks.aot_init(riscv_core::aot::AOT_PAGE_HASHES);
 
     for (i, m) in mounts.iter().enumerate() {
         if let Some(fs) = bus.fs_devices.get_mut(i) {
@@ -140,6 +142,7 @@ pub fn _load(config: _VmConfig) -> Result<(MachineBus, Hart, u8), String> {
     bus.attach_net();
     bus.attach_fs(vec![]);
     let mut hart = Hart::new(0x1000);
+    hart.blocks.aot_init(riscv_core::aot::AOT_PAGE_HASHES);
 
     if let Some(disk_path) = config.disk {
         let file = std::fs::OpenOptions::new()

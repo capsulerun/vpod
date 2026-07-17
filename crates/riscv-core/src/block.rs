@@ -173,6 +173,18 @@ impl Slot {
 pub struct BlockCache {
     slots: Vec<Slot>,
     page_bitmap: Vec<u64>,
+    aot_hashes: std::collections::HashMap<u64, u64>,
+    aot_alias: std::collections::HashMap<u64, Option<u64>>,
+    aot_last: (u64, u64),
+
+    #[cfg(feature = "aot-trace")]
+    trace: std::collections::HashMap<u64, u64>,
+}
+
+pub enum AotResolve {
+    Hit(u64),
+    Miss,
+    Unknown,
 }
 
 impl Default for BlockCache {
@@ -192,7 +204,71 @@ impl BlockCache {
         Self {
             slots,
             page_bitmap: Vec::new(),
+            aot_hashes: std::collections::HashMap::new(),
+            aot_alias: std::collections::HashMap::new(),
+            aot_last: (u64::MAX, u64::MAX),
+            #[cfg(feature = "aot-trace")]
+            trace: std::collections::HashMap::new(),
         }
+    }
+
+    /// Register the content hashes of translated pages. Runtime pages are
+    /// aliased to translated pages lazily, by hashing their content on first
+    /// execution (`aot_record_hash`) — guest physical placement varies run to
+    /// run, so physical addresses alone cannot key translations.
+    pub fn aot_init(&mut self, hashes: &[(u64, u64)]) {
+        self.aot_hashes = hashes.iter().copied().collect();
+        self.aot_alias.clear();
+        self.aot_last = (u64::MAX, u64::MAX);
+    }
+
+    /// Resolve a runtime page to its translated (original) page, if any.
+    /// `Unknown` means the page has not been hashed yet — the caller hashes
+    /// its content and calls `aot_record_hash`.
+    #[inline(always)]
+    pub fn aot_resolve(&mut self, page: u64) -> AotResolve {
+        if self.aot_last.0 == page {
+            return if self.aot_last.1 == u64::MAX {
+                AotResolve::Miss
+            } else {
+                AotResolve::Hit(self.aot_last.1)
+            };
+        }
+        if self.aot_hashes.is_empty() {
+            return AotResolve::Miss;
+        }
+
+        match self.aot_alias.get(&page) {
+            Some(&Some(orig)) => {
+                self.aot_last = (page, orig);
+                AotResolve::Hit(orig)
+            }
+            Some(&None) => {
+                self.aot_last = (page, u64::MAX);
+                AotResolve::Miss
+            }
+            None => AotResolve::Unknown,
+        }
+    }
+
+    pub fn aot_record_hash(&mut self, page: u64, hash: u64) -> Option<u64> {
+        let orig = self.aot_hashes.get(&hash).copied();
+        self.aot_alias.insert(page, orig);
+        self.mark_page(page);
+        self.aot_last = (page, orig.unwrap_or(u64::MAX));
+
+        orig
+    }
+
+    #[cfg(feature = "aot-trace")]
+    #[inline(always)]
+    pub fn trace_exec(&mut self, physical_address: u64) {
+        *self.trace.entry(physical_address).or_insert(0) += 1;
+    }
+
+    #[cfg(feature = "aot-trace")]
+    pub fn trace_counts(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
+        self.trace.iter().map(|(&pa, &n)| (pa, n))
     }
 
     #[inline(always)]
@@ -246,6 +322,11 @@ impl BlockCache {
     fn evict_page(&mut self, page: u64) {
         perf::note_store_page_eviction();
 
+        self.aot_alias.remove(&page);
+        if self.aot_last.0 == page {
+            self.aot_last = (u64::MAX, u64::MAX);
+        }
+
         for slot in &mut self.slots {
             if slot.tag != u64::MAX && slot.tag >> 12 == page {
                 *slot = Slot::EMPTY;
@@ -261,6 +342,9 @@ impl BlockCache {
         }
 
         self.page_bitmap.clear();
+
+        self.aot_alias.clear();
+        self.aot_last = (u64::MAX, u64::MAX);
     }
 }
 
@@ -851,7 +935,7 @@ fn decode_compressed(raw: u16) -> Option<Op> {
 }
 
 #[inline(always)]
-fn alu(kind: AluKind, lhs: u64, rhs: u64) -> u64 {
+pub(crate) fn alu(kind: AluKind, lhs: u64, rhs: u64) -> u64 {
     match kind {
         AluKind::Add => lhs.wrapping_add(rhs),
         AluKind::Sub => lhs.wrapping_sub(rhs),
@@ -1043,7 +1127,7 @@ pub fn exec_block<B: SystemBus>(
     retired_instructions
 }
 
-fn do_load<B: SystemBus>(
+pub(crate) fn do_load<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     satp: u64,
     kind: LoadKind,
@@ -1075,7 +1159,7 @@ fn do_load<B: SystemBus>(
     })
 }
 
-fn do_store<B: SystemBus>(
+pub(crate) fn do_store<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     satp: u64,
     kind: StoreKind,

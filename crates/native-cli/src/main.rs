@@ -17,7 +17,7 @@ fn usage() -> ! {
     eprintln!(
         "usage: vpod <kernel> [--bios <fw>] [--initrd <rd>] [--disk <img>] [--net] [--agent] \
          [--setup <cmds...>] [--ram <mb>] [--bootargs <args>] \
-         [--snapshot-save <file>] [--snapshot-load <file>]"
+         [--snapshot-save <file>] [--snapshot-load <file>] [--no-aot]"
     );
     std::process::exit(1);
 }
@@ -65,6 +65,7 @@ fn main() {
     let mut ram_mb: u64 = 256;
     let mut bootargs = "root=/dev/ram0 rw console=ttyS0 earlycon".to_string();
     let mut trace_insns: u64 = 0;
+    let mut no_aot = false;
 
     let first = args.next().unwrap_or_else(|| usage());
     let mut kernel_path: Option<PathBuf> = None;
@@ -104,6 +105,7 @@ fn main() {
                     .and_then(|s| s.parse().ok())
                     .unwrap_or_else(|| usage());
             }
+            "--no-aot" => no_aot = true,
             "--trace" => {
                 trace_insns = args.next().and_then(|s| s.parse().ok()).unwrap_or(64);
             }
@@ -210,6 +212,20 @@ fn main() {
         0
     });
 
+    #[cfg(feature = "aot")]
+    if no_aot {
+        eprintln!("[vpod] aot dispatch disabled (--no-aot)");
+    } else {
+        hart.blocks.aot_init(riscv_core::aot::AOT_PAGE_HASHES);
+        eprintln!(
+            "[vpod] aot dispatch enabled: {} translated pages (content-hash keyed)",
+            riscv_core::aot::AOT_PAGE_HASHES.len()
+        );
+    }
+
+    #[cfg(not(feature = "aot"))]
+    let _ = no_aot;
+
     if !setup_cmds.is_empty() {
         run_setup::run(
             &mut bus,
@@ -227,5 +243,39 @@ fn main() {
             snap_flags,
             restored_flags,
         );
+    }
+
+    #[cfg(feature = "aot")]
+    {
+        use std::sync::atomic::Ordering;
+        let calls = riscv_core::aot::DISPATCH_CALLS.load(Ordering::Relaxed);
+        let retired = riscv_core::aot::DISPATCH_RETIRED.load(Ordering::Relaxed);
+        eprintln!(
+            "\r[vpod] aot: {retired} insns retired in {calls} dispatches ({:.1} insns/dispatch) | total instret {}",
+            retired as f64 / calls.max(1) as f64,
+            hart.csr.instret
+        );
+        if let Some(report) = riscv_core::perf::report() {
+            eprintln!("{report}");
+        }
+    }
+
+    #[cfg(feature = "aot-trace")]
+    if let Ok(path) = std::env::var("VPOD_AOT_TRACE") {
+        let mut counts: Vec<(u64, u64)> = hart.blocks.trace_counts().collect();
+        counts.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut out = String::new();
+        for (pa, n) in counts {
+            out.push_str(&format!("{pa:x} {n}\n"));
+        }
+
+        match std::fs::write(&path, &out) {
+            Ok(()) => eprintln!(
+                "\r[vpod] aot trace: {} block pcs -> {path}",
+                out.lines().count()
+            ),
+            Err(e) => eprintln!("\r[vpod] aot trace write failed: {e}"),
+        }
     }
 }

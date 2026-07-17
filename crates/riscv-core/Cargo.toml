@@ -5,6 +5,8 @@ edition = "2024"
 
 [features]
 perf-counters = []
+aot = []
+aot-trace = []
 
 [dependencies]
 log = "0.4"

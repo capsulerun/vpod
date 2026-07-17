@@ -3213,6 +3213,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vpod-translate"
+version = "0.1.0"
+dependencies = [
+ "lz4_flex",
+ "riscv-core",
+]
+
+[[package]]
 name = "want"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
