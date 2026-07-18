@@ -77,6 +77,11 @@ impl CowRam {
     }
 
     #[inline(always)]
+    pub fn page_mut_ptr(&mut self, page: usize) -> *mut u8 {
+        self.page_mut(page).as_mut_ptr()
+    }
+
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.len
     }

@@ -29,12 +29,39 @@ counters!(
     LOADS,
     LOAD_FAST_HITS,
     STORES,
+    STORE_FAST_HITS,
     CROSS_PAGE_ACCESSES,
     TLB_HITS,
     TLB_WALKS,
     BARE_TRANSLATES,
     STORE_PAGE_EVICTIONS,
+    SS_SYSTEM,
+    SS_AMO,
+    SS_FP,
+    SS_MISC_MEM,
+    SS_OTHER,
 );
+
+#[inline(always)]
+pub fn note_single_step_op(raw: u32) {
+    #[cfg(feature = "perf-counters")]
+    {
+        let counter = if raw & 0x3 != 0x3 {
+            &SS_OTHER // compressed insn the C-decoder refused
+        } else {
+            match raw & 0x7f {
+                0x73 => &SS_SYSTEM,   // csr / ecall / ebreak / sret / wfi / sfence
+                0x2f => &SS_AMO,      // atomics / lr / sc
+                0x0f => &SS_MISC_MEM, // fence / fence.i
+                0x07 | 0x27 | 0x43 | 0x47 | 0x4b | 0x4f | 0x53 => &SS_FP,
+                _ => &SS_OTHER,
+            }
+        };
+        counter.fetch_add(1, Relaxed);
+    }
+    #[cfg(not(feature = "perf-counters"))]
+    let _ = raw;
+}
 
 #[inline(always)]
 pub fn note_retired(priv_mode: PrivMode, count: u64) {
@@ -73,6 +100,7 @@ note_fns!(
     note_load => LOADS,
     note_load_fast_hit => LOAD_FAST_HITS,
     note_store => STORES,
+    note_store_fast_hit => STORE_FAST_HITS,
     note_cross_page => CROSS_PAGE_ACCESSES,
     note_tlb_hit => TLB_HITS,
     note_tlb_walk => TLB_WALKS,
@@ -100,7 +128,8 @@ pub fn report() -> Option<String> {
         };
 
         let total_loads = v("LOADS") + v("LOAD_FAST_HITS");
-        let mem_accesses = total_loads + v("STORES");
+        let total_stores = v("STORES") + v("STORE_FAST_HITS");
+        let mem_accesses = total_loads + total_stores;
         let translations = v("TLB_HITS") + v("TLB_WALKS") + v("BARE_TRANSLATES");
         let block_entries = v("BLOCK_HITS") + v("BLOCK_DECODES");
 
@@ -125,6 +154,26 @@ pub fn report() -> Option<String> {
             if block_entries == 0 { 0.0 } else { total_insns as f64 / block_entries as f64 },
         ));
         out.push_str(&format!(
+            "single-step by op: {} system | {} amo | {} fp | {} fence | {} other\n",
+            v("SS_SYSTEM"),
+            v("SS_AMO"),
+            v("SS_FP"),
+            v("SS_MISC_MEM"),
+            v("SS_OTHER"),
+        ));
+        #[cfg(feature = "aot")]
+        {
+            let calls = crate::aot::DISPATCH_CALLS.swap(0, Relaxed);
+            let retired = crate::aot::DISPATCH_RETIRED.swap(0, Relaxed);
+            out.push_str(&format!(
+                "aot: {} dispatches | {} insns retired ({:.1}% of all retired) | {:.1} insns/dispatch\n",
+                calls,
+                retired,
+                pct(retired, total_insns),
+                if calls == 0 { 0.0 } else { retired as f64 / calls as f64 },
+            ));
+        }
+        out.push_str(&format!(
             "fetch: {} page-cache hits | {} translates ({:.2}% miss)\n",
             v("FETCH_PAGE_HITS"),
             v("FETCH_TRANSLATES"),
@@ -134,10 +183,11 @@ pub fn report() -> Option<String> {
             ),
         ));
         out.push_str(&format!(
-            "memory: {} loads ({:.1}% fast-path) | {} stores ({:.1}% of insns) | {} cross-page\n",
+            "memory: {} loads ({:.1}% fast-path) | {} stores ({:.1}% fast-path) | {:.1}% of insns | {} cross-page\n",
             total_loads,
             pct(v("LOAD_FAST_HITS"), total_loads),
-            v("STORES"),
+            total_stores,
+            pct(v("STORE_FAST_HITS"), total_stores),
             pct(mem_accesses, total_insns),
             v("CROSS_PAGE_ACCESSES"),
         ));

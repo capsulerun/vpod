@@ -181,6 +181,16 @@ fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
         }
 
         perf::note_single_step();
+        #[cfg(feature = "perf-counters")]
+        {
+            let low = ctx.bus.read_halfword(fetch_pa) as u32;
+            let raw = if low & 0x3 == 0x3 {
+                low | ((ctx.bus.read_halfword(fetch_pa + 2) as u32) << 16)
+            } else {
+                low
+            };
+            perf::note_single_step_op(raw);
+        }
         perf::note_retired(*ctx.priv_mode, 1);
 
         match step(ctx) {

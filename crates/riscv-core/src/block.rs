@@ -173,10 +173,10 @@ impl Slot {
 pub struct BlockCache {
     slots: Vec<Slot>,
     page_bitmap: Vec<u64>,
+    code_generation: u64,
 
     aot_hashes: rustc_hash::FxHashMap<u64, u64>,
-    aot_alias: rustc_hash::FxHashMap<u64, Option<u64>>,
-    aot_last: (u64, u64),
+    aot_page_table: Vec<u64>,
     aot_evict_generation: u64,
 
     #[cfg(feature = "aot-trace")]
@@ -188,6 +188,13 @@ pub enum AotResolve {
     Miss,
     Unknown,
 }
+
+const AOT_UNKNOWN: u64 = u64::MAX;
+const AOT_MISS: u64 = u64::MAX - 1;
+/// 1M pages = 4GiB of physical address space; the table tops out at 8MiB.
+/// Execution from beyond that (no realistic RAM layout reaches it) simply
+/// never aliases to translated code.
+const AOT_TABLE_MAX_PAGES: u64 = 1 << 20;
 
 impl Default for BlockCache {
     fn default() -> Self {
@@ -206,9 +213,9 @@ impl BlockCache {
         Self {
             slots,
             page_bitmap: Vec::new(),
+            code_generation: 1,
             aot_hashes: rustc_hash::FxHashMap::default(),
-            aot_alias: rustc_hash::FxHashMap::default(),
-            aot_last: (u64::MAX, u64::MAX),
+            aot_page_table: Vec::new(),
             aot_evict_generation: 0,
             #[cfg(feature = "aot-trace")]
             trace: std::collections::HashMap::new(),
@@ -221,8 +228,7 @@ impl BlockCache {
     /// run, so physical addresses alone cannot key translations.
     pub fn aot_init(&mut self, hashes: &[(u64, u64)]) {
         self.aot_hashes = hashes.iter().copied().collect();
-        self.aot_alias.clear();
-        self.aot_last = (u64::MAX, u64::MAX);
+        self.aot_page_table.clear();
         self.aot_evict_generation = self.aot_evict_generation.wrapping_add(1);
     }
 
@@ -231,35 +237,29 @@ impl BlockCache {
     /// its content and calls `aot_record_hash`.
     #[inline(always)]
     pub fn aot_resolve(&mut self, page: u64) -> AotResolve {
-        if self.aot_last.0 == page {
-            return if self.aot_last.1 == u64::MAX {
-                AotResolve::Miss
-            } else {
-                AotResolve::Hit(self.aot_last.1)
-            };
-        }
-        if self.aot_hashes.is_empty() {
-            return AotResolve::Miss;
-        }
-
-        match self.aot_alias.get(&page) {
-            Some(&Some(orig)) => {
-                self.aot_last = (page, orig);
-                AotResolve::Hit(orig)
+        match self.aot_page_table.get(page as usize) {
+            Some(&AOT_UNKNOWN) => AotResolve::Unknown,
+            Some(&AOT_MISS) => AotResolve::Miss,
+            Some(&orig) => AotResolve::Hit(orig),
+            None => {
+                if self.aot_hashes.is_empty() || page >= AOT_TABLE_MAX_PAGES {
+                    AotResolve::Miss
+                } else {
+                    AotResolve::Unknown
+                }
             }
-            Some(&None) => {
-                self.aot_last = (page, u64::MAX);
-                AotResolve::Miss
-            }
-            None => AotResolve::Unknown,
         }
     }
 
     pub fn aot_record_hash(&mut self, page: u64, hash: u64) -> Option<u64> {
         let orig = self.aot_hashes.get(&hash).copied();
-        self.aot_alias.insert(page, orig);
+        if page < AOT_TABLE_MAX_PAGES {
+            if self.aot_page_table.len() <= page as usize {
+                self.aot_page_table.resize(page as usize + 1, AOT_UNKNOWN);
+            }
+            self.aot_page_table[page as usize] = orig.unwrap_or(AOT_MISS);
+        }
         self.mark_page(page);
-        self.aot_last = (page, orig.unwrap_or(u64::MAX));
 
         orig
     }
@@ -311,6 +311,23 @@ impl BlockCache {
         }
 
         self.page_bitmap[word] |= 1 << (page % 64);
+        // A page gained code (cached block or AOT alias record): store
+        // fast-path entries may no longer skip notify_store for it.
+        self.code_generation = self.code_generation.wrapping_add(1);
+    }
+
+    /// Bumped whenever any page gains cached blocks or an AOT alias record.
+    /// The store fast path is only valid while this is unchanged, since a
+    /// fast-path store skips `notify_store`.
+    #[inline(always)]
+    pub fn code_generation(&self) -> u64 {
+        self.code_generation
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn page_has_code(&self, page: u64) -> bool {
+        let word = (page / 64) as usize;
+        word < self.page_bitmap.len() && self.page_bitmap[word] & (1 << (page % 64)) != 0
     }
 
     #[inline(always)]
@@ -332,9 +349,8 @@ impl BlockCache {
         perf::note_store_page_eviction();
 
         self.aot_evict_generation = self.aot_evict_generation.wrapping_add(1);
-        self.aot_alias.remove(&page);
-        if self.aot_last.0 == page {
-            self.aot_last = (u64::MAX, u64::MAX);
+        if let Some(entry) = self.aot_page_table.get_mut(page as usize) {
+            *entry = AOT_UNKNOWN;
         }
 
         for slot in &mut self.slots {
@@ -353,8 +369,7 @@ impl BlockCache {
 
         self.page_bitmap.clear();
 
-        self.aot_alias.clear();
-        self.aot_last = (u64::MAX, u64::MAX);
+        self.aot_page_table.clear();
         self.aot_evict_generation = self.aot_evict_generation.wrapping_add(1);
     }
 }
@@ -1219,6 +1234,7 @@ fn extend_load(kind: LoadKind, raw: u64) -> u64 {
     }
 }
 
+#[inline(always)]
 pub(crate) fn do_store<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     satp: u64,
@@ -1233,6 +1249,63 @@ pub(crate) fn do_store<B: SystemBus>(
         StoreKind::Sd => 8,
     };
 
+    let offset_in_page = virtual_address & 0xFFF;
+    if offset_in_page + size <= 0x1000
+        && let Some(host_page) = ctx.mmu.store_fast_lookup(
+            virtual_address,
+            satp,
+            ctx.bus.ram_epoch(),
+            ctx.blocks.code_generation(),
+        )
+    {
+        perf::note_store_fast_hit();
+
+        #[cfg(debug_assertions)]
+        {
+            let physical_address = ctx
+                .mmu
+                .translate_store(virtual_address, satp, ctx.bus)
+                .expect("store fast-path hit but slow path faulted");
+            assert!(
+                !ctx.blocks.page_has_code(physical_address >> 12),
+                "store fast path would skip a required SMC eviction at va={virtual_address:#x}"
+            );
+            let shadow = ctx
+                .bus
+                .ram_store_page(physical_address)
+                .expect("store fast-path hit on a non-RAM page");
+            assert_eq!(
+                shadow as usize,
+                host_page as usize,
+                "store fast path diverged at va={virtual_address:#x} size={size}"
+            );
+        }
+
+        unsafe {
+            let p = host_page.add(offset_in_page as usize);
+            match size {
+                1 => *p = val as u8,
+                2 => (p as *mut u16).write_unaligned((val as u16).to_le()),
+                4 => (p as *mut u32).write_unaligned((val as u32).to_le()),
+                _ => (p as *mut u64).write_unaligned(val.to_le()),
+            }
+        }
+
+        return Ok(());
+    }
+
+    do_store_slow(ctx, satp, virtual_address, val, size)
+}
+
+#[cold]
+#[inline(never)]
+fn do_store_slow<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    satp: u64,
+    virtual_address: u64,
+    val: u64,
+    size: u64,
+) -> Result<(), ()> {
     match raw_store(
         ctx.mmu,
         ctx.bus,
@@ -1315,6 +1388,17 @@ pub fn raw_store<B: SystemBus>(
             4 => bus.write_word(physical_address, val as u32),
             _ => bus.write_doubleword(physical_address, val),
         }
+
+        // Fill after the write: the write already materialized/dirty-tracked
+        // the page, so ram_epoch is stable and notify_store just ran (any
+        // code on this page was evicted; code_generation guards refills).
+        mmu.store_fast_fill(
+            virtual_address >> 12,
+            satp,
+            physical_address,
+            blocks.code_generation(),
+            bus,
+        );
     }
     Ok(())
 }

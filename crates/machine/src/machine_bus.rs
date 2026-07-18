@@ -489,6 +489,20 @@ impl SystemBus for MachineBus {
         Some(self.ram.page_ptr(page))
     }
 
+    fn ram_store_page(&mut self, address: u64) -> Option<*mut u8> {
+        let page_base = address & !0xfff;
+        if page_base < RAM_BASE {
+            return None;
+        }
+
+        let page = ((page_base - RAM_BASE) as usize) >> 12;
+        if page >= self.ram.num_pages() {
+            return None;
+        }
+
+        Some(self.ram.page_mut_ptr(page))
+    }
+
     #[inline(always)]
     fn ram_epoch(&self) -> u64 {
         self.ram.epoch()

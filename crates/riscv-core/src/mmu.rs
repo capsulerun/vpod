@@ -49,9 +49,34 @@ impl LoadFastEntry {
 unsafe impl Send for LoadFastEntry {}
 unsafe impl Sync for LoadFastEntry {}
 
+#[derive(Clone, Copy)]
+struct StoreFastEntry {
+    virt_page_num: u64,
+    satp: u64,
+    ram_epoch: u64,
+    code_generation: u64,
+    epoch: u32,
+    host_page: *mut u8,
+}
+
+impl StoreFastEntry {
+    const EMPTY: Self = Self {
+        virt_page_num: u64::MAX,
+        satp: 0,
+        ram_epoch: 0,
+        code_generation: 0,
+        epoch: 0,
+        host_page: std::ptr::null_mut(),
+    };
+}
+
+unsafe impl Send for StoreFastEntry {}
+unsafe impl Sync for StoreFastEntry {}
+
 pub struct Mmu {
     tlb: [TlbEntry; TLB_SIZE],
     load_fast: [LoadFastEntry; TLB_SIZE],
+    store_fast: [StoreFastEntry; TLB_SIZE],
     epoch: u32,
 
     load_vpage: u64,
@@ -106,6 +131,7 @@ impl Mmu {
         Self {
             tlb: [TlbEntry::EMPTY; TLB_SIZE],
             load_fast: [LoadFastEntry::EMPTY; TLB_SIZE],
+            store_fast: [StoreFastEntry::EMPTY; TLB_SIZE],
             epoch: 1,
             load_vpage: u64::MAX,
             load_ppage: 0,
@@ -155,6 +181,50 @@ impl Mmu {
             Some(entry.host_page)
         } else {
             None
+        }
+    }
+
+    #[inline(always)]
+    pub fn store_fast_lookup(
+        &self,
+        virtual_address: u64,
+        satp: u64,
+        ram_epoch: u64,
+        code_generation: u64,
+    ) -> Option<*mut u8> {
+        let virt_page_num = virtual_address >> 12;
+        let entry = &self.store_fast[(virt_page_num & TLB_MASK) as usize];
+
+        if entry.virt_page_num == virt_page_num
+            && entry.satp == satp
+            && entry.epoch == self.epoch
+            && entry.ram_epoch == ram_epoch
+            && entry.code_generation == code_generation
+        {
+            Some(entry.host_page)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub fn store_fast_fill(
+        &mut self,
+        virt_page_num: u64,
+        satp: u64,
+        physical_address: u64,
+        code_generation: u64,
+        bus: &mut impl SystemBus,
+    ) {
+        if let Some(host_page) = bus.ram_store_page(physical_address) {
+            self.store_fast[(virt_page_num & TLB_MASK) as usize] = StoreFastEntry {
+                virt_page_num,
+                satp,
+                ram_epoch: bus.ram_epoch(),
+                code_generation,
+                epoch: self.epoch,
+                host_page,
+            };
         }
     }
 

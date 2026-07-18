@@ -17,6 +17,11 @@ pub trait SystemBus {
         None
     }
 
+    fn ram_store_page(&mut self, address: u64) -> Option<*mut u8> {
+        let _ = address;
+        None
+    }
+
     fn ram_epoch(&self) -> u64 {
         0
     }
@@ -108,6 +113,15 @@ impl SystemBus for FlatMemory {
 
         let page_index = self.idx(address) & !0xfff;
         Some(self.data[page_index..].as_ptr())
+    }
+
+    fn ram_store_page(&mut self, address: u64) -> Option<*mut u8> {
+        if self.data.len() < 0x1000 {
+            return None;
+        }
+
+        let page_index = self.idx(address) & !0xfff;
+        Some(self.data[page_index..].as_mut_ptr())
     }
 
     fn ram_epoch(&self) -> u64 {
