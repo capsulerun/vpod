@@ -7,6 +7,7 @@ use crate::extensions as ext;
 use crate::mmu::{Mmu, MmuFault};
 use crate::perf;
 use crate::system_bus::SystemBus;
+use crate::trap::StepResult;
 
 pub const MAX_BLOCK_OPS: usize = 64;
 
@@ -143,6 +144,10 @@ pub enum Op {
         rd: u8,
         rs1: u8,
         imm: i64,
+    },
+
+    Fallback {
+        raw: u32,
     },
 }
 
@@ -393,10 +398,16 @@ pub fn decode_block<B: SystemBus>(bus: &mut B, physical_address: u64) -> Option<
             }
 
             let high_halfword = bus.read_halfword(physical_address + offset_in_block + 2) as u32;
+            let raw = low_halfword | (high_halfword << 16);
 
-            match decode_full(low_halfword | (high_halfword << 16)) {
+            match decode_full(raw) {
                 Some(op) => (op, 4u8),
-                None => break,
+                None => {
+                    if fallback_stops_block(raw) {
+                        break;
+                    }
+                    (Op::Fallback { raw }, 4u8)
+                }
             }
         };
 
@@ -421,6 +432,11 @@ pub fn decode_block<B: SystemBus>(bus: &mut B, physical_address: u64) -> Option<
         ops: ops.into_boxed_slice(),
         byte_len: offset_in_block as u32,
     })
+}
+
+#[inline(always)]
+fn fallback_stops_block(raw: u32) -> bool {
+    (raw & 0x7f == 0x73 && (raw >> 12) & 0x7 == 0) || raw & 0x707f == 0x100f
 }
 
 fn decode_full(raw: u32) -> Option<Op> {
@@ -1040,9 +1056,10 @@ pub fn exec_block<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     block: &Block,
     entry_pc: u64,
-    satp: u64,
-) -> u64 {
+    mut satp: u64,
+) -> (u64, StepResult) {
     let mut retired_instructions: u64 = 0;
+    let mut pending: u64 = 0;
 
     for decoded_instruction in block.ops.iter() {
         let pc = entry_pc.wrapping_add(decoded_instruction.pc_off as u64);
@@ -1067,12 +1084,11 @@ pub fn exec_block<B: SystemBus>(
             Op::Load { kind, rd, rs1, imm } => {
                 let virtual_address = ctx.regs.read(rs1 as usize).wrapping_add(imm as u64);
 
-                ctx.regs.pc = pc;
-                match do_load(ctx, satp, kind, virtual_address) {
+                match do_load(ctx, satp, kind, virtual_address, pc) {
                     Ok(v) => ctx.regs.write(rd as usize, v),
                     Err(()) => {
-                        ctx.csr.instret = ctx.csr.instret.wrapping_add(retired_instructions);
-                        return retired_instructions + 1;
+                        ctx.csr.instret = ctx.csr.instret.wrapping_add(pending);
+                        return (retired_instructions + 1, StepResult::Ok);
                     }
                 }
             }
@@ -1084,10 +1100,9 @@ pub fn exec_block<B: SystemBus>(
             } => {
                 let virtual_address = ctx.regs.read(rs1 as usize).wrapping_add(imm as u64);
                 let val = ctx.regs.read(rs2 as usize);
-                ctx.regs.pc = pc;
-                if do_store(ctx, satp, kind, virtual_address, val).is_err() {
-                    ctx.csr.instret = ctx.csr.instret.wrapping_add(retired_instructions);
-                    return retired_instructions + 1;
+                if do_store(ctx, satp, kind, virtual_address, val, pc).is_err() {
+                    ctx.csr.instret = ctx.csr.instret.wrapping_add(pending);
+                    return (retired_instructions + 1, StepResult::Ok);
                 }
             }
             Op::Branch {
@@ -1113,10 +1128,9 @@ pub fn exec_block<B: SystemBus>(
                     pc.wrapping_add(decoded_instruction.ilen as u64)
                 };
 
-                retired_instructions += 1;
-                ctx.csr.instret = ctx.csr.instret.wrapping_add(retired_instructions);
+                ctx.csr.instret = ctx.csr.instret.wrapping_add(pending + 1);
 
-                return retired_instructions;
+                return (retired_instructions + 1, StepResult::Ok);
             }
             Op::Jal { rd, offset } => {
                 ctx.regs.write(
@@ -1125,10 +1139,9 @@ pub fn exec_block<B: SystemBus>(
                 );
 
                 ctx.regs.pc = pc.wrapping_add(offset as u64);
-                retired_instructions += 1;
-                ctx.csr.instret = ctx.csr.instret.wrapping_add(retired_instructions);
+                ctx.csr.instret = ctx.csr.instret.wrapping_add(pending + 1);
 
-                return retired_instructions;
+                return (retired_instructions + 1, StepResult::Ok);
             }
             Op::Jalr { rd, rs1, imm } => {
                 let target = ctx.regs.read(rs1 as usize).wrapping_add(imm as u64) & !1;
@@ -1138,19 +1151,37 @@ pub fn exec_block<B: SystemBus>(
                 );
 
                 ctx.regs.pc = target;
-                retired_instructions += 1;
-                ctx.csr.instret = ctx.csr.instret.wrapping_add(retired_instructions);
+                ctx.csr.instret = ctx.csr.instret.wrapping_add(pending + 1);
 
-                return retired_instructions;
+                return (retired_instructions + 1, StepResult::Ok);
+            }
+            Op::Fallback { raw } => {
+                perf::note_fallback_op();
+                ctx.regs.pc = pc;
+                ctx.csr.instret = ctx.csr.instret.wrapping_add(pending);
+                pending = 0;
+
+                let result = crate::execute::exec_raw(ctx, raw, pc);
+                retired_instructions += 1;
+
+                let next_pc = pc.wrapping_add(decoded_instruction.ilen as u64);
+                if !matches!(result, StepResult::Ok) || ctx.regs.pc != next_pc || *ctx.is_waiting {
+                    return (retired_instructions, result);
+                }
+
+                // A CSR write may have changed satp or the privilege mode.
+                satp = effective_satp(*ctx.priv_mode, ctx.csr.satp);
+                continue;
             }
         }
 
         retired_instructions += 1;
+        pending += 1;
     }
 
     ctx.regs.pc = entry_pc.wrapping_add(block.byte_len as u64);
-    ctx.csr.instret = ctx.csr.instret.wrapping_add(retired_instructions);
-    retired_instructions
+    ctx.csr.instret = ctx.csr.instret.wrapping_add(pending);
+    (retired_instructions, StepResult::Ok)
 }
 
 #[inline(always)]
@@ -1159,6 +1190,7 @@ pub(crate) fn do_load<B: SystemBus>(
     satp: u64,
     kind: LoadKind,
     virtual_address: u64,
+    pc: u64,
 ) -> Result<u64, ()> {
     let size: u64 = match kind {
         LoadKind::Lb | LoadKind::Lbu => 1,
@@ -1198,7 +1230,7 @@ pub(crate) fn do_load<B: SystemBus>(
         return Ok(extend_load(kind, raw));
     }
 
-    do_load_slow(ctx, satp, kind, virtual_address, size)
+    do_load_slow(ctx, satp, kind, virtual_address, size, pc)
 }
 
 #[cold]
@@ -1209,10 +1241,12 @@ fn do_load_slow<B: SystemBus>(
     kind: LoadKind,
     virtual_address: u64,
     size: u64,
+    pc: u64,
 ) -> Result<u64, ()> {
     let raw = match raw_load(ctx.mmu, ctx.bus, satp, virtual_address, size) {
         Ok(v) => v,
         Err(f) => {
+            ctx.regs.pc = pc;
             take_exception(ctx, f.mcause(), f.tval());
             return Err(());
         }
@@ -1241,6 +1275,7 @@ pub(crate) fn do_store<B: SystemBus>(
     kind: StoreKind,
     virtual_address: u64,
     val: u64,
+    pc: u64,
 ) -> Result<(), ()> {
     let size: u64 = match kind {
         StoreKind::Sb => 1,
@@ -1275,8 +1310,7 @@ pub(crate) fn do_store<B: SystemBus>(
                 .ram_store_page(physical_address)
                 .expect("store fast-path hit on a non-RAM page");
             assert_eq!(
-                shadow as usize,
-                host_page as usize,
+                shadow as usize, host_page as usize,
                 "store fast path diverged at va={virtual_address:#x} size={size}"
             );
         }
@@ -1294,7 +1328,7 @@ pub(crate) fn do_store<B: SystemBus>(
         return Ok(());
     }
 
-    do_store_slow(ctx, satp, virtual_address, val, size)
+    do_store_slow(ctx, satp, virtual_address, val, size, pc)
 }
 
 #[cold]
@@ -1305,6 +1339,7 @@ fn do_store_slow<B: SystemBus>(
     virtual_address: u64,
     val: u64,
     size: u64,
+    pc: u64,
 ) -> Result<(), ()> {
     match raw_store(
         ctx.mmu,
@@ -1317,6 +1352,7 @@ fn do_store_slow<B: SystemBus>(
     ) {
         Ok(()) => Ok(()),
         Err(f) => {
+            ctx.regs.pc = pc;
             take_exception(ctx, f.mcause(), f.tval());
             Err(())
         }

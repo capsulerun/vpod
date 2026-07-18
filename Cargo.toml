@@ -4,3 +4,7 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

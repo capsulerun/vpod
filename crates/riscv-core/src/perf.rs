@@ -35,6 +35,7 @@ counters!(
     TLB_WALKS,
     BARE_TRANSLATES,
     STORE_PAGE_EVICTIONS,
+    FALLBACK_OPS,
     SS_SYSTEM,
     SS_AMO,
     SS_FP,
@@ -106,6 +107,7 @@ note_fns!(
     note_tlb_walk => TLB_WALKS,
     note_bare_translate => BARE_TRANSLATES,
     note_store_page_eviction => STORE_PAGE_EVICTIONS,
+    note_fallback_op => FALLBACK_OPS,
 );
 
 pub fn report() -> Option<String> {
@@ -154,7 +156,8 @@ pub fn report() -> Option<String> {
             if block_entries == 0 { 0.0 } else { total_insns as f64 / block_entries as f64 },
         ));
         out.push_str(&format!(
-            "single-step by op: {} system | {} amo | {} fp | {} fence | {} other\n",
+            "in-block fallback ops: {}\nsingle-step by op: {} system | {} amo | {} fp | {} fence | {} other\n",
+            v("FALLBACK_OPS"),
             v("SS_SYSTEM"),
             v("SS_AMO"),
             v("SS_FP"),

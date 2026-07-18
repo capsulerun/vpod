@@ -25,6 +25,10 @@ pub trait SystemBus {
     fn ram_epoch(&self) -> u64 {
         0
     }
+
+    fn timer_interrupt_pending(&self) -> Option<bool> {
+        None
+    }
 }
 
 static FLAT_EPOCH_SOURCE: AtomicU64 = AtomicU64::new(1);

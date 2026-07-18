@@ -85,13 +85,65 @@ fn alu_call(kind: AluKind, lhs: &str, rhs: &str) -> String {
     format!("crate::block::alu(crate::block::AluKind::{kind:?}, {lhs}, {rhs})")
 }
 
+struct RegAlloc {
+    declared: BTreeSet<u8>,
+    written: BTreeSet<u8>,
+}
+
+impl RegAlloc {
+    fn new() -> Self {
+        Self {
+            declared: BTreeSet::new(),
+            written: BTreeSet::new(),
+        }
+    }
+
+    fn read(&mut self, out: &mut String, r: u8) -> String {
+        if r == 0 {
+            return "0u64".to_string();
+        }
+        if self.declared.insert(r) {
+            writeln!(out, "    let mut x{r}: u64 = ctx.regs.read({r});").unwrap();
+        }
+        format!("x{r}")
+    }
+
+    fn write_target(&mut self, out: &mut String, r: u8) -> Option<String> {
+        if r == 0 {
+            return None;
+        }
+        if self.declared.insert(r) {
+            writeln!(out, "    let mut x{r}: u64;").unwrap();
+        }
+        self.written.insert(r);
+        Some(format!("x{r}"))
+    }
+
+    fn writeback(&self) -> String {
+        self.written
+            .iter()
+            .map(|&r| format!("ctx.regs.write({r}, x{r}); "))
+            .collect()
+    }
+
+    fn reload(&mut self) -> String {
+        self.written.clear();
+        self.declared
+            .iter()
+            .map(|&r| format!("x{r} = ctx.regs.read({r}); "))
+            .collect()
+    }
+}
+
 fn emit_block(out: &mut String, pa: u64, entry_seen: &BTreeSet<u64>, blk: &Block) {
     let _ = entry_seen;
     writeln!(
         out,
-        "#[allow(unused_variables)]\nfn block_{pa:x}<B: SystemBus>(ctx: &mut ExecContext<B>, entry_pc: u64, satp: u64) -> (u64, u64) {{"
+        "#[allow(unused_variables, unused_mut, unused_assignments)]\nfn block_{pa:x}<B: SystemBus>(ctx: &mut ExecContext<B>, entry_pc: u64, satp: u64) -> (u64, u64) {{"
     )
     .unwrap();
+
+    let mut regs = RegAlloc::new();
 
     let page_off = pa & 0xfff;
     let next_expr = |insn_off: u64, delta: i64| -> String {
@@ -107,6 +159,7 @@ fn emit_block(out: &mut String, pa: u64, entry_seen: &BTreeSet<u64>, blk: &Block
     };
 
     let mut retired: u64 = 0;
+    let mut flushed: u64 = 0;
 
     for insn in blk.ops.iter() {
         let off = insn.pc_off as u64;
@@ -115,36 +168,43 @@ fn emit_block(out: &mut String, pa: u64, entry_seen: &BTreeSet<u64>, blk: &Block
 
         match insn.op {
             Op::Lui { rd, imm } => {
-                writeln!(out, "    ctx.regs.write({rd}, {imm}i64 as u64);").unwrap();
+                if let Some(dst) = regs.write_target(out, rd) {
+                    writeln!(out, "    {dst} = {imm}i64 as u64;").unwrap();
+                }
             }
             Op::Auipc { rd, imm } => {
-                writeln!(
-                    out,
-                    "    ctx.regs.write({rd}, {pc}.wrapping_add({imm}i64 as u64));"
-                )
-                .unwrap();
+                if let Some(dst) = regs.write_target(out, rd) {
+                    writeln!(out, "    {dst} = {pc}.wrapping_add({imm}i64 as u64);").unwrap();
+                }
             }
             Op::AluImm { kind, rd, rs1, imm } => {
-                let expr = alu_call(
-                    kind,
-                    &format!("ctx.regs.read({rs1})"),
-                    &format!("{imm}i64 as u64"),
-                );
-                writeln!(out, "    ctx.regs.write({rd}, {expr});").unwrap();
+                if rd != 0 {
+                    let a = regs.read(out, rs1);
+                    let expr = alu_call(kind, &a, &format!("{imm}i64 as u64"));
+                    let dst = regs.write_target(out, rd).unwrap();
+                    writeln!(out, "    {dst} = {expr};").unwrap();
+                }
             }
             Op::AluReg { kind, rd, rs1, rs2 } => {
-                let expr = alu_call(
-                    kind,
-                    &format!("ctx.regs.read({rs1})"),
-                    &format!("ctx.regs.read({rs2})"),
-                );
-                writeln!(out, "    ctx.regs.write({rd}, {expr});").unwrap();
+                if rd != 0 {
+                    let a = regs.read(out, rs1);
+                    let b = regs.read(out, rs2);
+                    let expr = alu_call(kind, &a, &b);
+                    let dst = regs.write_target(out, rd).unwrap();
+                    writeln!(out, "    {dst} = {expr};").unwrap();
+                }
             }
             Op::Load { kind, rd, rs1, imm } => {
-                writeln!(out, "    ctx.regs.pc = {pc};").unwrap();
+                let base = regs.read(out, rs1);
+                let fault_writeback = regs.writeback();
+                let bind = match regs.write_target(out, rd) {
+                    None => "Ok(_) => {}".to_string(),
+                    Some(dst) => format!("Ok(v) => {dst} = v,"),
+                };
                 writeln!(
                     out,
-                    "    let va = ctx.regs.read({rs1}).wrapping_add({imm}i64 as u64);\n    match crate::block::do_load(ctx, satp, crate::block::LoadKind::{kind:?}, va) {{\n        Ok(v) => ctx.regs.write({rd}, v),\n        Err(()) => {{ ctx.csr.instret = ctx.csr.instret.wrapping_add({retired}); return ({}, u64::MAX); }}\n    }}",
+                    "    let va = {base}.wrapping_add({imm}i64 as u64);\n    match crate::block::do_load(ctx, satp, crate::block::LoadKind::{kind:?}, va, {pc}) {{\n        {bind}\n        Err(()) => {{ {fault_writeback}ctx.csr.instret = ctx.csr.instret.wrapping_add({}); return ({}, u64::MAX); }}\n    }}",
+                    retired - flushed,
                     retired + 1
                 )
                 .unwrap();
@@ -155,10 +215,13 @@ fn emit_block(out: &mut String, pa: u64, entry_seen: &BTreeSet<u64>, blk: &Block
                 rs2,
                 imm,
             } => {
-                writeln!(out, "    ctx.regs.pc = {pc};").unwrap();
+                let base = regs.read(out, rs1);
+                let val = regs.read(out, rs2);
+                let fault_writeback = regs.writeback();
                 writeln!(
                     out,
-                    "    let va = ctx.regs.read({rs1}).wrapping_add({imm}i64 as u64);\n    let val = ctx.regs.read({rs2});\n    if crate::block::do_store(ctx, satp, crate::block::StoreKind::{kind:?}, va, val).is_err() {{\n        ctx.csr.instret = ctx.csr.instret.wrapping_add({retired}); return ({}, u64::MAX);\n    }}",
+                    "    let va = {base}.wrapping_add({imm}i64 as u64);\n    if crate::block::do_store(ctx, satp, crate::block::StoreKind::{kind:?}, va, {val}, {pc}).is_err() {{\n        {fault_writeback}ctx.csr.instret = ctx.csr.instret.wrapping_add({}); return ({}, u64::MAX);\n    }}",
+                    retired - flushed,
                     retired + 1
                 )
                 .unwrap();
@@ -170,8 +233,8 @@ fn emit_block(out: &mut String, pa: u64, entry_seen: &BTreeSet<u64>, blk: &Block
                 offset,
             } => {
                 let cond = {
-                    let a = format!("ctx.regs.read({rs1})");
-                    let b = format!("ctx.regs.read({rs2})");
+                    let a = regs.read(out, rs1);
+                    let b = regs.read(out, rs2);
                     match kind {
                         block::BranchKind::Beq => format!("{a} == {b}"),
                         block::BranchKind::Bne => format!("{a} != {b}"),
@@ -181,12 +244,13 @@ fn emit_block(out: &mut String, pa: u64, entry_seen: &BTreeSet<u64>, blk: &Block
                         block::BranchKind::Bgeu => format!("{a} >= {b}"),
                     }
                 };
+                let writeback = regs.writeback();
                 let taken_next = next_expr(off, offset);
                 let fall_next = next_expr(off, ilen as i64);
                 writeln!(
                     out,
-                    "    let taken = {cond};\n    ctx.regs.pc = if taken {{ {pc}.wrapping_add({offset}i64 as u64) }} else {{ {pc}.wrapping_add({ilen}) }};\n    ctx.csr.instret = ctx.csr.instret.wrapping_add({});\n    return ({}, if taken {{ {taken_next} }} else {{ {fall_next} }});",
-                    retired + 1,
+                    "    let taken = {cond};\n    {writeback}ctx.regs.pc = if taken {{ {pc}.wrapping_add({offset}i64 as u64) }} else {{ {pc}.wrapping_add({ilen}) }};\n    ctx.csr.instret = ctx.csr.instret.wrapping_add({});\n    return ({}, if taken {{ {taken_next} }} else {{ {fall_next} }});",
+                    retired + 1 - flushed,
                     retired + 1
                 )
                 .unwrap();
@@ -194,10 +258,14 @@ fn emit_block(out: &mut String, pa: u64, entry_seen: &BTreeSet<u64>, blk: &Block
             }
             Op::Jal { rd, offset } => {
                 let next = next_expr(off, offset);
+                if let Some(dst) = regs.write_target(out, rd) {
+                    writeln!(out, "    {dst} = {pc}.wrapping_add({ilen});").unwrap();
+                }
                 writeln!(
                     out,
-                    "    ctx.regs.write({rd}, {pc}.wrapping_add({ilen}));\n    ctx.regs.pc = {pc}.wrapping_add({offset}i64 as u64);\n    ctx.csr.instret = ctx.csr.instret.wrapping_add({});\n    return ({}, {next});",
-                    retired + 1,
+                    "    {}ctx.regs.pc = {pc}.wrapping_add({offset}i64 as u64);\n    ctx.csr.instret = ctx.csr.instret.wrapping_add({});\n    return ({}, {next});",
+                    regs.writeback(),
+                    retired + 1 - flushed,
                     retired + 1
                 )
                 .unwrap();
@@ -205,21 +273,45 @@ fn emit_block(out: &mut String, pa: u64, entry_seen: &BTreeSet<u64>, blk: &Block
                 retired += 1;
             }
             Op::Jalr { rd, rs1, imm } => {
+                let base = regs.read(out, rs1);
                 writeln!(
                     out,
-                    "    let target = ctx.regs.read({rs1}).wrapping_add({imm}i64 as u64) & !1;\n    ctx.regs.write({rd}, {pc}.wrapping_add({ilen}));\n    ctx.regs.pc = target;\n    ctx.csr.instret = ctx.csr.instret.wrapping_add({});\n    return ({}, u64::MAX);",
-                    retired + 1,
+                    "    let target = {base}.wrapping_add({imm}i64 as u64) & !1;"
+                )
+                .unwrap();
+                if let Some(dst) = regs.write_target(out, rd) {
+                    writeln!(out, "    {dst} = {pc}.wrapping_add({ilen});").unwrap();
+                }
+                writeln!(
+                    out,
+                    "    {}ctx.regs.pc = target;\n    ctx.csr.instret = ctx.csr.instret.wrapping_add({});\n    return ({}, u64::MAX);",
+                    regs.writeback(),
+                    retired + 1 - flushed,
                     retired + 1
                 )
                 .unwrap();
 
                 retired += 1;
             }
+            Op::Fallback { raw } => {
+                writeln!(
+                    out,
+                    "    {}ctx.regs.pc = {pc};\n    ctx.csr.instret = ctx.csr.instret.wrapping_add({});\n    let r = crate::execute::exec_raw(ctx, {raw}u32, {pc});\n    debug_assert!(matches!(r, crate::trap::StepResult::Ok));\n    if ctx.regs.pc != {pc}.wrapping_add({ilen}) {{\n        return ({}, u64::MAX);\n    }}\n    {}let satp = crate::block::effective_satp(*ctx.priv_mode, ctx.csr.satp);",
+                    regs.writeback(),
+                    retired - flushed,
+                    retired + 1,
+                    regs.reload()
+                )
+                .unwrap();
+
+                flushed = retired + 1;
+                retired += 1;
+            }
         }
 
         if !matches!(
             insn.op,
-            Op::Branch { .. } | Op::Jal { .. } | Op::Jalr { .. }
+            Op::Branch { .. } | Op::Jal { .. } | Op::Jalr { .. } | Op::Fallback { .. }
         ) {
             retired += 1;
         }
@@ -228,8 +320,10 @@ fn emit_block(out: &mut String, pa: u64, entry_seen: &BTreeSet<u64>, blk: &Block
     let fall_next = next_expr(blk.byte_len as u64, 0);
     writeln!(
         out,
-        "    ctx.regs.pc = entry_pc.wrapping_add({});\n    ctx.csr.instret = ctx.csr.instret.wrapping_add({retired});\n    ({retired}, {fall_next})\n}}\n",
-        blk.byte_len
+        "    {}ctx.regs.pc = entry_pc.wrapping_add({});\n    ctx.csr.instret = ctx.csr.instret.wrapping_add({});\n    ({retired}, {fall_next})\n}}\n",
+        regs.writeback(),
+        blk.byte_len,
+        retired - flushed
     )
     .unwrap();
 }

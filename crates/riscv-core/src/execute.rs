@@ -2,7 +2,7 @@
 
 use crate::block::{self, BlockCache};
 use crate::csr::{
-    Csr, MSTATUS_FS, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP, MSTATUS_SIE, MSTATUS_SPIE,
+    Csr, MIP_MTIP, MSTATUS_FS, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP, MSTATUS_SIE, MSTATUS_SPIE,
     MSTATUS_SPP, PrivMode,
 };
 use crate::decode::{Instruction, sign_extend};
@@ -100,12 +100,18 @@ fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
 
     while remaining > 0 {
         if let Some(irq) = ctx.csr.pending_interrupt(*ctx.priv_mode) {
+            if irq == 7 && ctx.bus.timer_interrupt_pending() == Some(false) {
+                ctx.csr.mip &= !MIP_MTIP;
+                continue;
+            }
+
             *ctx.fetch_vpage = u64::MAX;
             *ctx.is_waiting = false;
             match take_interrupt(ctx, irq) {
                 StepResult::Ok => {}
                 other => return other,
             }
+
             remaining -= 1;
             continue;
         }
@@ -161,9 +167,19 @@ fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
         if let Some(cached) = ctx.blocks.lookup(fetch_pa) {
             perf::note_block_hit();
             let priv_at_entry = *ctx.priv_mode;
-            let retired = block::exec_block(ctx, &cached, pc, effective_satp);
+            let (retired, result) = block::exec_block(ctx, &cached, pc, effective_satp);
             perf::note_retired(priv_at_entry, retired);
             remaining -= retired as i64;
+
+            match result {
+                StepResult::Ok => {}
+                other => return other,
+            }
+
+            if STOP_ON_WFI && *ctx.is_waiting {
+                return StepResult::Ok;
+            }
+
             continue;
         }
 
@@ -172,11 +188,18 @@ fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
 
             let cached = ctx.blocks.insert(fetch_pa, decoded);
             let priv_at_entry = *ctx.priv_mode;
-            let retired = block::exec_block(ctx, &cached, pc, effective_satp);
+            let (retired, result) = block::exec_block(ctx, &cached, pc, effective_satp);
 
             perf::note_retired(priv_at_entry, retired);
 
             remaining -= retired as i64;
+            match result {
+                StepResult::Ok => {}
+                other => return other,
+            }
+            if STOP_ON_WFI && *ctx.is_waiting {
+                return StepResult::Ok;
+            }
             continue;
         }
 
@@ -232,9 +255,13 @@ pub(crate) fn aot_page_key<B: SystemBus>(ctx: &mut ExecContext<B>, fetch_pa: u64
 
 pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
     if let Some(irq) = ctx.csr.pending_interrupt(*ctx.priv_mode) {
-        *ctx.fetch_vpage = u64::MAX;
-        *ctx.is_waiting = false;
-        return take_interrupt(ctx, irq);
+        if irq == 7 && ctx.bus.timer_interrupt_pending() == Some(false) {
+            ctx.csr.mip &= !MIP_MTIP;
+        } else {
+            *ctx.fetch_vpage = u64::MAX;
+            *ctx.is_waiting = false;
+            return take_interrupt(ctx, irq);
+        }
     }
 
     let pc = ctx.regs.pc;
@@ -253,6 +280,7 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
                 Ok(pa) => pa,
                 Err(fault) => return trap_from_mmu(ctx, fault),
             };
+
             *ctx.fetch_vpage = virtual_page;
             *ctx.fetch_ppage = physical_address >> 12;
             *ctx.fetch_satp = effective_satp;
@@ -291,6 +319,14 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
         }
     };
 
+    exec_raw(ctx, instruction_encoding, pc)
+}
+
+pub(crate) fn exec_raw<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    instruction_encoding: u32,
+    pc: u64,
+) -> StepResult {
     let result = if instruction_encoding & 0x3 != 0x3 {
         exec_compressed(ctx, instruction_encoding as u16)
     } else {

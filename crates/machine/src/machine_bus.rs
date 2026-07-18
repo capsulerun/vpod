@@ -507,6 +507,11 @@ impl SystemBus for MachineBus {
     fn ram_epoch(&self) -> u64 {
         self.ram.epoch()
     }
+
+    #[inline(always)]
+    fn timer_interrupt_pending(&self) -> Option<bool> {
+        Some(self.clint.get_interrupt_status().0)
+    }
 }
 
 fn kernel_entry_and_offset(kernel: &[u8]) -> (u64, u64) {

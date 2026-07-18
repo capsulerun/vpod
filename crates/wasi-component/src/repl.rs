@@ -5,7 +5,9 @@ use wasi::clocks::wall_clock;
 use wasi::io::poll;
 
 const STEP: u64 = 8192;
+const RUN_STEP: u64 = 524_288;
 
+const MAX_TIMER_WARP_NS: u64 = 100_000_000;
 const NET_YIELD_NS: u64 = 5_000_000; // 5 ms
 
 // TO TEST : the time UART must be quiet after last output before declare the command
@@ -143,29 +145,35 @@ pub fn capture_output(
             hart.is_waiting = false;
 
             if !bus.has_pending_io() {
-                let before = monotonic_clock::now();
-                let timeout = monotonic_clock::subscribe_duration(NET_YIELD_NS);
-                poll::poll(&[&timeout]);
+                if matches!(bus.clint.nanos_until_timer(), Some(ns) if ns <= MAX_TIMER_WARP_NS) {
+                    bus.clint.fast_forward_to_timer();
+                    bus.poll(hart);
+                } else {
+                    let before = monotonic_clock::now();
+                    let timeout = monotonic_clock::subscribe_duration(NET_YIELD_NS);
+                    poll::poll(&[&timeout]);
 
-                let idle_ns = monotonic_clock::now().saturating_sub(before);
-                bus.clint.advance_by_nanos(idle_ns);
+                    let idle_ns = monotonic_clock::now().saturating_sub(before);
+                    bus.clint.advance_by_nanos(idle_ns);
 
-                if !data_channel
-                    && sentinel.is_none()
-                    && got_output
-                    && !bus.net_rx_pending()
-                    && !bus.net_has_active_connections()
-                    && monotonic_clock::now().saturating_sub(last_output_ns) >= QUIET_PERIOD_NS
-                {
-                    break;
+                    if !data_channel
+                        && sentinel.is_none()
+                        && got_output
+                        && !bus.net_rx_pending()
+                        && !bus.net_has_active_connections()
+                        && monotonic_clock::now().saturating_sub(last_output_ns) >= QUIET_PERIOD_NS
+                    {
+                        break;
+                    }
                 }
             }
         }
 
-        bus.clint.advance_by_instructions(STEP);
+        let step = if bus.net_rx_pending() { STEP } else { RUN_STEP };
+        bus.clint.advance_by_instructions(step);
         bus.poll(hart);
 
-        match hart.run(bus, STEP) {
+        match hart.run_until_wait(bus, step) {
             StepResult::Ok => {}
             StepResult::Trap(_) | StepResult::Halt => {
                 if stop_on_ctrl && !bus.uart_ctrl.tx_is_empty() {
