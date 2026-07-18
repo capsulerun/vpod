@@ -80,14 +80,14 @@ impl CowRam {
 
     #[inline(always)]
     fn page_mut(&mut self, page: usize) -> &mut [u8] {
-        let base = &self.base;
-
-        self.pages[page].get_or_insert_with(|| {
+        if self.pages[page].is_none() {
+            let start = page * PAGE_SIZE;
             let mut owned = vec![0u8; PAGE_SIZE].into_boxed_slice();
-            owned.copy_from_slice(&base[page * PAGE_SIZE..(page + 1) * PAGE_SIZE]);
+            owned.copy_from_slice(&self.base[start..start + PAGE_SIZE]);
+            self.pages[page] = Some(owned);
+        }
 
-            owned
-        })
+        self.pages[page].as_mut().unwrap()
     }
 
     #[inline(always)]

@@ -173,9 +173,11 @@ impl Slot {
 pub struct BlockCache {
     slots: Vec<Slot>,
     page_bitmap: Vec<u64>,
-    aot_hashes: std::collections::HashMap<u64, u64>,
-    aot_alias: std::collections::HashMap<u64, Option<u64>>,
+
+    aot_hashes: rustc_hash::FxHashMap<u64, u64>,
+    aot_alias: rustc_hash::FxHashMap<u64, Option<u64>>,
     aot_last: (u64, u64),
+    aot_evict_generation: u64,
 
     #[cfg(feature = "aot-trace")]
     trace: std::collections::HashMap<u64, u64>,
@@ -204,9 +206,10 @@ impl BlockCache {
         Self {
             slots,
             page_bitmap: Vec::new(),
-            aot_hashes: std::collections::HashMap::new(),
-            aot_alias: std::collections::HashMap::new(),
+            aot_hashes: rustc_hash::FxHashMap::default(),
+            aot_alias: rustc_hash::FxHashMap::default(),
             aot_last: (u64::MAX, u64::MAX),
+            aot_evict_generation: 0,
             #[cfg(feature = "aot-trace")]
             trace: std::collections::HashMap::new(),
         }
@@ -220,6 +223,7 @@ impl BlockCache {
         self.aot_hashes = hashes.iter().copied().collect();
         self.aot_alias.clear();
         self.aot_last = (u64::MAX, u64::MAX);
+        self.aot_evict_generation = self.aot_evict_generation.wrapping_add(1);
     }
 
     /// Resolve a runtime page to its translated (original) page, if any.
@@ -319,9 +323,15 @@ impl BlockCache {
         }
     }
 
+    #[inline(always)]
+    pub fn aot_evict_generation(&self) -> u64 {
+        self.aot_evict_generation
+    }
+
     fn evict_page(&mut self, page: u64) {
         perf::note_store_page_eviction();
 
+        self.aot_evict_generation = self.aot_evict_generation.wrapping_add(1);
         self.aot_alias.remove(&page);
         if self.aot_last.0 == page {
             self.aot_last = (u64::MAX, u64::MAX);
@@ -345,6 +355,7 @@ impl BlockCache {
 
         self.aot_alias.clear();
         self.aot_last = (u64::MAX, u64::MAX);
+        self.aot_evict_generation = self.aot_evict_generation.wrapping_add(1);
     }
 }
 
@@ -1190,6 +1201,7 @@ pub(crate) fn do_store<B: SystemBus>(
     }
 }
 
+#[inline]
 pub fn raw_load<B: SystemBus>(
     mmu: &mut Mmu,
     bus: &mut B,
@@ -1198,7 +1210,9 @@ pub fn raw_load<B: SystemBus>(
     size: u64,
 ) -> Result<u64, MmuFault> {
     perf::note_load();
-    if (virtual_address & 0xFFF) + size > 0x1000 {
+    let offset_in_page = virtual_address & 0xFFF;
+
+    if offset_in_page + size > 0x1000 {
         perf::note_cross_page();
         let mut buf = [0u8; 8];
 
@@ -1208,19 +1222,20 @@ pub fn raw_load<B: SystemBus>(
             buf[i as usize] = bus.read_byte(byte_physical_address);
         }
 
-        Ok(u64::from_le_bytes(buf))
-    } else {
-        let physical_address = mmu.translate_load(virtual_address, satp, bus)?;
-
-        Ok(match size {
-            1 => bus.read_byte(physical_address) as u64,
-            2 => bus.read_halfword(physical_address) as u64,
-            4 => bus.read_word(physical_address) as u64,
-            _ => bus.read_doubleword(physical_address),
-        })
+        return Ok(u64::from_le_bytes(buf));
     }
+
+    let physical_address = mmu.translate_load(virtual_address, satp, bus)?;
+
+    Ok(match size {
+        1 => bus.read_byte(physical_address) as u64,
+        2 => bus.read_halfword(physical_address) as u64,
+        4 => bus.read_word(physical_address) as u64,
+        _ => bus.read_doubleword(physical_address),
+    })
 }
 
+#[inline]
 pub fn raw_store<B: SystemBus>(
     mmu: &mut Mmu,
     bus: &mut B,

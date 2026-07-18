@@ -232,6 +232,7 @@ impl MachineBus {
 }
 
 impl SystemBus for MachineBus {
+    #[inline]
     fn read_byte(&mut self, address: u64) -> u8 {
         if address >= RAM_BASE && address < RAM_BASE + self.ram_mask + 1 {
             return self.ram_read_u8(address);
@@ -284,10 +285,12 @@ impl SystemBus for MachineBus {
         0
     }
 
+    #[inline]
     fn read_halfword(&mut self, address: u64) -> u16 {
         u16::from_le_bytes([self.read_byte(address), self.read_byte(address + 1)])
     }
 
+    #[inline(always)]
     fn read_word(&mut self, address: u64) -> u32 {
         if address >= RAM_BASE && address + 3 < RAM_BASE + self.ram.len() as u64 {
             let index = (address - RAM_BASE) as usize;
@@ -331,6 +334,7 @@ impl SystemBus for MachineBus {
         ])
     }
 
+    #[inline(always)]
     fn read_doubleword(&mut self, address: u64) -> u64 {
         if address >= RAM_BASE && address + 7 < RAM_BASE + self.ram.len() as u64 {
             let index = (address - RAM_BASE) as usize;
@@ -341,6 +345,7 @@ impl SystemBus for MachineBus {
         (self.read_word(address) as u64) | ((self.read_word(address + 4) as u64) << 32)
     }
 
+    #[inline]
     fn write_byte(&mut self, address: u64, value: u8) {
         if address >= RAM_BASE && address < RAM_BASE + self.ram_mask + 1 {
             self.ram_write_u8(address, value);
@@ -377,12 +382,14 @@ impl SystemBus for MachineBus {
         }
     }
 
+    #[inline]
     fn write_halfword(&mut self, address: u64, value: u16) {
         let [low_byte, high_byte] = value.to_le_bytes();
         self.write_byte(address, low_byte);
         self.write_byte(address + 1, high_byte);
     }
 
+    #[inline(always)]
     fn write_word(&mut self, address: u64, value: u32) {
         let [byte_0, byte_1, byte_2, byte_3] = value.to_le_bytes();
 
@@ -456,6 +463,7 @@ impl SystemBus for MachineBus {
         self.write_byte(address + 3, byte_3);
     }
 
+    #[inline(always)]
     fn write_doubleword(&mut self, address: u64, value: u64) {
         if address >= RAM_BASE && address + 7 < RAM_BASE + self.ram.len() as u64 {
             let index = (address - RAM_BASE) as usize;

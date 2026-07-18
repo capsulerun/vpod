@@ -1,6 +1,5 @@
 // snapshot RAM + physical-address trace -> generated Rust
 
-
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::io::Read;
@@ -263,7 +262,8 @@ fn translate_set(bus: &mut SnapshotRam, pas: &BTreeSet<u64>, out_path: &str) {
     let mut dispatch = String::new();
     dispatch.push_str(concat!(
         "#[inline(never)]\npub fn dispatch<B: SystemBus>(ctx: &mut ExecContext<B>, pa_in: u64, entry_pc: u64, satp: u64, fuel: u64, rt_page: u64) -> Option<u64> {\n",
-        "    let mut pa = pa_in;\n    let mut pc = entry_pc;\n    let mut total = 0u64;\n    loop {\n",
+        "    let mut pa = pa_in;\n    let mut pc = entry_pc;\n    let mut total = 0u64;\n",
+        "    let chain_generation = ctx.blocks.aot_evict_generation();\n    loop {\n",
         "        let (retired, next) = match pa >> 12 {\n",
     ));
 
@@ -289,9 +289,11 @@ fn translate_set(bus: &mut SnapshotRam, pas: &BTreeSet<u64>, out_path: &str) {
         "        total += retired;\n",
         "        if next == u64::MAX || total >= fuel {\n            return Some(total);\n        }\n",
         "        pa = (pa & !0xfffu64) | (next & 0xfff);\n",
-        "        match crate::execute::aot_page_key(ctx, rt_page << 12) {\n",
-        "            Some(k) if k >> 12 == pa >> 12 => {}\n",
-        "            _ => return Some(total),\n",
+        "        if ctx.blocks.aot_evict_generation() != chain_generation {\n",
+        "            match crate::execute::aot_page_key(ctx, rt_page << 12) {\n",
+        "                Some(k) if k >> 12 == pa >> 12 => {}\n",
+        "                _ => return Some(total),\n",
+        "            }\n",
         "        }\n",
         "        pc = next;\n    }\n",
         "    if total == 0 { None } else { Some(total) }\n}\n\n",

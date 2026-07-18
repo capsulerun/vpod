@@ -2417,6 +2417,7 @@ version = "0.0.0"
 dependencies = [
  "env_logger",
  "log",
+ "rustc-hash",
 ]
 
 [[package]]

@@ -30,6 +30,13 @@ impl TlbEntry {
 pub struct Mmu {
     tlb: [TlbEntry; TLB_SIZE],
     epoch: u32,
+
+    load_vpage: u64,
+    load_ppage: u64,
+    load_satp: u64,
+    store_vpage: u64,
+    store_ppage: u64,
+    store_satp: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +83,12 @@ impl Mmu {
         Self {
             tlb: [TlbEntry::EMPTY; TLB_SIZE],
             epoch: 1,
+            load_vpage: u64::MAX,
+            load_ppage: 0,
+            load_satp: u64::MAX,
+            store_vpage: u64::MAX,
+            store_ppage: 0,
+            store_satp: u64::MAX,
         }
     }
 
@@ -84,6 +97,8 @@ impl Mmu {
         if self.epoch == 0 {
             self.epoch = 1;
         }
+        self.load_vpage = u64::MAX;
+        self.store_vpage = u64::MAX;
     }
 
     #[inline(always)]
@@ -145,16 +160,29 @@ impl Mmu {
         }
 
         let vpn = virtual_address >> 12;
+        if vpn == self.load_vpage && satp == self.load_satp {
+            perf::note_tlb_hit();
+            return Ok((self.load_ppage << 12) | (virtual_address & 0xfff));
+        }
+
         if let Some((ppn, flags)) = self.lookup(vpn)
             && flags & PTE_R != 0
         {
             perf::note_tlb_hit();
+            self.load_vpage = vpn;
+            self.load_ppage = ppn;
+            self.load_satp = satp;
             return Ok((ppn << 12) | (virtual_address & 0xfff));
         }
 
         perf::note_tlb_walk();
-        self.walk(virtual_address, satp, false, false, bus)
-            .map_err(|_| MmuFault::LoadPageFault(virtual_address))
+        let pa = self
+            .walk(virtual_address, satp, false, false, bus)
+            .map_err(|_| MmuFault::LoadPageFault(virtual_address))?;
+        self.load_vpage = vpn;
+        self.load_ppage = pa >> 12;
+        self.load_satp = satp;
+        Ok(pa)
     }
 
     pub fn translate_store(
@@ -169,16 +197,29 @@ impl Mmu {
         }
 
         let vpn = virtual_address >> 12;
+        if vpn == self.store_vpage && satp == self.store_satp {
+            perf::note_tlb_hit();
+            return Ok((self.store_ppage << 12) | (virtual_address & 0xfff));
+        }
+
         if let Some((ppn, flags)) = self.lookup(vpn)
             && flags & (PTE_W | PTE_D) == (PTE_W | PTE_D)
         {
             perf::note_tlb_hit();
+            self.store_vpage = vpn;
+            self.store_ppage = ppn;
+            self.store_satp = satp;
             return Ok((ppn << 12) | (virtual_address & 0xfff));
         }
 
         perf::note_tlb_walk();
-        self.walk(virtual_address, satp, true, false, bus)
-            .map_err(|_| MmuFault::StorePageFault(virtual_address))
+        let pa = self
+            .walk(virtual_address, satp, true, false, bus)
+            .map_err(|_| MmuFault::StorePageFault(virtual_address))?;
+        self.store_vpage = vpn;
+        self.store_ppage = pa >> 12;
+        self.store_satp = satp;
+        Ok(pa)
     }
 
     fn walk(
