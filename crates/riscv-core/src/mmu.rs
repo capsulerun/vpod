@@ -27,8 +27,31 @@ impl TlbEntry {
     };
 }
 
+#[derive(Clone, Copy)]
+struct LoadFastEntry {
+    virt_page_num: u64,
+    satp: u64,
+    ram_epoch: u64,
+    epoch: u32,
+    host_page: *const u8,
+}
+
+impl LoadFastEntry {
+    const EMPTY: Self = Self {
+        virt_page_num: u64::MAX,
+        satp: 0,
+        ram_epoch: 0,
+        epoch: 0,
+        host_page: std::ptr::null(),
+    };
+}
+
+unsafe impl Send for LoadFastEntry {}
+unsafe impl Sync for LoadFastEntry {}
+
 pub struct Mmu {
     tlb: [TlbEntry; TLB_SIZE],
+    load_fast: [LoadFastEntry; TLB_SIZE],
     epoch: u32,
 
     load_vpage: u64,
@@ -82,6 +105,7 @@ impl Mmu {
     pub fn new() -> Self {
         Self {
             tlb: [TlbEntry::EMPTY; TLB_SIZE],
+            load_fast: [LoadFastEntry::EMPTY; TLB_SIZE],
             epoch: 1,
             load_vpage: u64::MAX,
             load_ppage: 0,
@@ -110,6 +134,46 @@ impl Mmu {
             Some((entry.phys_page_num, entry.flags))
         } else {
             None
+        }
+    }
+
+    #[inline(always)]
+    pub fn load_fast_lookup(
+        &self,
+        virtual_address: u64,
+        satp: u64,
+        ram_epoch: u64,
+    ) -> Option<*const u8> {
+        let virt_page_num = virtual_address >> 12;
+        let entry = &self.load_fast[(virt_page_num & TLB_MASK) as usize];
+
+        if entry.virt_page_num == virt_page_num
+            && entry.satp == satp
+            && entry.epoch == self.epoch
+            && entry.ram_epoch == ram_epoch
+        {
+            Some(entry.host_page)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn load_fast_fill(
+        &mut self,
+        virt_page_num: u64,
+        satp: u64,
+        physical_address: u64,
+        bus: &mut impl SystemBus,
+    ) {
+        if let Some(host_page) = bus.ram_load_page(physical_address) {
+            self.load_fast[(virt_page_num & TLB_MASK) as usize] = LoadFastEntry {
+                virt_page_num,
+                satp,
+                ram_epoch: bus.ram_epoch(),
+                epoch: self.epoch,
+                host_page,
+            };
         }
     }
 
@@ -154,15 +218,19 @@ impl Mmu {
         satp: u64,
         bus: &mut impl SystemBus,
     ) -> Result<u64, MmuFault> {
+        let vpn = virtual_address >> 12;
+
         if satp >> 60 == 0 {
             perf::note_bare_translate();
+            self.load_fast_fill(vpn, satp, virtual_address, bus);
             return Ok(virtual_address);
         }
 
-        let vpn = virtual_address >> 12;
         if vpn == self.load_vpage && satp == self.load_satp {
             perf::note_tlb_hit();
-            return Ok((self.load_ppage << 12) | (virtual_address & 0xfff));
+            let pa = (self.load_ppage << 12) | (virtual_address & 0xfff);
+            self.load_fast_fill(vpn, satp, pa, bus);
+            return Ok(pa);
         }
 
         if let Some((ppn, flags)) = self.lookup(vpn)
@@ -172,7 +240,9 @@ impl Mmu {
             self.load_vpage = vpn;
             self.load_ppage = ppn;
             self.load_satp = satp;
-            return Ok((ppn << 12) | (virtual_address & 0xfff));
+            let pa = (ppn << 12) | (virtual_address & 0xfff);
+            self.load_fast_fill(vpn, satp, pa, bus);
+            return Ok(pa);
         }
 
         perf::note_tlb_walk();
@@ -182,6 +252,7 @@ impl Mmu {
         self.load_vpage = vpn;
         self.load_ppage = pa >> 12;
         self.load_satp = satp;
+        self.load_fast_fill(vpn, satp, pa, bus);
         Ok(pa)
     }
 

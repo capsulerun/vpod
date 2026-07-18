@@ -27,6 +27,7 @@ counters!(
     FETCH_PAGE_HITS,
     FETCH_TRANSLATES,
     LOADS,
+    LOAD_FAST_HITS,
     STORES,
     CROSS_PAGE_ACCESSES,
     TLB_HITS,
@@ -70,6 +71,7 @@ note_fns!(
     note_fetch_page_hit => FETCH_PAGE_HITS,
     note_fetch_translate => FETCH_TRANSLATES,
     note_load => LOADS,
+    note_load_fast_hit => LOAD_FAST_HITS,
     note_store => STORES,
     note_cross_page => CROSS_PAGE_ACCESSES,
     note_tlb_hit => TLB_HITS,
@@ -97,7 +99,8 @@ pub fn report() -> Option<String> {
             }
         };
 
-        let mem_accesses = v("LOADS") + v("STORES");
+        let total_loads = v("LOADS") + v("LOAD_FAST_HITS");
+        let mem_accesses = total_loads + v("STORES");
         let translations = v("TLB_HITS") + v("TLB_WALKS") + v("BARE_TRANSLATES");
         let block_entries = v("BLOCK_HITS") + v("BLOCK_DECODES");
 
@@ -131,8 +134,9 @@ pub fn report() -> Option<String> {
             ),
         ));
         out.push_str(&format!(
-            "memory: {} loads | {} stores ({:.1}% of insns) | {} cross-page\n",
-            v("LOADS"),
+            "memory: {} loads ({:.1}% fast-path) | {} stores ({:.1}% of insns) | {} cross-page\n",
+            total_loads,
+            pct(v("LOAD_FAST_HITS"), total_loads),
             v("STORES"),
             pct(mem_accesses, total_insns),
             v("CROSS_PAGE_ACCESSES"),

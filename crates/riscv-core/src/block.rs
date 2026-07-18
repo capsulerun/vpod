@@ -1138,6 +1138,7 @@ pub fn exec_block<B: SystemBus>(
     retired_instructions
 }
 
+#[inline(always)]
 pub(crate) fn do_load<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     satp: u64,
@@ -1151,6 +1152,49 @@ pub(crate) fn do_load<B: SystemBus>(
         LoadKind::Ld => 8,
     };
 
+    let offset_in_page = virtual_address & 0xFFF;
+    if offset_in_page + size <= 0x1000
+        && let Some(host_page) =
+            ctx.mmu
+                .load_fast_lookup(virtual_address, satp, ctx.bus.ram_epoch())
+    {
+        perf::note_load_fast_hit();
+
+        let raw = unsafe {
+            let p = host_page.add(offset_in_page as usize);
+            match size {
+                1 => *p as u64,
+                2 => u16::from_le((p as *const u16).read_unaligned()) as u64,
+                4 => u32::from_le((p as *const u32).read_unaligned()) as u64,
+                _ => u64::from_le((p as *const u64).read_unaligned()),
+            }
+        };
+
+        #[cfg(debug_assertions)]
+        {
+            let shadow = raw_load(ctx.mmu, ctx.bus, satp, virtual_address, size)
+                .expect("load fast-path hit but slow path faulted");
+            assert_eq!(
+                raw, shadow,
+                "load fast path diverged at va={virtual_address:#x} size={size}"
+            );
+        }
+
+        return Ok(extend_load(kind, raw));
+    }
+
+    do_load_slow(ctx, satp, kind, virtual_address, size)
+}
+
+#[cold]
+#[inline(never)]
+fn do_load_slow<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    satp: u64,
+    kind: LoadKind,
+    virtual_address: u64,
+    size: u64,
+) -> Result<u64, ()> {
     let raw = match raw_load(ctx.mmu, ctx.bus, satp, virtual_address, size) {
         Ok(v) => v,
         Err(f) => {
@@ -1159,7 +1203,12 @@ pub(crate) fn do_load<B: SystemBus>(
         }
     };
 
-    Ok(match kind {
+    Ok(extend_load(kind, raw))
+}
+
+#[inline(always)]
+fn extend_load(kind: LoadKind, raw: u64) -> u64 {
+    match kind {
         LoadKind::Lb => raw as u8 as i8 as i64 as u64,
         LoadKind::Lbu => raw as u8 as u64,
         LoadKind::Lh => raw as u16 as i16 as i64 as u64,
@@ -1167,7 +1216,7 @@ pub(crate) fn do_load<B: SystemBus>(
         LoadKind::Lw => raw as u32 as i32 as i64 as u64,
         LoadKind::Lwu => raw as u32 as u64,
         LoadKind::Ld => raw,
-    })
+    }
 }
 
 pub(crate) fn do_store<B: SystemBus>(

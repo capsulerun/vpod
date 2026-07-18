@@ -1,4 +1,5 @@
 // External communication linking the hart to RAM and peripherals (disk, network).
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub trait SystemBus {
     fn read_byte(&mut self, address: u64) -> u8;
@@ -10,11 +11,23 @@ pub trait SystemBus {
     fn write_halfword(&mut self, address: u64, val: u16);
     fn write_word(&mut self, address: u64, val: u32);
     fn write_doubleword(&mut self, address: u64, val: u64);
+
+    fn ram_load_page(&mut self, address: u64) -> Option<*const u8> {
+        let _ = address;
+        None
+    }
+
+    fn ram_epoch(&self) -> u64 {
+        0
+    }
 }
+
+static FLAT_EPOCH_SOURCE: AtomicU64 = AtomicU64::new(1);
 
 pub struct FlatMemory {
     data: Vec<u8>,
     mask: u64,
+    epoch: u64,
 }
 
 impl FlatMemory {
@@ -26,6 +39,7 @@ impl FlatMemory {
         Self {
             data: vec![0u8; size_bytes],
             mask: (size_bytes - 1) as u64,
+            epoch: FLAT_EPOCH_SOURCE.fetch_add(1, Ordering::Relaxed),
         }
     }
 
@@ -85,5 +99,18 @@ impl SystemBus for FlatMemory {
     fn write_doubleword(&mut self, address: u64, val: u64) {
         let i = self.idx(address);
         self.data[i..i + 8].copy_from_slice(&val.to_le_bytes());
+    }
+
+    fn ram_load_page(&mut self, address: u64) -> Option<*const u8> {
+        if self.data.len() < 0x1000 {
+            return None;
+        }
+
+        let page_index = self.idx(address) & !0xfff;
+        Some(self.data[page_index..].as_ptr())
+    }
+
+    fn ram_epoch(&self) -> u64 {
+        self.epoch
     }
 }
