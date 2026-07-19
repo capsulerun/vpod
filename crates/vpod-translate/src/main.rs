@@ -281,9 +281,10 @@ fn emit_block(out: &mut String, pa: u64, entry_seen: &BTreeSet<u64>, blk: &Block
                 if let Some(dst) = regs.write_target(out, rd) {
                     writeln!(out, "    {dst} = {pc}.wrapping_add({ilen});").unwrap();
                 }
+
                 writeln!(
                     out,
-                    "    {}ctx.regs.pc = target;\n    ctx.csr.instret = ctx.csr.instret.wrapping_add({});\n    return ({}, u64::MAX);",
+                    "    {}ctx.regs.pc = target;\n    ctx.csr.instret = ctx.csr.instret.wrapping_add({});\n    return ({}, if target >> 12 == entry_pc >> 12 {{ target }} else {{ u64::MAX }});",
                     regs.writeback(),
                     retired + 1 - flushed,
                     retired + 1
@@ -685,9 +686,10 @@ fn main() {
         std::process::exit(1);
     }
 
-    let mut max_blocks: usize = 4096;
-    let mut hot_blocks: usize = 8192;
-    let mut coverage: f64 = 99.0;
+
+    let mut max_blocks: usize = 16384;
+    let mut hot_blocks: usize = 4096;
+    let mut coverage: f64 = 100.0;
     let mut i = 4;
     while i < args.len() {
         match args[i].as_str() {
