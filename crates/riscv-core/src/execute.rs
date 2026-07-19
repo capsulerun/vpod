@@ -19,6 +19,61 @@ use crate::aot;
 pub const ICACHE_SIZE: usize = 4096;
 const ICACHE_TAG_SHIFT: u32 = 1 + ICACHE_SIZE.trailing_zeros();
 
+pub const FETCH_TLB_SIZE: usize = 256;
+
+#[derive(Clone, Copy)]
+pub struct FetchTlbEntry {
+    pub vpage: u64,
+    pub ppage: u64,
+    pub satp: u64,
+}
+
+pub struct FetchTlb {
+    pub entries: Box<[FetchTlbEntry; FETCH_TLB_SIZE]>,
+}
+
+impl FetchTlb {
+    pub fn new() -> Self {
+        Self {
+            entries: Box::new(
+                [FetchTlbEntry {
+                    vpage: u64::MAX,
+                    ppage: 0,
+                    satp: u64::MAX,
+                }; FETCH_TLB_SIZE],
+            ),
+        }
+    }
+
+    #[inline(always)]
+    pub fn lookup(&self, vpage: u64, satp: u64) -> Option<u64> {
+        let entry = &self.entries[(vpage as usize) & (FETCH_TLB_SIZE - 1)];
+        if entry.vpage == vpage && entry.satp == satp {
+            Some(entry.ppage)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn insert(&mut self, vpage: u64, ppage: u64, satp: u64) {
+        self.entries[(vpage as usize) & (FETCH_TLB_SIZE - 1)] =
+            FetchTlbEntry { vpage, ppage, satp };
+    }
+
+    pub fn flush(&mut self) {
+        for entry in self.entries.iter_mut() {
+            entry.vpage = u64::MAX;
+        }
+    }
+}
+
+impl Default for FetchTlb {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 const OP_LUI: u32 = 0x37;
 const OP_AUIPC: u32 = 0x17;
 const OP_JAL: u32 = 0x6f;
@@ -68,9 +123,7 @@ pub struct ExecContext<'a, B: SystemBus> {
     pub bus: &'a mut B,
     pub priv_mode: &'a mut PrivMode,
     pub lr_addr: &'a mut Option<u64>,
-    pub fetch_vpage: &'a mut u64,
-    pub fetch_ppage: &'a mut u64,
-    pub fetch_satp: &'a mut u64,
+    pub fetch_tlb: &'a mut FetchTlb,
 
     pub icache_tags: &'a mut Box<[u64; ICACHE_SIZE]>,
     pub icache_data: &'a mut Box<[u32; ICACHE_SIZE]>,
@@ -79,7 +132,7 @@ pub struct ExecContext<'a, B: SystemBus> {
 }
 
 fn invalidate_fetch_cache<B: SystemBus>(ctx: &mut ExecContext<B>) {
-    *ctx.fetch_vpage = u64::MAX;
+    ctx.fetch_tlb.flush();
 
     ctx.icache_tags.fill(u64::MAX);
 }
@@ -105,7 +158,7 @@ fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
                 continue;
             }
 
-            *ctx.fetch_vpage = u64::MAX;
+            ctx.fetch_tlb.flush();
             *ctx.is_waiting = false;
             match take_interrupt(ctx, irq) {
                 StepResult::Ok => {}
@@ -120,16 +173,22 @@ fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
         let effective_satp = block::effective_satp(*ctx.priv_mode, ctx.csr.satp);
 
         let virtual_page = pc >> 12;
-        let fetch_pa = if virtual_page == *ctx.fetch_vpage && effective_satp == *ctx.fetch_satp {
+        let fetch_pa = if let Some(ppage) = ctx.fetch_tlb.lookup(virtual_page, effective_satp) {
             perf::note_fetch_page_hit();
-            (*ctx.fetch_ppage << 12) | (pc & 0xfff)
+            #[cfg(debug_assertions)]
+            debug_assert_eq!(
+                ctx.mmu
+                    .translate_fetch(pc, effective_satp, ctx.bus)
+                    .map(|pa| pa >> 12),
+                Ok(ppage),
+                "fetch TLB hit disagrees with slow-path translation"
+            );
+            (ppage << 12) | (pc & 0xfff)
         } else {
             perf::note_fetch_translate();
             match ctx.mmu.translate_fetch(pc, effective_satp, ctx.bus) {
                 Ok(pa) => {
-                    *ctx.fetch_vpage = virtual_page;
-                    *ctx.fetch_ppage = pa >> 12;
-                    *ctx.fetch_satp = effective_satp;
+                    ctx.fetch_tlb.insert(virtual_page, pa >> 12, effective_satp);
                     pa
                 }
                 Err(fault) => {
@@ -232,6 +291,7 @@ fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
 }
 
 #[cfg(feature = "aot")]
+#[inline(always)]
 pub(crate) fn aot_page_key<B: SystemBus>(ctx: &mut ExecContext<B>, fetch_pa: u64) -> Option<u64> {
     use crate::block::AotResolve;
 
@@ -239,18 +299,27 @@ pub(crate) fn aot_page_key<B: SystemBus>(ctx: &mut ExecContext<B>, fetch_pa: u64
     match ctx.blocks.aot_resolve(page) {
         AotResolve::Hit(orig) => Some((orig << 12) | (fetch_pa & 0xfff)),
         AotResolve::Miss => None,
-        AotResolve::Unknown => {
-            let base = page << 12;
-            let mut hash = 0xcbf2_9ce4_8422_2325u64;
-            for i in 0..512u64 {
-                hash ^= ctx.bus.read_doubleword(base + i * 8);
-                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-            }
-            ctx.blocks
-                .aot_record_hash(page, hash)
-                .map(|orig| (orig << 12) | (fetch_pa & 0xfff))
-        }
+        AotResolve::Unknown => aot_page_key_hash(ctx, fetch_pa, page),
     }
+}
+
+#[cfg(feature = "aot")]
+#[cold]
+#[inline(never)]
+fn aot_page_key_hash<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    fetch_pa: u64,
+    page: u64,
+) -> Option<u64> {
+    let base = page << 12;
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for i in 0..512u64 {
+        hash ^= ctx.bus.read_doubleword(base + i * 8);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    ctx.blocks
+        .aot_record_hash(page, hash)
+        .map(|orig| (orig << 12) | (fetch_pa & 0xfff))
 }
 
 pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
@@ -258,7 +327,7 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
         if irq == 7 && ctx.bus.timer_interrupt_pending() == Some(false) {
             ctx.csr.mip &= !MIP_MTIP;
         } else {
-            *ctx.fetch_vpage = u64::MAX;
+            ctx.fetch_tlb.flush();
             *ctx.is_waiting = false;
             return take_interrupt(ctx, irq);
         }
@@ -273,17 +342,16 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
 
     let virtual_page = pc >> 12;
     let fetch_physical_address =
-        if virtual_page == *ctx.fetch_vpage && effective_satp == *ctx.fetch_satp {
-            (*ctx.fetch_ppage << 12) | (pc & 0xfff)
+        if let Some(ppage) = ctx.fetch_tlb.lookup(virtual_page, effective_satp) {
+            (ppage << 12) | (pc & 0xfff)
         } else {
             let physical_address = match ctx.mmu.translate_fetch(pc, effective_satp, ctx.bus) {
                 Ok(pa) => pa,
                 Err(fault) => return trap_from_mmu(ctx, fault),
             };
 
-            *ctx.fetch_vpage = virtual_page;
-            *ctx.fetch_ppage = physical_address >> 12;
-            *ctx.fetch_satp = effective_satp;
+            ctx.fetch_tlb
+                .insert(virtual_page, physical_address >> 12, effective_satp);
             physical_address
         };
 
@@ -299,9 +367,8 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
                 Err(f) => return trap_from_mmu(ctx, f),
             };
 
-            *ctx.fetch_vpage = next_pc >> 12;
-            *ctx.fetch_ppage = next_pa >> 12;
-            *ctx.fetch_satp = effective_satp;
+            ctx.fetch_tlb
+                .insert(next_pc >> 12, next_pa >> 12, effective_satp);
             let hi = ctx.bus.read_halfword(next_pa) as u32;
 
             lo | (hi << 16)

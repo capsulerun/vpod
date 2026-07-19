@@ -1,6 +1,6 @@
 use crate::block::BlockCache;
 use crate::csr::{Csr, PrivMode};
-use crate::execute::{self, ExecContext};
+use crate::execute::{self, ExecContext, FetchTlb};
 
 use crate::execute::ICACHE_SIZE;
 
@@ -15,9 +15,7 @@ pub struct Hart {
     pub mmu: Mmu,
     pub priv_mode: PrivMode,
     pub lr_addr: Option<u64>,
-    pub fetch_vpage: u64,
-    pub fetch_ppage: u64,
-    pub fetch_satp: u64,
+    pub fetch_tlb: FetchTlb,
 
     pub icache_tags: Box<[u64; ICACHE_SIZE]>,
     pub icache_data: Box<[u32; ICACHE_SIZE]>,
@@ -33,9 +31,7 @@ impl Hart {
             mmu: Mmu::new(),
             priv_mode: PrivMode::M,
             lr_addr: None,
-            fetch_vpage: u64::MAX,
-            fetch_ppage: 0,
-            fetch_satp: u64::MAX,
+            fetch_tlb: FetchTlb::new(),
 
             icache_tags: Box::new([u64::MAX; ICACHE_SIZE]),
             icache_data: Box::new([0u32; ICACHE_SIZE]),
@@ -57,9 +53,7 @@ impl Hart {
             bus,
             priv_mode: &mut self.priv_mode,
             lr_addr: &mut self.lr_addr,
-            fetch_vpage: &mut self.fetch_vpage,
-            fetch_ppage: &mut self.fetch_ppage,
-            fetch_satp: &mut self.fetch_satp,
+            fetch_tlb: &mut self.fetch_tlb,
 
             icache_tags: &mut self.icache_tags,
             icache_data: &mut self.icache_data,
@@ -79,9 +73,7 @@ impl Hart {
             bus,
             priv_mode: &mut self.priv_mode,
             lr_addr: &mut self.lr_addr,
-            fetch_vpage: &mut self.fetch_vpage,
-            fetch_ppage: &mut self.fetch_ppage,
-            fetch_satp: &mut self.fetch_satp,
+            fetch_tlb: &mut self.fetch_tlb,
             icache_tags: &mut self.icache_tags,
             icache_data: &mut self.icache_data,
             is_waiting: &mut self.is_waiting,
@@ -99,9 +91,7 @@ impl Hart {
             bus,
             priv_mode: &mut self.priv_mode,
             lr_addr: &mut self.lr_addr,
-            fetch_vpage: &mut self.fetch_vpage,
-            fetch_ppage: &mut self.fetch_ppage,
-            fetch_satp: &mut self.fetch_satp,
+            fetch_tlb: &mut self.fetch_tlb,
             icache_tags: &mut self.icache_tags,
             icache_data: &mut self.icache_data,
             is_waiting: &mut self.is_waiting,

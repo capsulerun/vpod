@@ -348,9 +348,9 @@ fn save_hart(hart: &Hart, writer: &mut impl Write) -> io::Result<()> {
         }
     }
 
-    writer.write_all(&hart.fetch_vpage.to_le_bytes())?;
-    writer.write_all(&hart.fetch_ppage.to_le_bytes())?;
-    writer.write_all(&hart.fetch_satp.to_le_bytes())?;
+    writer.write_all(&u64::MAX.to_le_bytes())?;
+    writer.write_all(&0u64.to_le_bytes())?;
+    writer.write_all(&u64::MAX.to_le_bytes())?;
 
     save_csr(hart, writer)
 }
@@ -387,14 +387,25 @@ fn restore_hart(hart: &mut Hart, reader: &mut impl Read) -> io::Result<()> {
         Some(u64::from_le_bytes(buffer_u64))
     };
 
-    reader.read_exact(&mut buffer_u64)?;
-    hart.fetch_vpage = u64::from_le_bytes(buffer_u64);
+    let mut cached_vpage = [0u8; 8];
+    reader.read_exact(&mut cached_vpage)?;
 
-    reader.read_exact(&mut buffer_u64)?;
-    hart.fetch_ppage = u64::from_le_bytes(buffer_u64);
+    let mut cached_ppage = [0u8; 8];
+    reader.read_exact(&mut cached_ppage)?;
 
-    reader.read_exact(&mut buffer_u64)?;
-    hart.fetch_satp = u64::from_le_bytes(buffer_u64);
+    let mut cached_satp = [0u8; 8];
+    reader.read_exact(&mut cached_satp)?;
+
+    hart.fetch_tlb.flush();
+
+    let vpage = u64::from_le_bytes(cached_vpage);
+    if vpage != u64::MAX {
+        hart.fetch_tlb.insert(
+            vpage,
+            u64::from_le_bytes(cached_ppage),
+            u64::from_le_bytes(cached_satp),
+        );
+    }
 
     hart.invalidate_icache();
 

@@ -411,7 +411,7 @@ pub fn decode_block<B: SystemBus>(bus: &mut B, physical_address: u64) -> Option<
             }
         };
 
-        let terminator = matches!(op, Op::Branch { .. } | Op::Jal { .. } | Op::Jalr { .. });
+        let terminator = matches!(op, Op::Jal { .. } | Op::Jalr { .. });
         ops.push(DecodedInsn {
             op,
             pc_off: offset_in_block as u16,
@@ -1122,15 +1122,11 @@ pub fn exec_block<B: SystemBus>(
                     BranchKind::Bgeu => a >= b,
                 };
 
-                ctx.regs.pc = if taken {
-                    pc.wrapping_add(offset as u64)
-                } else {
-                    pc.wrapping_add(decoded_instruction.ilen as u64)
-                };
-
-                ctx.csr.instret = ctx.csr.instret.wrapping_add(pending + 1);
-
-                return (retired_instructions + 1, StepResult::Ok);
+                if taken {
+                    ctx.regs.pc = pc.wrapping_add(offset as u64);
+                    ctx.csr.instret = ctx.csr.instret.wrapping_add(pending + 1);
+                    return (retired_instructions + 1, StepResult::Ok);
+                }
             }
             Op::Jal { rd, offset } => {
                 ctx.regs.write(
