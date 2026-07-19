@@ -378,6 +378,7 @@ else
     AOT_TRACE="$ROOT/dist/.aot-trace.txt"
     VPOD_AOT_TRACE="$AOT_TRACE" "$VPOD" --snapshot-load "$SNAP" \
         --setup "python3 -c 'print(sum(i*i for i in range(200000)))'" \
+        --setup "python3 -c 'exec(\"s=0\nfor i in range(200000): s=(s+i*i)^(i&0xff)\nprint(s)\")'" \
         --setup "python3 -c 'import json,os; print(json.dumps({\"cwd\": os.getcwd()}))'" \
         --setup "i=0; while [ \$i -lt 100 ]; do echo x > /tmp/aot-\$i; i=\$((\$i+1)); done; cat /tmp/aot-* | wc -l; rm -f /tmp/aot-*" \
         --setup "uv venv /tmp/aot-venv && rm -rf /tmp/aot-venv"

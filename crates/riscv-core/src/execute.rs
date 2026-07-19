@@ -943,9 +943,6 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                 ctx.csr.mstatus |= MSTATUS_SPIE;
                 *ctx.priv_mode = PrivMode::from_bits(spp);
                 ctx.regs.pc = ctx.csr.sepc;
-                ctx.mmu.flush();
-
-                invalidate_fetch_cache(ctx);
                 return StepResult::Ok;
             }
             0x302 => {
@@ -963,9 +960,6 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                 ctx.csr.mstatus |= MSTATUS_MPIE;
                 *ctx.priv_mode = PrivMode::from_bits(mpp);
                 ctx.regs.pc = ctx.csr.mepc;
-                ctx.mmu.flush();
-
-                invalidate_fetch_cache(ctx);
                 return StepResult::Ok;
             }
             0x105 => {
@@ -1539,8 +1533,6 @@ fn take_interrupt<B: SystemBus>(ctx: &mut ExecContext<B>, irq_bit: u64) -> StepR
         ctx.regs.pc = ctx.csr.mtvec & !3;
     }
 
-    ctx.mmu.flush();
-    invalidate_fetch_cache(ctx);
     StepResult::Ok
 }
 
@@ -1577,8 +1569,6 @@ pub fn take_exception<B: SystemBus>(ctx: &mut ExecContext<B>, cause: u64, tval: 
         ctx.regs.pc = ctx.csr.mtvec & !3;
     }
 
-    ctx.mmu.flush();
-    invalidate_fetch_cache(ctx);
 }
 
 // Zbb: orc.b
