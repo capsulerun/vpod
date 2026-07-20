@@ -552,7 +552,7 @@ fn gen_program(rng: &mut Rng, data_page: u32, code_page: u32) -> Vec<u32> {
 
     while insns.len() < PROGRAM_INSNS {
         let remaining = PROGRAM_INSNS - insns.len();
-        let insn = match rng.below(11) {
+        let insn = match rng.below(12) {
             // alu imm
             0..=2 => {
                 let f3 = [0u32, 2, 3, 4, 6, 7][rng.below(6) as usize];
@@ -582,7 +582,11 @@ fn gen_program(rng: &mut Rng, data_page: u32, code_page: u32) -> Vec<u32> {
                     (5, 1),
                     (6, 1),
                     (7, 1),
-                ][rng.below(15) as usize];
+                    // Zba: sh1add / sh2add / sh3add
+                    (2, 0x10),
+                    (4, 0x10),
+                    (6, 0x10),
+                ][rng.below(18) as usize];
                 r_type(0x33, f3, f7, rand_rd(rng), rand_rd(rng), rand_rd(rng))
             }
             // lui / auipc
@@ -608,6 +612,23 @@ fn gen_program(rng: &mut Rng, data_page: u32, code_page: u32) -> Vec<u32> {
                 let offset = (4 + 4 * rng.below(max_skip as u64) as u32) & 0x1ffe;
                 b_type(f3, rand_rd(rng), rand_rd(rng), offset)
             }
+            // Zba
+            10 => match rng.below(3) {
+                0 => {
+                    let f3 = [0u32, 2, 4, 6][rng.below(4) as usize];
+                    let f7 = if f3 == 0 { 0x04 } else { 0x10 };
+                    r_type(0x3b, f3, f7, rand_rd(rng), rand_rd(rng), rand_rd(rng))
+                }
+                1 => {
+                    // slli.uw carries funct6 = 0x02 above its 6-bit shamt.
+                    let shamt = rng.below(64) as u32;
+                    i_type(0x1b, 1, rand_rd(rng), rand_rd(rng), (0x02 << 6) | shamt)
+                }
+                _ => {
+                    let rs2 = if rng.below(4) == 0 { rand_rd(rng) } else { 0 };
+                    r_type(0x3b, 4, 0x04, rand_rd(rng), rand_rd(rng), rs2)
+                }
+            },
             // self-modifying store
             _ => {
                 let target_insn =

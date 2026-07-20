@@ -65,6 +65,14 @@ pub enum AluKind {
     ZextH,
     Rev8,
     OrcB,
+    Sh1add,
+    Sh2add,
+    Sh3add,
+    AddUw,
+    Sh1addUw,
+    Sh2addUw,
+    Sh3addUw,
+    SlliUw,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -196,9 +204,6 @@ pub enum AotResolve {
 
 const AOT_UNKNOWN: u64 = u64::MAX;
 const AOT_MISS: u64 = u64::MAX - 1;
-/// 1M pages = 4GiB of physical address space; the table tops out at 8MiB.
-/// Execution from beyond that (no realistic RAM layout reaches it) simply
-/// never aliases to translated code.
 const AOT_TABLE_MAX_PAGES: u64 = 1 << 20;
 
 impl Default for BlockCache {
@@ -227,19 +232,12 @@ impl BlockCache {
         }
     }
 
-    /// Register the content hashes of translated pages. Runtime pages are
-    /// aliased to translated pages lazily, by hashing their content on first
-    /// execution (`aot_record_hash`) — guest physical placement varies run to
-    /// run, so physical addresses alone cannot key translations.
     pub fn aot_init(&mut self, hashes: &[(u64, u64)]) {
         self.aot_hashes = hashes.iter().copied().collect();
         self.aot_page_table.clear();
         self.aot_evict_generation = self.aot_evict_generation.wrapping_add(1);
     }
 
-    /// Resolve a runtime page to its translated (original) page, if any.
-    /// `Unknown` means the page has not been hashed yet — the caller hashes
-    /// its content and calls `aot_record_hash`.
     #[inline(always)]
     pub fn aot_resolve(&mut self, page: u64) -> AotResolve {
         match self.aot_page_table.get(page as usize) {
@@ -316,14 +314,10 @@ impl BlockCache {
         }
 
         self.page_bitmap[word] |= 1 << (page % 64);
-        // A page gained code (cached block or AOT alias record): store
-        // fast-path entries may no longer skip notify_store for it.
+
         self.code_generation = self.code_generation.wrapping_add(1);
     }
 
-    /// Bumped whenever any page gains cached blocks or an AOT alias record.
-    /// The store fast path is only valid while this is unchanged, since a
-    /// fast-path store skips `notify_store`.
     #[inline(always)]
     pub fn code_generation(&self) -> u64 {
         self.code_generation
@@ -578,7 +572,8 @@ fn decode_full(raw: u32) -> Option<Op> {
                         1 => Some((AluKind::Ctzw, 0)),
                         2 => Some((AluKind::Cpopw, 0)),
                         _ => None,
-                    },
+
+                    0x04 | 0x05 => Some((AluKind::SlliUw, imm & 0x3f)),
                     _ => None,
                 },
                 0x5 => match funct7 {
@@ -620,7 +615,10 @@ fn decode_full(raw: u32) -> Option<Op> {
                 (0x5, 0x05) => AluKind::Max,
                 (0x6, 0x05) => AluKind::Minu,
                 (0x7, 0x05) => AluKind::Maxu,
-                (0x4, 0x04) => AluKind::ZextH,
+                // Zba: shifted add
+                (0x2, 0x10) => AluKind::Sh1add,
+                (0x4, 0x10) => AluKind::Sh2add,
+                (0x6, 0x10) => AluKind::Sh3add,
                 _ => return None,
             };
             Some(Op::AluReg { kind, rd, rs1, rs2 })
@@ -639,6 +637,13 @@ fn decode_full(raw: u32) -> Option<Op> {
                 (0x7, 0x01) => AluKind::Remuw,
                 (0x1, 0x30) => AluKind::Rolw,
                 (0x5, 0x30) => AluKind::Rorw,
+                // Zbb: zext.h is `packw rd, rs1, x0`, so it only decodes with rs2 == 0.
+                (0x4, 0x04) if rs2 == 0 => AluKind::ZextH,
+                // Zba: zero-extended shifted add
+                (0x0, 0x04) => AluKind::AddUw,
+                (0x2, 0x10) => AluKind::Sh1addUw,
+                (0x4, 0x10) => AluKind::Sh2addUw,
+                (0x6, 0x10) => AluKind::Sh3addUw,
                 _ => return None,
             };
 
@@ -1040,6 +1045,15 @@ pub(crate) fn alu(kind: AluKind, lhs: u64, rhs: u64) -> u64 {
         AluKind::SextH => lhs as i16 as i64 as u64,
         AluKind::ZextH => lhs as u16 as u64,
         AluKind::Rev8 => lhs.swap_bytes(),
+        // Zba
+        AluKind::Sh1add => (lhs << 1).wrapping_add(rhs),
+        AluKind::Sh2add => (lhs << 2).wrapping_add(rhs),
+        AluKind::Sh3add => (lhs << 3).wrapping_add(rhs),
+        AluKind::AddUw => (lhs as u32 as u64).wrapping_add(rhs),
+        AluKind::Sh1addUw => ((lhs as u32 as u64) << 1).wrapping_add(rhs),
+        AluKind::Sh2addUw => ((lhs as u32 as u64) << 2).wrapping_add(rhs),
+        AluKind::Sh3addUw => ((lhs as u32 as u64) << 3).wrapping_add(rhs),
+        AluKind::SlliUw => (lhs as u32 as u64) << (rhs & 0x3f),
         AluKind::OrcB => {
             let mut result = 0u64;
             for i in 0..8 {
@@ -1165,8 +1179,12 @@ pub fn exec_block<B: SystemBus>(
                     return (retired_instructions, result);
                 }
 
-                // A CSR write may have changed satp or the privilege mode.
-                satp = effective_satp(*ctx.priv_mode, ctx.csr.satp);
+
+                let new_satp = effective_satp(*ctx.priv_mode, ctx.csr.satp);
+                if new_satp != satp {
+                    return (retired_instructions, result);
+                }
+                satp = new_satp;
                 continue;
             }
         }
@@ -1451,6 +1469,55 @@ mod tests {
             mem.load_at(addr as usize, &w.to_le_bytes());
         }
         mem
+    }
+
+    const ZBA_PROGRAM: &[(u64, u32)] = &[
+        (0x00, 0x00500093), // addi    x1, x0, 5
+        (0x04, 0x06400113), // addi    x2, x0, 100
+        (0x08, 0x2020a233), // sh1add  x4, x1, x2
+        (0x0c, 0x2020c2b3), // sh2add  x5, x1, x2
+        (0x10, 0x2020e1b3), // sh3add  x3, x1, x2
+        (0x14, 0xfff00313), // addi    x6, x0, -1
+        (0x18, 0x082303bb), // add.uw  x7, x6, x2
+        (0x1c, 0x0843141b), // slli.uw x8, x6, 4
+        (0x20, 0x202364bb), // sh3add.uw x9, x6, x2
+        (0x24, 0x0803453b), // zext.h  x10, x6
+        (0x28, 0x00000073), // ecall
+    ];
+
+    const ZBA_EXPECTED: &[(usize, u64)] = &[
+        (4, 110),          // (5 << 1) + 100
+        (5, 120),          // (5 << 2) + 100
+        (3, 140),          // (5 << 3) + 100
+        (7, 0x1_0000_0063), // zext32(-1) + 100
+        (8, 0xf_ffff_fff0), // zext32(-1) << 4
+        (9, 0x8_0000_005c), // (zext32(-1) << 3) + 100
+        (10, 0xffff),       // zext.h(-1)
+    ];
+
+    #[test]
+    fn zba_block_path() {
+        let mut mem = mem_with(ZBA_PROGRAM);
+        let mut hart = Hart::new(0);
+
+        assert_eq!(hart.run(&mut mem, 32), StepResult::Ok);
+        assert_eq!(hart.regs.pc, 0x28);
+        for &(reg, want) in ZBA_EXPECTED {
+            assert_eq!(hart.regs.read(reg), want, "x{reg} on the block path");
+        }
+    }
+
+    #[test]
+    fn zba_step_path_matches_block_path() {
+        let mut mem = mem_with(ZBA_PROGRAM);
+        let mut hart = Hart::new(0);
+
+        while hart.regs.pc != 0x28 {
+            assert_eq!(hart.step(&mut mem), StepResult::Ok);
+        }
+        for &(reg, want) in ZBA_EXPECTED {
+            assert_eq!(hart.regs.read(reg), want, "x{reg} on the single-step path");
+        }
     }
 
     #[test]

@@ -97,8 +97,11 @@ fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, verbose: bool) -> Vec<
         if hart.is_waiting {
             hart.is_waiting = false;
 
-            if !bus.net_rx_pending() {
+            if !bus.net_rx_pending() && !bus.net_has_active_connections() {
                 bus.clint.fast_forward_to_timer();
+            } else if !bus.net_rx_pending() {
+                std::thread::sleep(std::time::Duration::from_micros(200));
+                bus.clint.advance_by_nanos(200_000);
             }
         }
         let interval = if bus.net_rx_pending() { 4096 } else { STEP };
@@ -167,8 +170,11 @@ fn python_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
         if hart.is_waiting {
             hart.is_waiting = false;
 
-            if !bus.net_rx_pending() {
+            if !bus.net_rx_pending() && !bus.net_has_active_connections() {
                 bus.clint.fast_forward_to_timer();
+            } else if !bus.net_rx_pending() {
+                std::thread::sleep(std::time::Duration::from_micros(200));
+                bus.clint.advance_by_nanos(200_000);
             }
         }
 

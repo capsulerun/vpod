@@ -677,29 +677,34 @@ fn exec_full<B: SystemBus>(
             let shamt = (imm & 0x1f) as u32;
             let funct7 = inst.funct7();
 
-            let val: i32 = match inst.funct3() {
-                0x0 => rs1.wrapping_add(imm as u32) as i32,
-                0x1 => match funct7 {
-                    0x00 => (rs1 << shamt) as i32, // slliw
-                    0x30 => match shamt {
-                        // Zbb: clzw/ctzw/cpopw
-                        0 => rs1.leading_zeros() as i32,  // clzw
-                        1 => rs1.trailing_zeros() as i32, // ctzw
-                        2 => rs1.count_ones() as i32,     // cpopw
+            let val: u64 = if inst.funct3() == 0x1 && (funct7 == 0x04 || funct7 == 0x05) {
+                (rs1 as u64) << ((imm & 0x3f) as u32)
+            } else {
+                let word: i32 = match inst.funct3() {
+                    0x0 => rs1.wrapping_add(imm as u32) as i32,
+                    0x1 => match funct7 {
+                        0x00 => (rs1 << shamt) as i32, // slliw
+                        0x30 => match shamt {
+                            // Zbb: clzw/ctzw/cpopw
+                            0 => rs1.leading_zeros() as i32,  // clzw
+                            1 => rs1.trailing_zeros() as i32, // ctzw
+                            2 => rs1.count_ones() as i32,     // cpopw
+                            _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+                        },
+                        _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+                    },
+                    0x5 => match funct7 {
+                        0x00 => (rs1 >> shamt) as i32,          // srliw
+                        0x20 => (rs1 as i32) >> shamt,          // sraiw
+                        0x30 => rs1.rotate_right(shamt) as i32, // roriw (Zbb)
                         _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
                     },
                     _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
-                },
-                0x5 => match funct7 {
-                    0x00 => (rs1 >> shamt) as i32,          // srliw
-                    0x20 => (rs1 as i32) >> shamt,          // sraiw
-                    0x30 => rs1.rotate_right(shamt) as i32, // roriw (Zbb)
-                    _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
-                },
-                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+                };
+                word as i64 as u64
             };
 
-            ctx.regs.write(inst.rd(), val as i64 as u64);
+            ctx.regs.write(inst.rd(), val);
             ctx.regs.pc = pc.wrapping_add(4);
         }
 
@@ -752,8 +757,10 @@ fn exec_full<B: SystemBus>(
                 } // max
                 (0x6, 0x05) => rs1.min(rs2), // minu
                 (0x7, 0x05) => rs1.max(rs2), // maxu
-                // Zbb: zext.h (pack rs2=x0, funct7=0x04)
-                (0x4, 0x04) => rs1 as u16 as u64, // zext.h
+                // Zba: shifted add
+                (0x2, 0x10) => (rs1 << 1).wrapping_add(rs2), // sh1add
+                (0x4, 0x10) => (rs1 << 2).wrapping_add(rs2), // sh2add
+                (0x6, 0x10) => (rs1 << 3).wrapping_add(rs2), // sh3add
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
 
@@ -781,6 +788,13 @@ fn exec_full<B: SystemBus>(
                 (0x5, 0x30) => {
                     ((rs1 as u32).rotate_right((rs2 & 0x1f) as u32)) as i32 as i64 as u64
                 }
+                // Zbb: zext.h is `packw rd, rs1, x0`, so it only decodes with rs2 == 0.
+                (0x4, 0x04) if inst.rs2() == 0 => rs1 as u16 as u64,
+                // Zba: zero-extended shifted add
+                (0x0, 0x04) => (rs1 as u32 as u64).wrapping_add(rs2), // add.uw
+                (0x2, 0x10) => ((rs1 as u32 as u64) << 1).wrapping_add(rs2), // sh1add.uw
+                (0x4, 0x10) => ((rs1 as u32 as u64) << 2).wrapping_add(rs2), // sh2add.uw
+                (0x6, 0x10) => ((rs1 as u32 as u64) << 3).wrapping_add(rs2), // sh3add.uw
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
 
