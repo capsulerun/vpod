@@ -565,6 +565,9 @@ fn decode_full(raw: u32) -> Option<Op> {
 
             let kind_imm = match funct3 {
                 0x0 => Some((AluKind::Addw, imm)),
+                0x1 if funct7 == 0x04 || funct7 == 0x05 => {
+                    Some((AluKind::SlliUw, imm & 0x3f))
+                }
                 0x1 => match funct7 {
                     0x00 => Some((AluKind::Sllw, shamt)),
                     0x30 => match shamt {
@@ -572,8 +575,7 @@ fn decode_full(raw: u32) -> Option<Op> {
                         1 => Some((AluKind::Ctzw, 0)),
                         2 => Some((AluKind::Cpopw, 0)),
                         _ => None,
-
-                    0x04 | 0x05 => Some((AluKind::SlliUw, imm & 0x3f)),
+                    },
                     _ => None,
                 },
                 0x5 => match funct7 {
