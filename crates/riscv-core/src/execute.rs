@@ -1582,7 +1582,6 @@ pub fn take_exception<B: SystemBus>(ctx: &mut ExecContext<B>, cause: u64, tval: 
         *ctx.priv_mode = PrivMode::M;
         ctx.regs.pc = ctx.csr.mtvec & !3;
     }
-
 }
 
 // Zbb: orc.b

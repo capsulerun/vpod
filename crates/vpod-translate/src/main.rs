@@ -707,7 +707,6 @@ fn main() {
         std::process::exit(1);
     }
 
-
     let mut max_blocks: usize = 16384;
     let mut hot_blocks: usize = 4096;
     let mut coverage: f64 = 100.0;

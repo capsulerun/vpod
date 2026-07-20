@@ -13,14 +13,12 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ALPINE_VERSION="3.23.0"
 OUT="$ROOT/dist/rootfs.cpio.gz"
 RAM_MB=512
-NO_AOT=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --version) ALPINE_VERSION="$2"; shift 2 ;;
         --out)     OUT="$2";            shift 2 ;;
         --ram)     RAM_MB="$2";         shift 2 ;;
-        --no-aot)  NO_AOT=1;            shift ;;
         *) echo "unknown arg: $1"; exit 1 ;;
     esac
 done
@@ -380,35 +378,11 @@ if ! grep -q VPOD_PYD_READY "$BUILD_LOG"; then
 fi
 rm -f "$BUILD_LOG"
 
-if [ "$NO_AOT" = "1" ]; then
-    echo "── Skipping AOT translation pass (--no-aot)."
-else
-    echo "── AOT: tracing representative workload on the snapshot..."
-    (cd "$ROOT" && cargo build --release -p native-cli --features aot-trace)
-    AOT_TRACE="$ROOT/dist/.aot-trace.txt"
-    VPOD_AOT_TRACE="$AOT_TRACE" "$VPOD" --snapshot-load "$SNAP" \
-        --setup "python3 -c 'print(sum(i*i for i in range(200000)))'" \
-        --setup "python3 -c 'exec(\"s=0\nfor i in range(200000): s=(s+i*i)^(i&0xff)\nprint(s)\")'" \
-        --setup "python3 -c 'import numpy as np; a = np.arange(100000); print(int((a * a).sum()))'" \
-        --setup "python3 -c 'import pandas as pd; df = pd.DataFrame({\"x\": range(20000)}); print(int(df.x.sum()))'" \
-        --setup "i=0; while [ \$i -lt 100 ]; do echo x > /tmp/aot-\$i; i=\$((\$i+1)); done; cat /tmp/aot-* | wc -l; rm -f /tmp/aot-*" \
-        --setup "uv venv /tmp/aot-venv && rm -rf /tmp/aot-venv"
-    if [ ! -s "$AOT_TRACE" ]; then
-        echo "error: aot trace is empty — the workload did not run" >&2
-        exit 1
-    fi
-
-    echo "── AOT: translating hot blocks..."
-    (cd "$ROOT" && cargo build --release -p vpod-translate)
-    "$ROOT/target/release/vpod-translate" "$SNAP" "$AOT_TRACE" \
-        "$ROOT/crates/riscv-core/src/aot/generated.rs"
-
-    echo "── AOT: rebuilding vpod with translated blocks..."
-    (cd "$ROOT" && cargo build --release -p native-cli --features aot)
-    rm -f "$AOT_TRACE"
-fi
 
 echo ""
 echo "=== Done ==="
 echo ""
 echo "Snapshot: $SNAP"
+echo ""
+echo "Next (optional), to build and bake AOT-translated blocks:"
+echo "  ./scripts/aot-snapshot.sh \"$SNAP\" --workload data"

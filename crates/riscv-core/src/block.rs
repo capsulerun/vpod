@@ -565,9 +565,7 @@ fn decode_full(raw: u32) -> Option<Op> {
 
             let kind_imm = match funct3 {
                 0x0 => Some((AluKind::Addw, imm)),
-                0x1 if funct7 == 0x04 || funct7 == 0x05 => {
-                    Some((AluKind::SlliUw, imm & 0x3f))
-                }
+                0x1 if funct7 == 0x04 || funct7 == 0x05 => Some((AluKind::SlliUw, imm & 0x3f)),
                 0x1 => match funct7 {
                     0x00 => Some((AluKind::Sllw, shamt)),
                     0x30 => match shamt {
@@ -1181,7 +1179,6 @@ pub fn exec_block<B: SystemBus>(
                     return (retired_instructions, result);
                 }
 
-
                 let new_satp = effective_satp(*ctx.priv_mode, ctx.csr.satp);
                 if new_satp != satp {
                     return (retired_instructions, result);
@@ -1488,9 +1485,9 @@ mod tests {
     ];
 
     const ZBA_EXPECTED: &[(usize, u64)] = &[
-        (4, 110),          // (5 << 1) + 100
-        (5, 120),          // (5 << 2) + 100
-        (3, 140),          // (5 << 3) + 100
+        (4, 110),           // (5 << 1) + 100
+        (5, 120),           // (5 << 2) + 100
+        (3, 140),           // (5 << 3) + 100
         (7, 0x1_0000_0063), // zext32(-1) + 100
         (8, 0xf_ffff_fff0), // zext32(-1) << 4
         (9, 0x8_0000_005c), // (zext32(-1) << 3) + 100

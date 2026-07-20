@@ -1,0 +1,115 @@
+#!/bin/sh
+#
+# AOT translation pass: trace a representative workload against an existing
+# snapshot, translate the hot blocks, and rebuild vpod with them.
+#
+# Usage:
+#   scripts/aot-snapshot.sh <snapshot> [--workload default|data]
+#                                      [--max-blocks N] [--coverage PCT] [--force]
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+SNAP=""
+WORKLOAD="default"
+MAX_BLOCKS=""
+COVERAGE=""
+FORCE=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --workload)   WORKLOAD="$2";   shift 2 ;;
+        --max-blocks) MAX_BLOCKS="$2"; shift 2 ;;
+        --coverage)   COVERAGE="$2";   shift 2 ;;
+        --force)      FORCE=1;         shift ;;
+        -*) echo "unknown arg: $1" >&2; exit 1 ;;
+        *)  SNAP="$1"; shift ;;
+    esac
+done
+
+if [ -z "$SNAP" ]; then
+    echo "usage: $0 <snapshot> [--workload default|data] [--max-blocks N] [--coverage PCT] [--force]" >&2
+    exit 1
+fi
+if [ ! -f "$SNAP" ]; then
+    echo "error: snapshot not found: $SNAP" >&2
+    exit 1
+fi
+case "$WORKLOAD" in
+    default|data) ;;
+    *) echo "error: unknown workload '$WORKLOAD' (expected: default, data)" >&2; exit 1 ;;
+esac
+
+GENERATED="$ROOT/crates/riscv-core/src/aot/generated.rs"
+VPOD="$ROOT/target/release/vpod-native"
+AOT_TRACE="$ROOT/dist/.aot-trace.txt"
+
+# generated.rs is gitignored and cannot be restored from git — only by rerunning
+# this whole pass. Make an accidental clobber loud rather than silent.
+if [ -f "$GENERATED" ] && [ "$FORCE" = "0" ]; then
+    LINES=$(wc -l < "$GENERATED" | tr -d ' ')
+    if [ "$LINES" -gt 100 ]; then
+        echo "note: overwriting existing translation ($LINES lines) in 3s — Ctrl-C to abort," >&2
+        echo "      or back it up first; it is gitignored and unrecoverable." >&2
+        sleep 3
+    fi
+fi
+
+echo "=== AOT translation pass ==="
+echo "Snapshot : $SNAP"
+echo "Workload : $WORKLOAD"
+echo ""
+
+echo "── AOT: tracing representative workload on the snapshot..."
+(cd "$ROOT" && cargo build --release -p native-cli --features aot-trace)
+
+
+set -- \
+    --setup "python3 -c 'print(sum(i*i for i in range(200000)))'" \
+    --setup "python3 -c 'exec(\"s=0\nfor i in range(200000): s=(s+i*i)^(i&0xff)\nprint(s)\")'"
+
+case "$WORKLOAD" in
+    default)
+        set -- "$@" \
+            --setup "python3 -c 'import json,os; print(json.dumps({\"cwd\": os.getcwd()}))'"
+        ;;
+    data)
+        set -- "$@" \
+            --setup "python3 -c 'import numpy as np; a = np.arange(100000); print(int((a * a).sum()))'" \
+            --setup "python3 -c 'import pandas as pd; df = pd.DataFrame({\"x\": range(20000)}); print(int(df.x.sum()))'"
+        ;;
+esac
+
+set -- "$@" \
+    --setup "i=0; while [ \$i -lt 100 ]; do echo x > /tmp/aot-\$i; i=\$((\$i+1)); done; cat /tmp/aot-* | wc -l; rm -f /tmp/aot-*" \
+    --setup "uv venv /tmp/aot-venv && rm -rf /tmp/aot-venv"
+
+VPOD_AOT_TRACE="$AOT_TRACE" "$VPOD" --snapshot-load "$SNAP" "$@"
+
+if [ ! -s "$AOT_TRACE" ]; then
+    echo "error: aot trace is empty — the workload did not run" >&2
+    exit 1
+fi
+
+echo "── AOT: translating hot blocks..."
+(cd "$ROOT" && cargo build --release -p vpod-translate)
+
+TRANSLATE_ARGS=""
+[ -n "$MAX_BLOCKS" ] && TRANSLATE_ARGS="$TRANSLATE_ARGS --max-blocks $MAX_BLOCKS"
+[ -n "$COVERAGE" ]   && TRANSLATE_ARGS="$TRANSLATE_ARGS --coverage $COVERAGE"
+
+# shellcheck disable=SC2086
+"$ROOT/target/release/vpod-translate" $TRANSLATE_ARGS "$SNAP" "$AOT_TRACE" "$GENERATED"
+
+echo "── AOT: rebuilding vpod with translated blocks..."
+(cd "$ROOT" && cargo build --release -p native-cli --features aot)
+rm -f "$AOT_TRACE"
+
+echo ""
+echo "=== Done ==="
+echo ""
+echo "Translation: $GENERATED"
+echo "Native vpod rebuilt with --features aot."
+echo "For the wasm component, run: ./scripts/build-wasm.sh"
