@@ -65,7 +65,7 @@ mkdir -p "$ROOT/dist" "$ALPINE_DIR"
 
 
 echo "── Building vpod..."
-(cd "$ROOT" && cargo build --release --bin vpod-native)
+(cd "$ROOT" && cargo build --release -p native-cli --bin vpod-native)
 
 
 if [ ! -f "$OPENSBI_FW" ]; then
