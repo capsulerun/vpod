@@ -263,7 +263,7 @@ fn main() {
     #[cfg(feature = "aot-trace")]
     if let Ok(path) = std::env::var("VPOD_AOT_TRACE") {
         let mut counts: Vec<(u64, u64)> = hart.blocks.trace_counts().collect();
-        counts.sort_by(|a, b| b.1.cmp(&a.1));
+        counts.sort_by_key(|b| std::cmp::Reverse(b.1));
 
         let mut out = String::new();
         for (pa, n) in counts {

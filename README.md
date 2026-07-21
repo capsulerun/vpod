@@ -60,15 +60,6 @@ curl -fsSL https://install.vpod.sh | sh
 >
 > </details>
 
-> <details>
-> <summary>Or install via cargo</summary>
->
-> ```bash
-> cargo install vpod
-> ```
->
-> </details>
-
 ```bash
 # Pull a snapshot
 vpod pull alpine:latest

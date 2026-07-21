@@ -53,6 +53,10 @@ def pull(name: str = "vsnap-base:latest") -> Path:
         meta.unlink(missing_ok=True)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
+
+    from ._component import prewarm
+    prewarm()
+
     _download_and_decompress(snapshot["url"], dest, snapshot["sha256"])
     meta.write_text(snapshot["sha256"])
     _prune_stale_snapshots(registry)
