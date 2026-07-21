@@ -56,13 +56,13 @@ class Sandbox:
         self._migrating = False
 
         self.commands = Commands(
-            self._exports,
+            lambda: self._exports,
             self._snapshot_path,
             self._get_shell_session_id,
         )
 
         self.code = Code(
-            self._exports,
+            lambda: self._exports,
             self._snapshot_path,
             self._get_code_session_id,
         )
@@ -138,12 +138,6 @@ class Sandbox:
 
                 Sandbox.destroy(instance_id)
 
-            self.commands = Commands(
-                self._exports, self._snapshot_path, self._get_shell_session_id
-            )
-            self.code = Code(
-                self._exports, self._snapshot_path, self._get_code_session_id
-            )
             self._tier = "aot"
         finally:
             self._migrating = False
@@ -255,8 +249,8 @@ class Sandbox:
         instance._exports = exports
         instance._shell_session_id = session_id
         instance._in_context = True
-        instance.commands = Commands(exports, snap_rel, instance._get_shell_session_id)
-        instance.code = Code(exports, snap_rel, instance._get_code_session_id)
+        instance.commands = Commands(lambda: instance._exports, snap_rel, instance._get_shell_session_id)
+        instance.code = Code(lambda: instance._exports, snap_rel, instance._get_code_session_id)
 
         Sandbox.destroy(instance_id)
         return instance

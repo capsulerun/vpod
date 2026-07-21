@@ -5,14 +5,14 @@ from .execution import CommandResult
 class Commands:
     """Shell command execution interface for a sandbox."""
 
-    def __init__(self, exports, snapshot_path: str, get_session_id):
-        self._exports = exports
+    def __init__(self, get_exports, snapshot_path: str, get_session_id):
+        self._get_exports = get_exports
         self._snapshot_path = snapshot_path
         self._get_session_id = get_session_id
 
     def run(self, command: str, timeout: int = 120) -> CommandResult:
         session_id = self._get_session_id()
-        exec = self._exports["session-exec"]
+        exec = self._get_exports()["session-exec"]
         result = unwrap_result(exec(session_id, command, timeout))
 
         return CommandResult(

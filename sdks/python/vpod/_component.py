@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 
 from platformdirs import user_data_dir
-from wasmtime import Engine, Store, WasiConfig
+from wasmtime import Config, Engine, Store, WasiConfig
 from wasmtime._bindings import (
     wasi_config_allow_ip_name_lookup,
     wasi_config_inherit_network,
@@ -36,6 +36,7 @@ _component = None
 _linker = None
 _instance_cache = {}
 _precompile_started = set()
+_thread_compile_started = set()
 _cwasm_path_cache = {}
 _active_tier = None
 _load_lock = threading.RLock()
@@ -118,7 +119,7 @@ def _load_cached(engine: Engine, wasm_path: Path) -> Component | None:
         return None
 
 
-def _precompile_in_background(wasm_path: Path, parallel: bool = False) -> None:
+def _precompile_in_background(wasm_path: Path, parallel: bool = False, fallback: bool = False) -> None:
     """Warm the AOT module's cache out of process."""
     key = str(wasm_path)
     if key in _precompile_started:
@@ -128,6 +129,8 @@ def _precompile_in_background(wasm_path: Path, parallel: bool = False) -> None:
     cmd = [sys.executable, "-m", "vpod._precompile", str(wasm_path)]
     if parallel:
         cmd.append("--parallel")
+    if fallback:
+        cmd.append("--fallback")
 
     try:
         subprocess.Popen(
@@ -140,6 +143,49 @@ def _precompile_in_background(wasm_path: Path, parallel: bool = False) -> None:
         )
     except Exception:
         pass
+
+
+def _promote_to_aot(engine: Engine, component: Component) -> None:
+    """Swap the process onto an already-compiled AOT component."""
+    global _engine, _component, _linker, _active_tier
+
+    with _load_lock:
+        if _active_tier == "aot":
+            return
+
+        linker = Linker(engine)
+        linker.add_wasip2()
+        wasmtime_component_linker_add_wasi_http(linker.ptr())
+
+        _engine, _component, _linker = engine, component, linker
+        _active_tier = "aot"
+        _instance_cache.clear()
+
+
+def _compile_aot_in_thread(wasm_path: Path) -> None:
+    """Compile the AOT module in-process and hand it over without a disk trip."""
+    key = str(wasm_path)
+    if key in _thread_compile_started:
+        return
+    _thread_compile_started.add(key)
+
+    def work() -> None:
+        try:
+            config = Config()
+            config.parallel_compilation = os.environ.get("VPOD_AOT_EAGER") != "0"
+            engine = Engine(config)
+            component = Component.from_file(engine, str(wasm_path))
+            _promote_to_aot(engine, component)
+
+            cache_path = _cwasm_cache_path(wasm_path)
+            if not cache_path.exists():
+                _write_cwasm_atomically(cache_path, component.serialize())
+                _prune_stale_cwasm(cache_path)
+            retire_base_cwasm()
+        except Exception:
+            pass
+
+    threading.Thread(target=work, daemon=True, name="vpod-aot-compile").start()
 
 
 def prewarm() -> None:
@@ -187,12 +233,14 @@ def _select_component(engine: Engine, wasm_path: Path) -> Component:
     blocking = os.environ.get("VPOD_AOT_BLOCKING") == "1"
 
     if is_aot and not blocking:
-        _precompile_in_background(wasm_path)
+        _precompile_in_background(wasm_path, fallback=True)
 
         base = _load_cached(engine, base_path)
         if base is None:
             base = _compile_and_cache(engine, base_path)
         _active_tier = "base"
+
+        _compile_aot_in_thread(wasm_path)
         return base
 
     _active_tier = _tier_of(wasm_path)
