@@ -25,9 +25,15 @@ A `vpod` is a lightweight, portable sandbox that gives an untrusted process an i
 
 ## How it works
 
-A `vpod` runs a RISC‑V virtual machine compiled to WebAssembly, implementing the RV64GC specification. When you start a `vpod`, it boots from a snapshot, a saved VM state ready in under a second.
+A `vpod` runs a full RISC‑V virtual machine (RV64GC, single vCPU) compiled to WebAssembly. Inside it boots a real Linux kernel with a real userspace, so `apk`, `pip`, shells and daemons all behave like they would on actual hardware.
 
-The WASM component communicates with the host through WASI 0.2, providing controlled access to filesystem, networking, and standard I/O while keeping all execution state (CPU registers, memory, filesystem) isolated inside the sandbox.
+Three pieces make that practical:
+
+**Snapshots.** Instead of booting Linux from scratch, a `vpod` restores a snapshot: a saved VM state (CPU registers, RAM, filesystem) captured right after boot. Restoring one takes well under a second. Suspend works the same way in reverse, only dirty memory pages are written back to disk, so you can pause a sandbox and resume it later, even from another process.
+
+**Ahead-of-time translation.** Pure instruction-by-instruction emulation is slow, and WebAssembly rules out a runtime JIT. So at snapshot build time, the hottest guest code paths are translated from RISC‑V into native code that gets compiled into the WASM module itself. At runtime the VM dispatches into these translated blocks when the guest code matches, and falls back to the interpreter when it doesn't. This is worth roughly 5x on CPU-bound work, with zero effect on isolation: translated code goes through the same MMU and memory checks as interpreted code.
+
+**The WASI boundary.** The WASM component talks to the host exclusively through WASI 0.2. The guest never sees host file descriptors, sockets, or memory: filesystem access goes through explicitly mounted directories, and networking goes through a user-mode network stack inside the component that only ever asks the host for plain outbound sockets. Everything else (guest kernel, processes, memory) lives inside the WASM linear memory and dies with it.
 
 ### RV64GC Specification
 
@@ -100,48 +106,89 @@ with Sandbox.create() as sandbox:
 > [!IMPORTANT]
 > The first call to `Sandbox.create()` downloads the default snapshot (`alpine`) and caches it locally if not already present.
 
-For more details, see the [full documentation](https://docs.vpod.sh/quickstart).
+## Documentation
+Visit [Vpod documentation](https://docs.vpod.sh/quickstart).
 
 ## Limitations
-- **Emulation overhead**: No hardware acceleration in the WASM component. CPU-intensive workloads may run slower than native.
-- **No GPU access**: CUDA, Metal, and hardware ML accelerators are not yet available. Support may be added in the future with wasi-nn.
-- **Env vars don't cross between shell and Python**: `sandbox.commands.run("export FOO=bar")` is not visible in `sandbox.code.run(...)`. Use the filesystem to share data between the two.
+- **Emulation overhead**: There is no hardware virtualization inside WebAssembly, so all guest code is emulated. The overhead depends entirely on the workload: I/O-bound and network-bound work runs close to native speed, while tight CPU-bound loops can be 10x or more slower even with AOT translation. If your workload is mostly "run a tool, read a file, call an API", you won't notice. If it's "crunch numbers for an hour", a vpod is the wrong tool.
+- **riscv64 guest**: The sandbox is a RISC‑V machine. Precompiled x86/ARM binaries won't run inside it. Alpine's `apk` packages and pure-Python `pip` packages work out of the box; Python packages with native extensions need riscv64 wheels, or use a snapshot that ships them pre-installed (like `vsnap-data` with numpy/pandas/scipy).
+- **Single vCPU**: The VM exposes one core. Multi-process and multi-threaded guest code runs fine, but it is time-sliced, not parallel.
+- **No GPU access**: CUDA, Metal, and hardware ML accelerators are not available. Support may be added in the future with wasi-nn.
+- **No SIMD passthrough**: The V (vector) extension is not implemented, so vectorized code runs scalar (see the note above).
+- **Fixed memory**: Guest RAM is fixed by the snapshot (256 MB for `alpine`, 512 MB for `vsnap-data`). There is no ballooning or dynamic growth.
 
 ## Contributing
 
-**Prerequisites**
-- Rust (latest stable)
-- Python 3.10+
-- Zig (latest stable)
+Contributions are welcome, from bug reports to new device support. Open an [issue](https://github.com/capsulerun/vpod/issues/new) to discuss anything substantial before building it.
 
-**Development setup**
+### Repository layout
+
+| Path | What it is |
+|:---|:---|
+| `crates/riscv-core` | RV64GC decoder and executor, MMU, and the AOT block runtime |
+| `crates/machine` | The virtual machine: RAM (copy-on-write), UART, PLIC/CLINT, virtio devices, snapshot save/restore |
+| `crates/wasi-component` | The WASM component (WASI 0.2) that wraps the machine for sandboxed use |
+| `crates/vpod` | The host CLI (`vpod`), which runs the WASM component |
+| `crates/native-cli` | A native (non-WASM) build of the VM, used for development and debugging |
+| `crates/vpod-translate` | The AOT translator: turns traced hot RISC‑V code into Rust at snapshot build time |
+| `sdks/python` | The Python SDK (`pip install vpod`) |
+| `scripts/` | Build scripts for the WASM component, snapshots, and AOT translation |
+
+### Prerequisites
+
+- **Rust** (latest stable) with the `wasm32-wasip2` target: `rustup target add wasm32-wasip2`
+- **Python 3.10+** for the SDK
+- **Zig** (0.14) and **bsdtar**, only needed if you build snapshots yourself
+
+### Development setup
+
 ```bash
-# Build WASM component
+# One-time: generate the AOT stub (a fresh clone has no translated blocks)
+./scripts/aot-stub.sh
+
+# Build the WASM component (library + CLI)
 ./scripts/build-wasm.sh
 
-# Install CLI
+# Install the host CLI
 cargo install --path crates/vpod
 
-# Install Python SDK in dev mode
-pip install -e sdks/python[dev]
-
-# Run tests
-cargo test                              # Rust tests
-pytest sdks/python/tests/ -v -m integration  # Integration tests (requires WASM build)
+# Install the Python SDK in dev mode
+pip install -e "sdks/python[dev]"
 ```
 
-**Building snapshots**
+### Running tests
 
-The project uses pre-built Alpine snapshots from `registry.vpod.sh`. To build a custom snapshot:
+CI runs these on every PR, so run them before pushing:
 
 ```bash
-./scripts/build-default-snapshot.sh
+cargo fmt --all -- --check                        # formatting
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all                                  # Rust tests
+
+# Python SDK integration tests (needs the WASM library in place)
+cp target/wasm32-wasip2/release/vpod_wasi_lib.wasm sdks/python/vpod/
+pytest sdks/python/tests/ -v -m integration
 ```
 
-This creates `dist/alpine-3.23.0-256mb.snap`.
+### Building snapshots
+
+The project uses pre-built Alpine snapshots from `registry.vpod.sh`, so you normally don't need this. To build one locally:
+
+```bash
+./scripts/build-default-snapshot.sh   # dist/alpine-3.23.0-256mb.snap
+./scripts/build-data-snapshot.sh      # 512 MB variant with numpy/pandas/scipy
+```
 
 > [!IMPORTANT]
-> To use it locally, uncomment lines in `resolve_snapshot()` in `crates/vpod/src/main.rs`.
+> To use a locally built snapshot, uncomment the lines in `resolve_snapshot()` in `crates/vpod/src/main.rs`.
+
+Snapshot builds can also run the AOT pass (`scripts/aot-snapshot.sh <snapshot>`), which traces a representative workload, translates the hot blocks, and rebuilds the VM with them baked in. It takes a while; the stub from `aot-stub.sh` is fine for everyday development, everything works the same, just slower.
+
+### Pull requests
+
+- Keep PRs focused: one change per PR.
+- `fmt`, `clippy` and the test suite must pass (CI enforces all three).
+- If you touch the emulator's execution or memory paths, say how you validated correctness (the test suite at minimum; for subtle changes a boot plus a real workload in the guest is a good sanity check).
 
 ## License
 

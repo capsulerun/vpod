@@ -129,16 +129,18 @@ snapshots.pull("alpine:latest")
 
 ## How it works
 
-A `vpod` runs a RISC‑V virtual machine compiled to WebAssembly. The core implements the **RV64GC** specification:
+A `vpod` runs a full RISC‑V virtual machine (RV64GC, single vCPU) compiled to WebAssembly, booting a real Linux kernel and userspace from a snapshot. Your Python process embeds the VM through `wasmtime`; there is no daemon, no Docker, no system dependency.
 
-- **G (General-purpose)**: I/M/A/F/D extensions for integer, multiply/divide, atomics, and floating-point.
-- **C (Compressed)**: 30% smaller code size, improving memory efficiency.
-
-The WASM component communicates with the host through WASI 0.2, providing controlled access to networking and I/O while keeping all execution state isolated inside the sandbox.
+- **Snapshots** make startup instant: instead of booting Linux, the VM restores a saved state (CPU, RAM, filesystem) in well under a second. Suspend/resume works the same way in reverse.
+- **Ahead-of-time translation** keeps emulation fast: the hottest guest code paths are pre-translated into the WASM module, roughly 5x faster than pure interpretation, with no effect on isolation.
+- **The WASI boundary** keeps it contained: the guest only reaches the host through WASI 0.2. Filesystem access is limited to directories you explicitly mount, networking goes through a user-mode stack that only opens outbound sockets, and everything else lives and dies inside the WASM sandbox.
 
 ## Limitations
 
-- **Emulation overhead**: No hardware acceleration in WASM. CPU-intensive workloads run slower than native.
-- **No GPU access**: CUDA, Metal, and hardware ML accelerators are not yet available.
+- **Emulation overhead**: All guest code is emulated; there is no hardware virtualization inside WASM. I/O and network-bound work runs close to native, tight CPU-bound loops can be 10x or more slower. Great for "run a tool, read a file, call an API", wrong tool for long number crunching.
+- **riscv64 guest**: Precompiled x86/ARM binaries won't run inside the sandbox. `apk` packages and pure-Python `pip` packages work fine; packages with native extensions need riscv64 wheels, or use `vsnap-data`, which ships numpy/pandas/scipy pre-installed.
+- **Single vCPU**: Guest threads and processes are time-sliced, not parallel.
+- **Fixed memory**: Guest RAM is set by the snapshot (see the table above); it does not grow dynamically.
+- **No GPU access**: CUDA, Metal, and hardware ML accelerators are not available.
 
 For full documentation and to report issues, visit the [main GitHub repository](https://github.com/capsulerun/vpod).
