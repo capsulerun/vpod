@@ -202,6 +202,186 @@ fn detect_group(ops: &[block::DecodedInsn], start: usize) -> Option<(usize, i64,
     (len >= 2).then_some((len, lo, hi))
 }
 
+struct CachedGroup {
+    base: u8,
+    lo: i64,
+    hi: i64,
+    store_check: bool,
+    members: Vec<usize>,
+}
+
+fn op_clobbers(op: &Op) -> Option<u8> {
+    match *op {
+        Op::Lui { rd, .. }
+        | Op::Auipc { rd, .. }
+        | Op::AluImm { rd, .. }
+        | Op::AluReg { rd, .. }
+        | Op::Load { rd, .. } => (rd != 0).then_some(rd),
+        _ => None,
+    }
+}
+
+fn plan_cached_groups(ops: &[block::DecodedInsn]) -> Vec<CachedGroup> {
+    // only to test
+    if std::env::var_os("VPOD_TRANSLATE_NO_REGION").is_some() {
+        return Vec::new();
+    }
+
+    let mut in_consecutive_group = vec![false; ops.len()];
+    let mut i = 0;
+    while i < ops.len() {
+        if let Some((len, _, _)) = detect_group(ops, i) {
+            in_consecutive_group[i..i + len].fill(true);
+            i += len;
+        } else {
+            i += 1;
+        }
+    }
+
+    struct OpenGroup {
+        group: CachedGroup,
+        interior_store_seen: bool,
+    }
+    let mut open: std::collections::BTreeMap<u8, OpenGroup> = std::collections::BTreeMap::new();
+    let mut done: Vec<CachedGroup> = Vec::new();
+    let close = |open: &mut std::collections::BTreeMap<u8, OpenGroup>,
+                 done: &mut Vec<CachedGroup>,
+                 base: u8| {
+        if let Some(o) = open.remove(&base)
+            && o.group.members.len() >= 2
+        {
+            done.push(o.group);
+        }
+    };
+
+    for (i, insn) in ops.iter().enumerate() {
+        match insn.op {
+            Op::Fallback { .. } | Op::Jal { .. } | Op::Jalr { .. } => {
+                let bases: Vec<u8> = open.keys().copied().collect();
+                for b in bases {
+                    close(&mut open, &mut done, b);
+                }
+                continue;
+            }
+            Op::Branch { .. } => continue,
+            _ => {}
+        }
+
+        if let Some((base, lo, hi, is_store)) = access_info(&insn.op) {
+            if is_store {
+                for o in open.values_mut() {
+                    o.interior_store_seen = true;
+                }
+            }
+
+            if !in_consecutive_group[i] {
+                let fits = open
+                    .get(&base)
+                    .map(|o| o.group.hi.max(hi) - o.group.lo.min(lo) + 1 <= 4096);
+
+                if fits == Some(false) {
+                    close(&mut open, &mut done, base);
+                }
+
+                match open.get_mut(&base) {
+                    Some(o) => {
+                        o.group.lo = o.group.lo.min(lo);
+                        o.group.hi = o.group.hi.max(hi);
+                        o.group.members.push(i);
+                        if is_store || o.interior_store_seen {
+                            o.group.store_check = true;
+                        }
+                    }
+                    None => {
+                        open.insert(
+                            base,
+                            OpenGroup {
+                                group: CachedGroup {
+                                    base,
+                                    lo,
+                                    hi,
+                                    store_check: is_store,
+                                    members: vec![i],
+                                },
+                                interior_store_seen: false,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
+        if let Some(rd) = op_clobbers(&insn.op) {
+            close(&mut open, &mut done, rd);
+        }
+    }
+
+    for (_, o) in open {
+        if o.group.members.len() >= 2 {
+            done.push(o.group);
+        }
+    }
+
+    done
+}
+
+fn emit_cached_member(
+    out: &mut String,
+    regs: &mut RegAlloc,
+    group: &CachedGroup,
+    group_id: usize,
+    is_first: bool,
+    insn: &block::DecodedInsn,
+    pc: &str,
+    retired: u64,
+    flushed: u64,
+) {
+    let base_str = regs.read(out, group.base);
+
+    if is_first {
+        let helper = if group.store_check {
+            "_store_span_page"
+        } else {
+            "_load_span_page"
+        };
+        writeln!(
+            out,
+            "    let page_g{group_id} = crate::block::{helper}(ctx, satp, {base_str}.wrapping_add({}i64 as u64), {base_str}.wrapping_add({}i64 as u64));",
+            group.lo, group.hi
+        )
+        .unwrap();
+    }
+
+    match insn.op {
+        Op::Load { kind, rd, imm, .. } => {
+            let fault_writeback = regs.writeback();
+            let bind = match regs.write_target(out, rd) {
+                None => "Ok(_) => {}".to_string(),
+                Some(dst) => format!("Ok(v) => {dst} = v,"),
+            };
+            writeln!(
+                out,
+                "    let va = {base_str}.wrapping_add({imm}i64 as u64);\n    match if let Some(p) = page_g{group_id} {{ Ok(crate::block::_span_load(ctx, p as *const u8, satp, crate::block::LoadKind::{kind:?}, va)) }} else {{ crate::block::do_load(ctx, satp, crate::block::LoadKind::{kind:?}, va, {pc}) }} {{\n        {bind}\n        Err(()) => {{ {fault_writeback}ctx.csr.instret = ctx.csr.instret.wrapping_add({}); return ({}, u64::MAX); }}\n    }}",
+                retired - flushed,
+                retired + 1
+            )
+            .unwrap();
+        }
+        Op::Store { kind, rs2, imm, .. } => {
+            let val = regs.read(out, rs2);
+            let fault_writeback = regs.writeback();
+            writeln!(
+                out,
+                "    let va = {base_str}.wrapping_add({imm}i64 as u64);\n    let store_ok = if let Some(p) = page_g{group_id} {{ crate::block::_span_store(ctx, p, satp, crate::block::StoreKind::{kind:?}, va, {val}); true }} else {{ crate::block::do_store(ctx, satp, crate::block::StoreKind::{kind:?}, va, {val}, {pc}).is_ok() }};\n    if !store_ok {{\n        {fault_writeback}ctx.csr.instret = ctx.csr.instret.wrapping_add({}); return ({}, u64::MAX);\n    }}",
+                retired - flushed,
+                retired + 1
+            )
+            .unwrap();
+        }
+        _ => unreachable!("cached group members are loads/stores only"),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_group(
     out: &mut String,
@@ -355,6 +535,14 @@ fn emit_block(out: &mut String, pa: u64, entry_seen: &BTreeSet<u64>, blk: &Block
     let mut retired: u64 = 0;
     let mut flushed: u64 = 0;
 
+    let cached_groups = plan_cached_groups(&blk.ops);
+    let mut cgroup_of: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+    for (group_id, group) in cached_groups.iter().enumerate() {
+        for &member in &group.members {
+            cgroup_of.insert(member, group_id);
+        }
+    }
+
     let mut i = 0usize;
     while i < blk.ops.len() {
         let insn = &blk.ops[i];
@@ -368,6 +556,24 @@ fn emit_block(out: &mut String, pa: u64, entry_seen: &BTreeSet<u64>, blk: &Block
             );
             retired += group_len as u64;
             i += group_len;
+            continue;
+        }
+
+        if let Some(&group_id) = cgroup_of.get(&i) {
+            let group = &cached_groups[group_id];
+            emit_cached_member(
+                out,
+                &mut regs,
+                group,
+                group_id,
+                group.members[0] == i,
+                insn,
+                &pc,
+                retired,
+                flushed,
+            );
+            retired += 1;
+            i += 1;
             continue;
         }
 
