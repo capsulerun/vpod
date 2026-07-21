@@ -277,7 +277,7 @@ fn plan_cached_groups(ops: &[block::DecodedInsn]) -> Vec<CachedGroup> {
             if !in_consecutive_group[i] {
                 let fits = open
                     .get(&base)
-                    .map(|o| o.group.hi.max(hi) - o.group.lo.min(lo) + 1 <= 4096);
+                    .map(|o| o.group.hi.max(hi) - o.group.lo.min(lo) < 4096);
 
                 if fits == Some(false) {
                     close(&mut open, &mut done, base);
@@ -325,6 +325,7 @@ fn plan_cached_groups(ops: &[block::DecodedInsn]) -> Vec<CachedGroup> {
     done
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_cached_member(
     out: &mut String,
     regs: &mut RegAlloc,
