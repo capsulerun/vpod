@@ -135,6 +135,200 @@ impl RegAlloc {
     }
 }
 
+fn load_size(kind: block::LoadKind) -> i64 {
+    use block::LoadKind::*;
+    match kind {
+        Lb | Lbu => 1,
+        Lh | Lhu => 2,
+        Lw | Lwu => 4,
+        Ld => 8,
+    }
+}
+
+fn store_size(kind: block::StoreKind) -> i64 {
+    use block::StoreKind::*;
+    match kind {
+        Sb => 1,
+        Sh => 2,
+        Sw => 4,
+        Sd => 8,
+    }
+}
+
+fn access_info(op: &Op) -> Option<(u8, i64, i64, bool)> {
+    match *op {
+        Op::Load { kind, rs1, imm, .. } => Some((rs1, imm, imm + load_size(kind) - 1, false)),
+        Op::Store { kind, rs1, imm, .. } => Some((rs1, imm, imm + store_size(kind) - 1, true)),
+        _ => None,
+    }
+}
+
+fn detect_group(ops: &[block::DecodedInsn], start: usize) -> Option<(usize, i64, i64)> {
+    if std::env::var_os("VPOD_TRANSLATE_NO_BATCH").is_some() {
+        return None;
+    }
+    let (base, mut lo, mut hi, _) = access_info(&ops[start].op)?;
+    let mut len = 1usize;
+
+    loop {
+        if let Op::Load { rd, .. } = ops[start + len - 1].op
+            && rd == base
+            && rd != 0
+        {
+            break;
+        }
+        let Some(next) = ops.get(start + len) else {
+            break;
+        };
+        let Some((next_base, next_lo, next_hi, _)) = access_info(&next.op) else {
+            break;
+        };
+
+        if next_base != base {
+            break;
+        }
+
+        let new_lo = lo.min(next_lo);
+        let new_hi = hi.max(next_hi);
+        if new_hi - new_lo + 1 > 4096 {
+            break;
+        }
+
+        lo = new_lo;
+        hi = new_hi;
+        len += 1;
+    }
+
+    (len >= 2).then_some((len, lo, hi))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_group(
+    out: &mut String,
+    regs: &mut RegAlloc,
+    ops: &[block::DecodedInsn],
+    start: usize,
+    len: usize,
+    span_lo: i64,
+    span_hi: i64,
+    retired: u64,
+    flushed: u64,
+) {
+    let members = &ops[start..start + len];
+    let (base, ..) = access_info(&members[0].op).unwrap();
+    let base_str = regs.read(out, base);
+    let has_store = members.iter().any(|m| matches!(m.op, Op::Store { .. }));
+
+    for m in members {
+        match m.op {
+            Op::Load { rd, .. } => {
+                if rd != 0 {
+                    regs.read(out, rd);
+                    let _ = regs.write_target(out, rd);
+                }
+            }
+            Op::Store { rs2, .. } => {
+                regs.read(out, rs2);
+            }
+            _ => unreachable!("group members are loads/stores only"),
+        }
+    }
+
+    writeln!(
+        out,
+        "    let span_lo = {base_str}.wrapping_add({span_lo}i64 as u64);\n    let span_hi = {base_str}.wrapping_add({span_hi}i64 as u64);"
+    )
+    .unwrap();
+
+    let helper = if has_store {
+        "_store_span_page"
+    } else {
+        "_load_span_page"
+    };
+    writeln!(
+        out,
+        "    if let Some(span_page) = crate::block::{helper}(ctx, satp, span_lo, span_hi) {{"
+    )
+    .unwrap();
+
+    for m in members {
+        match m.op {
+            Op::Load { kind, rd, imm, .. } => {
+                let dst = if rd == 0 {
+                    "let _".to_string()
+                } else {
+                    format!("x{rd}")
+                };
+                let page = if has_store {
+                    "span_page as *const u8"
+                } else {
+                    "span_page"
+                };
+                writeln!(
+                    out,
+                    "        {dst} = crate::block::_span_load(ctx, {page}, satp, crate::block::LoadKind::{kind:?}, {base_str}.wrapping_add({imm}i64 as u64));"
+                )
+                .unwrap();
+            }
+            Op::Store { kind, rs2, imm, .. } => {
+                let val = if rs2 == 0 {
+                    "0u64".to_string()
+                } else {
+                    format!("x{rs2}")
+                };
+                writeln!(
+                    out,
+                    "        crate::block::_span_store(ctx, span_page, satp, crate::block::StoreKind::{kind:?}, {base_str}.wrapping_add({imm}i64 as u64), {val});"
+                )
+                .unwrap();
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    writeln!(out, "    }} else {{").unwrap();
+
+    for (j, m) in members.iter().enumerate() {
+        let member_retired = retired + j as u64;
+        let pc = format!("entry_pc.wrapping_add({})", m.pc_off);
+        match m.op {
+            Op::Load { kind, rd, imm, .. } => {
+                let fault_writeback = regs.writeback();
+                let bind = if rd == 0 {
+                    "Ok(_) => {}".to_string()
+                } else {
+                    format!("Ok(v) => x{rd} = v,")
+                };
+                writeln!(
+                    out,
+                    "    let va = {base_str}.wrapping_add({imm}i64 as u64);\n    match crate::block::do_load(ctx, satp, crate::block::LoadKind::{kind:?}, va, {pc}) {{\n        {bind}\n        Err(()) => {{ {fault_writeback}ctx.csr.instret = ctx.csr.instret.wrapping_add({}); return ({}, u64::MAX); }}\n    }}",
+                    member_retired - flushed,
+                    member_retired + 1
+                )
+                .unwrap();
+            }
+            Op::Store { kind, rs2, imm, .. } => {
+                let val = if rs2 == 0 {
+                    "0u64".to_string()
+                } else {
+                    format!("x{rs2}")
+                };
+                let fault_writeback = regs.writeback();
+                writeln!(
+                    out,
+                    "    let va = {base_str}.wrapping_add({imm}i64 as u64);\n    if crate::block::do_store(ctx, satp, crate::block::StoreKind::{kind:?}, va, {val}, {pc}).is_err() {{\n        {fault_writeback}ctx.csr.instret = ctx.csr.instret.wrapping_add({}); return ({}, u64::MAX);\n    }}",
+                    member_retired - flushed,
+                    member_retired + 1
+                )
+                .unwrap();
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    writeln!(out, "    }}").unwrap();
+}
+
 fn emit_block(out: &mut String, pa: u64, entry_seen: &BTreeSet<u64>, blk: &Block) {
     let _ = entry_seen;
     writeln!(
@@ -161,10 +355,21 @@ fn emit_block(out: &mut String, pa: u64, entry_seen: &BTreeSet<u64>, blk: &Block
     let mut retired: u64 = 0;
     let mut flushed: u64 = 0;
 
-    for insn in blk.ops.iter() {
+    let mut i = 0usize;
+    while i < blk.ops.len() {
+        let insn = &blk.ops[i];
         let off = insn.pc_off as u64;
         let ilen = insn.ilen as u64;
         let pc = format!("entry_pc.wrapping_add({off})");
+
+        if let Some((group_len, span_lo, span_hi)) = detect_group(&blk.ops, i) {
+            emit_group(
+                out, &mut regs, &blk.ops, i, group_len, span_lo, span_hi, retired, flushed,
+            );
+            retired += group_len as u64;
+            i += group_len;
+            continue;
+        }
 
         match insn.op {
             Op::Lui { rd, imm } => {
@@ -315,6 +520,7 @@ fn emit_block(out: &mut String, pa: u64, entry_seen: &BTreeSet<u64>, blk: &Block
         ) {
             retired += 1;
         }
+        i += 1;
     }
 
     let fall_next = next_expr(blk.byte_len as u64, 0);

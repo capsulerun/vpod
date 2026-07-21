@@ -1372,6 +1372,134 @@ fn do_store_slow<B: SystemBus>(
     }
 }
 
+#[inline(always)]
+pub(crate) fn _load_span_page<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    satp: u64,
+    span_lo: u64,
+    span_hi: u64,
+) -> Option<*const u8> {
+    if span_lo >> 12 != span_hi >> 12 {
+        return None;
+    }
+
+    ctx.mmu.load_fast_lookup(span_lo, satp, ctx.bus.ram_epoch())
+}
+
+#[inline(always)]
+pub(crate) fn _store_span_page<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    satp: u64,
+    span_lo: u64,
+    span_hi: u64,
+) -> Option<*mut u8> {
+    if span_lo >> 12 != span_hi >> 12 {
+        return None;
+    }
+
+    ctx.mmu.store_fast_lookup(
+        span_lo,
+        satp,
+        ctx.bus.ram_epoch(),
+        ctx.blocks.code_generation(),
+    )
+}
+
+#[inline(always)]
+pub(crate) fn _span_load<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    host_page: *const u8,
+    satp: u64,
+    kind: LoadKind,
+    virtual_address: u64,
+) -> u64 {
+    let size: u64 = match kind {
+        LoadKind::Lb | LoadKind::Lbu => 1,
+        LoadKind::Lh | LoadKind::Lhu => 2,
+        LoadKind::Lw | LoadKind::Lwu => 4,
+        LoadKind::Ld => 8,
+    };
+    let offset_in_page = virtual_address & 0xFFF;
+    debug_assert!(offset_in_page + size <= 0x1000);
+    perf::note_load_fast_hit();
+
+    let raw = unsafe {
+        let p = host_page.add(offset_in_page as usize);
+        match size {
+            1 => *p as u64,
+            2 => u16::from_le((p as *const u16).read_unaligned()) as u64,
+            4 => u32::from_le((p as *const u32).read_unaligned()) as u64,
+            _ => u64::from_le((p as *const u64).read_unaligned()),
+        }
+    };
+
+    #[cfg(debug_assertions)]
+    {
+        let shadow = raw_load(ctx.mmu, ctx.bus, satp, virtual_address, size)
+            .expect("span load covered by page check but slow path faulted");
+        assert_eq!(
+            raw, shadow,
+            "span load diverged at va={virtual_address:#x} size={size}"
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (ctx, satp);
+
+    extend_load(kind, raw)
+}
+
+#[inline(always)]
+pub(crate) fn _span_store<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    host_page: *mut u8,
+    satp: u64,
+    kind: StoreKind,
+    virtual_address: u64,
+    val: u64,
+) {
+    let size: u64 = match kind {
+        StoreKind::Sb => 1,
+        StoreKind::Sh => 2,
+        StoreKind::Sw => 4,
+        StoreKind::Sd => 8,
+    };
+    let offset_in_page = virtual_address & 0xFFF;
+    debug_assert!(offset_in_page + size <= 0x1000);
+    perf::note_store_fast_hit();
+
+    #[cfg(debug_assertions)]
+    {
+        let physical_address = ctx
+            .mmu
+            .translate_store(virtual_address, satp, ctx.bus)
+            .expect("span store covered by page check but slow path faulted");
+        assert!(
+            !ctx.blocks.page_has_code(physical_address >> 12),
+            "span store would skip a required SMC eviction at va={virtual_address:#x}"
+        );
+        let shadow = ctx
+            .bus
+            .ram_store_page(physical_address)
+            .expect("span store hit on a non-RAM page");
+        assert_eq!(
+            shadow as usize, host_page as usize,
+            "span store diverged at va={virtual_address:#x} size={size}"
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (ctx, satp);
+
+    unsafe {
+        let p = host_page.add(offset_in_page as usize);
+        match size {
+            1 => *p = val as u8,
+            2 => (p as *mut u16).write_unaligned((val as u16).to_le()),
+            4 => (p as *mut u32).write_unaligned((val as u32).to_le()),
+            _ => (p as *mut u64).write_unaligned(val.to_le()),
+        }
+    }
+}
+
 #[inline]
 pub fn raw_load<B: SystemBus>(
     mmu: &mut Mmu,
