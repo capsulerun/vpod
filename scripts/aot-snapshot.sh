@@ -1,12 +1,4 @@
 #!/bin/sh
-#
-# AOT translation pass: trace a representative workload against an existing
-# snapshot, translate the hot blocks, and rebuild vpod with them.
-#
-# Usage:
-#   scripts/aot-snapshot.sh <snapshot> [--workload default|data]
-#                                      [--max-blocks N] [--coverage PCT] [--force]
-
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -46,8 +38,6 @@ GENERATED="$ROOT/crates/riscv-core/src/aot/generated.rs"
 VPOD="$ROOT/target/release/vpod-native"
 AOT_TRACE="$ROOT/dist/.aot-trace.txt"
 
-# generated.rs is gitignored and cannot be restored from git — only by rerunning
-# this whole pass. Make an accidental clobber loud rather than silent.
 if [ -f "$GENERATED" ] && [ "$FORCE" = "0" ]; then
     LINES=$(wc -l < "$GENERATED" | tr -d ' ')
     if [ "$LINES" -gt 100 ]; then
@@ -86,12 +76,26 @@ set -- "$@" \
     --setup "i=0; while [ \$i -lt 100 ]; do echo x > /tmp/aot-\$i; i=\$((\$i+1)); done; cat /tmp/aot-* | wc -l; rm -f /tmp/aot-*" \
     --setup "uv venv /tmp/aot-venv && rm -rf /tmp/aot-venv"
 
-VPOD_AOT_TRACE="$AOT_TRACE" "$VPOD" --snapshot-load "$SNAP" "$@"
+
+set -- "$@" \
+    --setup "apk update && apk add jq && echo '{\"a\":[1,2,3]}' | jq -c '.a | add' && echo VPOD_AOT_APK_OK"
+
+TRACE_LOG="$ROOT/dist/.aot-trace-run.log"
+VPOD_AOT_TRACE="$AOT_TRACE" "$VPOD" --snapshot-load "$SNAP" --net "$@" 2>&1 | tee "$TRACE_LOG"
 
 if [ ! -s "$AOT_TRACE" ]; then
     echo "error: aot trace is empty — the workload did not run" >&2
     exit 1
 fi
+
+if ! grep -q VPOD_AOT_APK_OK "$TRACE_LOG"; then
+    echo "" >&2
+    echo "error: the apk trace step did not complete — apk's code would be left" >&2
+    echo "       untranslated (it is ~1.6B guest insns, 98% emulated CPU)." >&2
+    echo "       Check network/DNS from the guest; see $TRACE_LOG" >&2
+    exit 1
+fi
+rm -f "$TRACE_LOG"
 
 echo "── AOT: translating hot blocks..."
 (cd "$ROOT" && cargo build --release -p vpod-translate)

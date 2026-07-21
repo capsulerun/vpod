@@ -1,0 +1,160 @@
+name: Build Snapshots
+
+# Builds the registry snapshots and (optionally) publishes them to R2.
+# See docs/design/release-strategy.md — this is "step 0": any snapshot change
+# must be in the registry BEFORE build-aot traces against it, or the release
+# ships an engine whose page hashes never match (silent interpreter fallback).
+#
+# Deliberately NOT run on every release: snapshot builds are not reproducible
+# (apk pulls whatever Alpine serves that day), so every rebuild changes the
+# bytes — and republishing changed bytes under the same ids silently degrades
+# AOT for every previously shipped engine. Publish only when guest content
+# actually changed, and always cut a release right after.
+#
+# The registry stores lz4-compressed files under the .snap name; sha256 and
+# size in snapshots.json are of the *compressed* bytes (what the SDK and
+# build-aot.yml verify before decompressing).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Registry manifest version (e.g. 0.5.0)'
+        required: true
+        type: string
+      publish:
+        description: 'Upload to R2 (off = dry run, artifacts only)'
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      publish:
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      R2_ACCOUNT_ID:
+        required: false
+      R2_ACCESS_KEY_ID:
+        required: false
+      R2_SECRET_ACCESS_KEY:
+        required: false
+      R2_BUCKET:
+        required: false
+
+jobs:
+  build-snapshots:
+    name: Build and publish snapshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libarchive-tools cpio lz4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: snapshots-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build default snapshot (alpine-3.23.0-256mb)
+        run: ./scripts/build-default-snapshot.sh
+
+      - name: Build data snapshot (vsnap-data-512mb)
+        run: ./scripts/build-data-snapshot.sh
+
+      - name: Compress for the registry
+        run: |
+          mkdir -p dist/registry
+          lz4 -9 -f dist/alpine-3.23.0-256mb.snap dist/registry/alpine-3.23.0-256mb.snap
+          cp dist/registry/alpine-3.23.0-256mb.snap dist/registry/vsnap-base-256mb.snap
+          lz4 -9 -f dist/vsnap-data-512mb.snap dist/registry/vsnap-data-512mb.snap
+          ls -lh dist/registry
+
+      - name: Generate snapshots.json
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, urllib.request
+          from pathlib import Path
+
+          registry_dir = Path("dist/registry")
+          manifest = json.load(urllib.request.urlopen(
+              "https://registry.vpod.sh/v1/snapshots.json", timeout=60))
+
+          manifest["version"] = os.environ["VERSION"]
+          for entry in manifest["snapshots"]:
+              built = registry_dir / f"{entry['id']}.snap"
+              if not built.exists():
+                  print(f"  {entry['id']}: not rebuilt, keeping registry entry")
+                  continue
+              data = built.read_bytes()
+              entry["sha256"] = hashlib.sha256(data).hexdigest()
+              entry["size"] = len(data)
+              print(f"  {entry['id']}: sha256={entry['sha256'][:12]}… size={entry['size']}")
+
+          (registry_dir / "snapshots.json").write_text(
+              json.dumps(manifest, indent=2) + "\n")
+          PY
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: registry-snapshots
+          path: dist/registry/snapshots.json
+          retention-days: 30
+
+      - name: Publish to R2
+        if: ${{ inputs.publish }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          for f in dist/registry/*.snap; do
+            aws s3 cp "$f" "s3://$BUCKET/v1/$(basename "$f")" --endpoint-url "$ENDPOINT"
+          done
+          aws s3 cp dist/registry/snapshots.json "s3://$BUCKET/v1/snapshots.json" \
+            --endpoint-url "$ENDPOINT" --content-type application/json
+
+      - name: Verify the live registry
+        if: ${{ inputs.publish }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, urllib.request
+          from pathlib import Path
+
+          local = json.loads(Path("dist/registry/snapshots.json").read_text())
+          live = json.load(urllib.request.urlopen(
+              "https://registry.vpod.sh/v1/snapshots.json", timeout=60))
+          if live != local:
+              raise SystemExit("live snapshots.json does not match what we uploaded")
+
+          for entry in local["snapshots"]:
+              with urllib.request.urlopen(entry["url"], timeout=300) as r:
+                  digest = hashlib.sha256(r.read()).hexdigest()
+              if digest != entry["sha256"]:
+                  raise SystemExit(f"{entry['id']}: served bytes do not match manifest")
+              print(f"{entry['id']}: ok")
+          PY

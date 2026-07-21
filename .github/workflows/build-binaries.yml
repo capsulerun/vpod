@@ -1,21 +1,41 @@
 name: Build Binaries
 
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag to upload binaries to (e.g. v0.1.3)'
+        required: true
+        type: string
+      snapshot:
+        description: 'Snapshot the AOT module is traced against'
+        required: false
+        default: 'alpine-3.23.0-256mb'
+        type: string
   workflow_dispatch:
     inputs:
       tag:
         description: 'Release tag to upload binaries to (e.g. v0.1.3)'
+        required: true
+        type: string
+      snapshot:
+        description: 'Snapshot the AOT module is traced against'
         required: false
+        default: 'alpine-3.23.0-256mb'
         type: string
 
 permissions:
   contents: write
 
 jobs:
+  build-aot:
+    uses: ./.github/workflows/build-aot.yml
+    with:
+      snapshot: ${{ inputs.snapshot }}
+
   build:
     name: ${{ matrix.target }}
+    needs: build-aot
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -44,14 +64,14 @@ jobs:
       - name: Inject version
         shell: bash
         run: |
-          V="${{ github.event_name == 'release' && github.ref_name || inputs.tag }}"
+          V="${{ inputs.tag }}"
           V="${V#v}"
           perl -i -pe "s/^version = .*/version = \"$V\"/" crates/vpod/Cargo.toml
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-wasip2,${{ matrix.target }}
+          targets: ${{ matrix.target }}
 
       - name: Install cargo-zigbuild (Linux aarch64)
         if: matrix.zigbuild
@@ -60,8 +80,15 @@ jobs:
           cargo install cargo-zigbuild
           rustup target add aarch64-unknown-linux-gnu
 
-      - name: Build WASM component
-        run: cargo build --release --target wasm32-wasip2 -p wasi-component
+      - name: Fetch AOT engine module
+        uses: actions/download-artifact@v4
+        with:
+          name: aot-wasm
+          path: dist/aot
+
+      - name: Place module for build.rs
+        shell: bash
+        run: cp dist/aot/vpod-wasi-cli.wasm crates/vpod/vpod-wasi-cli.wasm
 
       - name: Build binary (native)
         if: "!matrix.zigbuild"
@@ -92,7 +119,7 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event_name == 'release' && github.ref_name || inputs.tag }}
+          tag_name: ${{ inputs.tag }}
           files: ${{ env.ASSET }}
 
       - name: Upload artifact
