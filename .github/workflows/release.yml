@@ -67,6 +67,7 @@ jobs:
           gh release create "$TAG" --draft --generate-notes --title "$TAG"
 
   build-binaries:
+    if: ${{ !cancelled() && !failure() }}
     needs: [build-aot, create-release]
     uses: ./.github/workflows/build-binaries.yml
     with:
