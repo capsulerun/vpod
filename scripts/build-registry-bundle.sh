@@ -4,7 +4,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-TEMPLATE="${TEMPLATE:-docs/v0.4.1-registry/test/snapshots.json}"
+CATALOG="${CATALOG:-registry/catalog.json}"
 OUT="${OUT:-dist/registry-bundle}"
 
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
@@ -23,22 +23,24 @@ cp "$OUT/alpine-3.23.0-256mb.snap" "$OUT/vsnap-base-256mb.snap"
 lz4 -9 -f dist/alpine-3.23.0-512mb.snap "$OUT/vsnap-base-512mb.snap"
 lz4 -9 -f dist/vsnap-data-512mb.snap "$OUT/vsnap-data-512mb.snap"
 
-TEMPLATE="$TEMPLATE" OUT="$OUT" python3 - <<'PY'
+CATALOG="$CATALOG" OUT="$OUT" python3 - <<'PY'
 import hashlib, json, os
 from pathlib import Path
 
 out = Path(os.environ["OUT"])
-manifest = json.loads(Path(os.environ["TEMPLATE"]).read_text())
+snapshots = json.loads(Path(os.environ["CATALOG"]).read_text())["snapshots"]
 
-if os.environ.get("VERSION"):
-    manifest["version"] = os.environ["VERSION"]
-
-for entry in manifest["snapshots"]:
+for entry in snapshots:
+    entry["url"] = f"https://registry.vpod.sh/v1/{entry['id']}.snap"
     data = (out / f"{entry['id']}.snap").read_bytes()
     entry["sha256"] = hashlib.sha256(data).hexdigest()
     entry["size"] = len(data)
     print(f"  {entry['id']}: sha256={entry['sha256'][:12]}… size={entry['size']:,}")
 
+manifest = {
+    "version": os.environ.get("VERSION") or "0.0.0-local",
+    "snapshots": snapshots,
+}
 (out / "snapshots.json").write_text(json.dumps(manifest, indent=2) + "\n")
 PY
 

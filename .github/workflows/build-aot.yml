@@ -1,11 +1,5 @@
 name: Build AOT
 
-# Traces a snapshot, translates its hot blocks, and emits the engine modules
-# every other workflow consumes. See docs/design/release-strategy.md.
-#
-# The output is wasm32-wasip2 and therefore host-independent: one build serves
-# all five platform targets. Running this inside build-binaries' matrix would
-# pay the whole pipeline five times.
 
 on:
   workflow_call:
@@ -102,7 +96,9 @@ jobs:
 
           dist = Path("dist"); dist.mkdir(exist_ok=True)
           packed = dist / f"{snap_id}.snap.lz4"
-          with urllib.request.urlopen(url, timeout=300) as r, open(packed, "wb") as f:
+
+          request = urllib.request.Request(url, headers={"User-Agent": "vpod-ci"})
+          with urllib.request.urlopen(request, timeout=300) as r, open(packed, "wb") as f:
               shutil.copyfileobj(r, f)
 
           digest = hashlib.sha256(packed.read_bytes()).hexdigest()
