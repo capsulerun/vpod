@@ -12,6 +12,15 @@ use riscv_core::Hart;
 
 const PYRUNNER_SENTINEL: &str = "---VPOD_DONE---";
 
+const MAX_INLINE_EXEC: usize = 1900;
+const STAGE_CHUNK: usize = 1500;
+const STAGE_PATH: &str = "/tmp/.vpod_cmd";
+
+const PYRUNNER_MAX_LINE: usize = 3800;
+const PYRUNNER_STAGE_CHUNK: usize = 2500;
+
+const SHELL_PROMPT_SENTINEL: &[u8] = b"\x1fvpod\x1f";
+
 const AOT_MISMATCH_PROBE_THRESHOLD: u64 = 64;
 
 fn warn_if_aot_mismatch(hart: &Hart) {
@@ -41,6 +50,82 @@ pub struct Session {
     pub is_pyrunner: bool,
     pub has_pyrunner: bool,
     pub pyrunner_dirty: bool,
+    pub needs_resync: bool,
+}
+
+fn stage_long_command(session: &mut Session, code: &str) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(code.as_bytes());
+    let prompt = session.prompt.clone();
+
+    for (i, chunk) in encoded.as_bytes().chunks(STAGE_CHUNK).enumerate() {
+        let chunk = std::str::from_utf8(chunk).unwrap_or_default();
+        let redirect = if i == 0 { ">" } else { ">>" };
+        let upload = format!("printf %s {chunk} {redirect} {STAGE_PATH}.b64\n");
+
+        for byte in upload.bytes() {
+            session.bus.uart.push_rx(byte);
+        }
+        repl::wait_for_prompt(&mut session.bus, &mut session.hart, &prompt);
+        session.bus.uart.drain_tx();
+        session.bus.uart_stderr.drain_tx();
+        session.bus.uart_ctrl.drain_tx();
+    }
+
+    format!(
+        "base64 -d {STAGE_PATH}.b64 > {STAGE_PATH}.sh && rm -f {STAGE_PATH}.b64; \
+         sh {STAGE_PATH}.sh"
+    )
+}
+
+fn stage_pyrunner_code(session: &mut Session, encoded: &str) -> String {
+    for (i, chunk) in encoded.as_bytes().chunks(PYRUNNER_STAGE_CHUNK).enumerate() {
+        let chunk = std::str::from_utf8(chunk).unwrap_or_default();
+        let mode = if i == 0 { "w" } else { "a" };
+        let statement = format!("open('{STAGE_PATH}.py.b64','{mode}').write('{chunk}')");
+        let line = base64::engine::general_purpose::STANDARD.encode(statement.as_bytes());
+
+        for byte in line.bytes() {
+            session.bus.uart_data.push_rx(byte);
+        }
+        session.bus.uart_data.push_rx(b'\n');
+
+        repl::capture_output(
+            &mut session.bus,
+            &mut session.hart,
+            b"",
+            30,
+            false,
+            Some(PYRUNNER_SENTINEL),
+            true,
+        );
+        session.bus.uart_ctrl.drain_tx();
+        session.bus.uart_data.drain_tx();
+    }
+
+    let loader = format!(
+        "import base64 as _vb, os as _vo\n\
+         _vs = _vb.b64decode(open('{STAGE_PATH}.py.b64').read())\n\
+         _vo.remove('{STAGE_PATH}.py.b64')\n\
+         exec(compile(_vs, '<vpod>', 'exec'))"
+    );
+    base64::engine::general_purpose::STANDARD.encode(loader.as_bytes())
+}
+
+fn install_prompt_sentinel(bus: &mut MachineBus, hart: &mut Hart, prompt_bytes: &mut Vec<u8>) {
+    if prompt_bytes == SHELL_PROMPT_SENTINEL {
+        return;
+    }
+
+    let export = "export PS1='$(__ec $?)'\"$(printf '\\037vpod\\037')\"\n";
+    for byte in export.bytes() {
+        bus.uart.push_rx(byte);
+    }
+
+    repl::wait_for_prompt(bus, hart, SHELL_PROMPT_SENTINEL);
+    bus.uart.drain_tx();
+    bus.uart_stderr.drain_tx();
+    bus.uart_ctrl.drain_tx();
+    *prompt_bytes = SHELL_PROMPT_SENTINEL.to_vec();
 }
 
 struct CachedBase {
@@ -113,7 +198,7 @@ impl SessionManager {
         let python_ready = flags & machine::snapshot::FLAG_PYTHON_READY != 0;
         let use_pyrunner = is_python && python_ready;
 
-        let prompt_bytes = if use_pyrunner {
+        let mut prompt_bytes = if use_pyrunner {
             b"# ".to_vec()
         } else {
             prompt.into_bytes()
@@ -171,6 +256,10 @@ impl SessionManager {
             bus.uart.drain_tx();
         }
 
+        if is_shell {
+            install_prompt_sentinel(&mut bus, &mut hart, &mut prompt_bytes);
+        }
+
         warn_if_aot_mismatch(&hart);
 
         let id = self.next_id.get();
@@ -185,6 +274,7 @@ impl SessionManager {
                 is_pyrunner: use_pyrunner,
                 has_pyrunner: python_ready,
                 pyrunner_dirty: false,
+                needs_resync: false,
             },
         );
 
@@ -201,6 +291,11 @@ impl SessionManager {
         let session = sessions
             .get_mut(&handle)
             .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+        if session.needs_resync {
+            repl::wait_for_prompt(&mut session.bus, &mut session.hart, &session.prompt);
+            session.needs_resync = false;
+        }
 
         session.bus.uart.drain_tx();
         session.bus.uart_stderr.drain_tx();
@@ -226,6 +321,12 @@ impl SessionManager {
             }
 
             let b64 = base64::engine::general_purpose::STANDARD.encode(code.as_bytes());
+            let b64 = if b64.len() > PYRUNNER_MAX_LINE {
+                stage_pyrunner_code(session, &b64)
+            } else {
+                b64
+            };
+
             for byte in b64.bytes() {
                 session.bus.uart_data.push_rx(byte);
             }
@@ -261,6 +362,12 @@ impl SessionManager {
                 exit_code,
             })
         } else {
+            let code = if session.is_shell && code.len() > MAX_INLINE_EXEC {
+                stage_long_command(session, &code)
+            } else {
+                code
+            };
+
             let cmd = if session.is_shell {
                 format!("{{ {code}; }} 2>/dev/ttyS1\n")
             } else {
@@ -306,6 +413,8 @@ impl SessionManager {
                 session.bus.uart.drain_tx();
                 session.bus.uart_stderr.drain_tx();
                 session.bus.uart_ctrl.drain_tx();
+
+                session.needs_resync = true;
             }
 
             Ok(ExecutionResult {
@@ -329,6 +438,14 @@ impl SessionManager {
         if session.pyrunner_dirty {
             restart_pyrunner(session);
             session.pyrunner_dirty = false;
+        }
+
+        if session.needs_resync {
+            repl::wait_for_prompt(&mut session.bus, &mut session.hart, &session.prompt);
+            session.bus.uart.drain_tx();
+            session.bus.uart_stderr.drain_tx();
+            session.bus.uart_ctrl.drain_tx();
+            session.needs_resync = false;
         }
 
         let mut buf = Vec::new();
@@ -395,7 +512,7 @@ impl SessionManager {
         bus.uart_ctrl.drain_tx();
         hart.is_waiting = false;
         repl::sync_clock(&mut bus, &mut hart, &prompt_bytes);
-        let (is_shell, is_pyrunner, has_pyrunner, prompt) = if parts.len() == 3 {
+        let (is_shell, is_pyrunner, has_pyrunner, mut prompt) = if parts.len() == 3 {
             let kind = parts[0];
             let has_py = parts[1] == "true";
             let prompt = parts[2].as_bytes().to_vec();
@@ -403,6 +520,10 @@ impl SessionManager {
         } else {
             (true, false, false, b"# ".to_vec())
         };
+
+        if is_shell {
+            install_prompt_sentinel(&mut bus, &mut hart, &mut prompt);
+        }
 
         warn_if_aot_mismatch(&hart);
 
@@ -418,6 +539,7 @@ impl SessionManager {
                 is_pyrunner,
                 has_pyrunner,
                 pyrunner_dirty: false,
+                needs_resync: false,
             },
         );
 
