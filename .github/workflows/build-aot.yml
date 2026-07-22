@@ -127,7 +127,6 @@ jobs:
           cp sdks/python/vpod/vpod_wasi_lib_aot.wasm dist/aot/
           cp sdks/python/vpod/vpod_wasi_lib.wasm dist/aot/
           cp target/wasm32-wasip2/release/vpod-wasi-cli.wasm dist/aot/
-          printf '%s %s\n' "${{ inputs.snapshot }}" "${{ steps.registry.outputs.sha256 }}" > dist/aot/TRACED_SNAPSHOT
           ls -lh dist/aot
 
       - name: Verify
