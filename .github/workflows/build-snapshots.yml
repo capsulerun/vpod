@@ -61,7 +61,7 @@ jobs:
           sudo apt-get install -y -q libarchive-tools cpio lz4
 
       - name: Install Zig
-        uses: mlugg/setup-zig@v1
+        uses: mlugg/setup-zig@v2
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
