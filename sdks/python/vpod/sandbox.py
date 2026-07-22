@@ -11,6 +11,7 @@ from ._component import _maybe_upgrade_tier, active_tier, load_component, locate
 from ._result import unwrap_result as _unwrap_result
 from .code import Code
 from .commands import Commands
+from .install import Install
 
 INSTANCES_DIR = Path.home() / ".vpod" / "instances"
 
@@ -65,6 +66,10 @@ class Sandbox:
             lambda: self._exports,
             self._snapshot_path,
             self._get_code_session_id,
+        )
+
+        self.install = Install(
+            self._exports
         )
 
     @classmethod
