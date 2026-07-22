@@ -136,7 +136,7 @@ Contributions are welcome, from bug reports to new device support. Open an [issu
 
 - **Rust** (latest stable) with the `wasm32-wasip2` target: `rustup target add wasm32-wasip2`
 - **Python 3.10+** for the SDK
-- **Zig** (0.14) and **bsdtar**, only needed if you build snapshots yourself
+- **Zig** (0.16) and **bsdtar**, only needed if you build snapshots yourself
 
 ### Development setup
 

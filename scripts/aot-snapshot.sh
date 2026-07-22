@@ -104,6 +104,10 @@ TRANSLATE_ARGS=""
 [ -n "$MAX_BLOCKS" ] && TRANSLATE_ARGS="$TRANSLATE_ARGS --max-blocks $MAX_BLOCKS"
 [ -n "$COVERAGE" ]   && TRANSLATE_ARGS="$TRANSLATE_ARGS --coverage $COVERAGE"
 
+# generated.rs is gitignored and may be the only file in its directory,
+# so on a fresh checkout the directory itself does not exist yet.
+mkdir -p "$(dirname "$GENERATED")"
+
 # shellcheck disable=SC2086
 "$ROOT/target/release/vpod-translate" $TRANSLATE_ARGS "$SNAP" "$AOT_TRACE" "$GENERATED"
 

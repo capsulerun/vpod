@@ -1,11 +1,5 @@
 name: Build AOT
 
-# Traces a snapshot, translates its hot blocks, and emits the engine modules
-# every other workflow consumes. See docs/design/release-strategy.md.
-#
-# The output is wasm32-wasip2 and therefore host-independent: one build serves
-# all five platform targets. Running this inside build-binaries' matrix would
-# pay the whole pipeline five times.
 
 on:
   workflow_call:
@@ -39,9 +33,13 @@ jobs:
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os, urllib.request
 
+          # Cloudflare rejects urllib's default UA with a 403.
+          def fetch(url, timeout=60):
+              request = urllib.request.Request(url, headers={"User-Agent": "vpod-ci"})
+              return urllib.request.urlopen(request, timeout=timeout)
+
           snap_id = os.environ["SNAPSHOT"]
-          registry = json.load(urllib.request.urlopen(
-              "https://registry.vpod.sh/v1/snapshots.json", timeout=60))
+          registry = json.load(fetch("https://registry.vpod.sh/v1/snapshots.json"))
           entry = next((s for s in registry["snapshots"] if s["id"] == snap_id), None)
           if entry is None:
               raise SystemExit(f"snapshot '{snap_id}' not in registry")
@@ -98,7 +96,9 @@ jobs:
 
           dist = Path("dist"); dist.mkdir(exist_ok=True)
           packed = dist / f"{snap_id}.snap.lz4"
-          with urllib.request.urlopen(url, timeout=300) as r, open(packed, "wb") as f:
+
+          request = urllib.request.Request(url, headers={"User-Agent": "vpod-ci"})
+          with urllib.request.urlopen(request, timeout=300) as r, open(packed, "wb") as f:
               shutil.copyfileobj(r, f)
 
           digest = hashlib.sha256(packed.read_bytes()).hexdigest()
@@ -127,7 +127,6 @@ jobs:
           cp sdks/python/vpod/vpod_wasi_lib_aot.wasm dist/aot/
           cp sdks/python/vpod/vpod_wasi_lib.wasm dist/aot/
           cp target/wasm32-wasip2/release/vpod-wasi-cli.wasm dist/aot/
-          printf '%s %s\n' "${{ inputs.snapshot }}" "${{ steps.registry.outputs.sha256 }}" > dist/aot/TRACED_SNAPSHOT
           ls -lh dist/aot
 
       - name: Verify

@@ -1,0 +1,33 @@
+{
+  "_comment": "Catalog of snapshots the registry serves — the source of truth for snapshots.json. Order matters: the SDK resolves name:latest to the first matching name. url/sha256/size are computed at publish time by build-snapshots.yml (CI) or build-registry-bundle.sh (local).",
+  "snapshots": [
+    {
+      "id": "alpine-3.23.0-256mb",
+      "name": "alpine",
+      "tag": "3.23.0",
+      "memory_label": "256MB",
+      "description": "Minimal Alpine Linux 3.23.0 root filesystem for RISC-V (riscv64), packed with kernel modules and the Capsulev vpod agent overlay. Serves as the base layer for all vsnap images. Memory limit: 256 MB."
+    },
+    {
+      "id": "vsnap-base-256mb",
+      "name": "vsnap-base",
+      "tag": "1.0.0",
+      "memory_label": "256MB",
+      "description": "General-purpose vpod snapshot built on Alpine Linux 3.23.0 (riscv64). Includes ca-certificates, Python 3 and uv pre-installed and ready to run. Suitable for lightweight scripting and shell workloads. Memory limit: 256 MB."
+    },
+    {
+      "id": "vsnap-base-512mb",
+      "name": "vsnap-base",
+      "tag": "1.0.0",
+      "memory_label": "512MB",
+      "description": "General-purpose vpod snapshot built on Alpine Linux 3.23.0 (riscv64). Same contents as vsnap-base with a 512 MB memory limit, for workloads that need more headroom (web servers, larger installs). Memory limit: 512 MB."
+    },
+    {
+      "id": "vsnap-data-512mb",
+      "name": "vsnap-data",
+      "tag": "1.0.0",
+      "memory_label": "512MB",
+      "description": "vpod snapshot built on Alpine Linux 3.23.0 (riscv64). Extends vsnap-base with NumPy and pandas pre-installed for numerical and DataFrame workloads. Memory limit: 512 MB."
+    }
+  ]
+}
