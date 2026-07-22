@@ -81,10 +81,6 @@ with Sandbox.create() as sandbox:
 > [!IMPORTANT]
 > The first call to `Sandbox.create()` downloads the default snapshot (`alpine`) and caches it locally if not already present.
 
-> [!TIP]
-> The default snapshot ships with `apk` for system packages and `uv` for Python packages, so you can install what you need at runtime.
-
-
 ### CLI
 
 ```bash
