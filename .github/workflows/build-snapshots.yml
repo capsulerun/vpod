@@ -78,6 +78,9 @@ jobs:
       - name: Build default snapshot (alpine-3.23.0-256mb)
         run: ./scripts/build-default-snapshot.sh
 
+      - name: Build 512MB base snapshot (vsnap-base-512mb)
+        run: ./scripts/build-default-snapshot.sh --ram 512
+
       - name: Build data snapshot (vsnap-data-512mb)
         run: ./scripts/build-data-snapshot.sh
 
@@ -86,6 +89,7 @@ jobs:
           mkdir -p dist/registry
           lz4 -9 -f dist/alpine-3.23.0-256mb.snap dist/registry/alpine-3.23.0-256mb.snap
           cp dist/registry/alpine-3.23.0-256mb.snap dist/registry/vsnap-base-256mb.snap
+          lz4 -9 -f dist/alpine-3.23.0-512mb.snap dist/registry/vsnap-base-512mb.snap
           lz4 -9 -f dist/vsnap-data-512mb.snap dist/registry/vsnap-data-512mb.snap
           ls -lh dist/registry
 
@@ -102,6 +106,22 @@ jobs:
               "https://registry.vpod.sh/v1/snapshots.json", timeout=60))
 
           manifest["version"] = os.environ["VERSION"]
+
+          # A snapshot id we built but the live manifest doesn't know yet is a
+          # new variant: take its metadata from the repo template, pointing the
+          # url at the production path.
+          template = json.loads(
+              Path("docs/v0.4.1-registry/test/snapshots.json").read_text())
+          known_ids = {entry["id"] for entry in manifest["snapshots"]}
+          for entry in template["snapshots"]:
+              if entry["id"] in known_ids:
+                  continue
+              if not (registry_dir / f"{entry['id']}.snap").exists():
+                  continue
+              entry["url"] = f"https://registry.vpod.sh/v1/{entry['id']}.snap"
+              manifest["snapshots"].append(entry)
+              print(f"  {entry['id']}: new snapshot, added from template")
+
           for entry in manifest["snapshots"]:
               built = registry_dir / f"{entry['id']}.snap"
               if not built.exists():

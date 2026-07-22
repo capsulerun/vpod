@@ -127,6 +127,7 @@ snapshots.pull("alpine:latest")
 |:---|:---|:---|:---|
 | `alpine` | 3.23.0 | Minimal Alpine Linux snapshot. | 256 MB |
 | `vsnap-base` | 0.1.0 | Alpine-based general-purpose snapshot with Python. | 256 MB |
+| `vsnap-base-512mb` | 0.1.0 | Same as `vsnap-base` with more memory headroom, for web servers and larger installs. | 512 MB |
 | `vsnap-data` | 0.1.0 | Alpine-based snapshot with `numpy`, `pandas`, and `scipy`. | 512 MB |
 
 ## Documentation

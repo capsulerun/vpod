@@ -9,16 +9,18 @@ OUT="${OUT:-dist/registry-bundle}"
 
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
     ./scripts/build-default-snapshot.sh
+    ./scripts/build-default-snapshot.sh --ram 512
     ./scripts/build-data-snapshot.sh
 fi
 
-for snap in dist/alpine-3.23.0-256mb.snap dist/vsnap-data-512mb.snap; do
+for snap in dist/alpine-3.23.0-256mb.snap dist/alpine-3.23.0-512mb.snap dist/vsnap-data-512mb.snap; do
     [ -f "$snap" ] || { echo "error: $snap missing (build it or drop SKIP_BUILD)"; exit 1; }
 done
 
 mkdir -p "$OUT"
 lz4 -9 -f dist/alpine-3.23.0-256mb.snap "$OUT/alpine-3.23.0-256mb.snap"
 cp "$OUT/alpine-3.23.0-256mb.snap" "$OUT/vsnap-base-256mb.snap"
+lz4 -9 -f dist/alpine-3.23.0-512mb.snap "$OUT/vsnap-base-512mb.snap"
 lz4 -9 -f dist/vsnap-data-512mb.snap "$OUT/vsnap-data-512mb.snap"
 
 TEMPLATE="$TEMPLATE" OUT="$OUT" python3 - <<'PY'
