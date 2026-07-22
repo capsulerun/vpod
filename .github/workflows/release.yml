@@ -17,6 +17,11 @@ on:
         required: false
         default: true
         type: boolean
+      publish_crate:
+        description: 'Publish vpod CLI to crates.io (interpreter-only, no AOT)'
+        required: false
+        default: true
+        type: boolean
       build_snapshots:
         description: 'Rebuild + publish registry snapshots first (only when guest content changed — republishing changes their sha256 and degrades AOT for older releases)'
         required: false
@@ -128,3 +133,33 @@ jobs:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: twine upload dist/*
+
+  publish-crate:
+    name: Publish – crates.io (vpod)
+    if: ${{ !cancelled() && !failure() && inputs.publish_crate }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inject version
+        run: |
+          V="${{ inputs.version }}"
+          sed -i "s/^version = \".*\"/version = \"$V\"/" crates/vpod/Cargo.toml
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Stub the AOT translation (interpreter-only build)
+        run: ./scripts/aot-stub.sh
+
+      - name: Build WASM component (embedded by vpod build.rs)
+        run: |
+          cargo build --release --target wasm32-wasip2 -p wasi-component --bin vpod-wasi-cli
+          cp target/wasm32-wasip2/release/vpod-wasi-cli.wasm crates/vpod/
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p vpod --allow-dirty
