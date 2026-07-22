@@ -1,5 +1,3 @@
-
-
 <h1 align="center"> <code>Vpod</code> </h1>
 
 <div align="center">
@@ -114,19 +112,6 @@ Visit [Vpod documentation](https://docs.vpod.sh/quickstart).
 ## Contributing
 
 Contributions are welcome, from bug reports to new device support. Open an [issue](https://github.com/capsulerun/vpod/issues/new) to discuss anything substantial before building it.
-
-### Repository layout
-
-| Path | What it is |
-|:---|:---|
-| `crates/riscv-core` | RV64GC decoder and executor, MMU, and the AOT block runtime |
-| `crates/machine` | The machine model: RAM (copy-on-write), UART, PLIC/CLINT, virtio devices, snapshot save/restore |
-| `crates/wasi-component` | The WASM component (WASI 0.2) that wraps the machine for sandboxed use |
-| `crates/vpod` | The host CLI (`vpod`), which runs the WASM component |
-| `crates/native-cli` | A native (non-WASM) build of the emulator, used for development and debugging |
-| `crates/vpod-translate` | The AOT translator: turns traced hot RISC‑V code into Rust at snapshot build time |
-| `sdks/python` | The Python SDK (`pip install vpod`) |
-| `scripts/` | Build scripts for the WASM component, snapshots, and AOT translation |
 
 ### Prerequisites
 
