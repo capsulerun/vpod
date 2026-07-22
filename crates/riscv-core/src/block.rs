@@ -191,6 +191,8 @@ pub struct BlockCache {
     aot_hashes: rustc_hash::FxHashMap<u64, u64>,
     aot_page_table: Vec<u64>,
     aot_evict_generation: u64,
+    aot_hash_probes: u64,
+    aot_hash_matches: u64,
 
     #[cfg(feature = "aot-trace")]
     trace: std::collections::HashMap<u64, u64>,
@@ -227,6 +229,8 @@ impl BlockCache {
             aot_hashes: rustc_hash::FxHashMap::default(),
             aot_page_table: Vec::new(),
             aot_evict_generation: 0,
+            aot_hash_probes: 0,
+            aot_hash_matches: 0,
             #[cfg(feature = "aot-trace")]
             trace: std::collections::HashMap::new(),
         }
@@ -236,6 +240,16 @@ impl BlockCache {
         self.aot_hashes = hashes.iter().copied().collect();
         self.aot_page_table.clear();
         self.aot_evict_generation = self.aot_evict_generation.wrapping_add(1);
+        self.aot_hash_probes = 0;
+        self.aot_hash_matches = 0;
+    }
+
+    pub fn aot_match_stats(&self) -> (u64, u64) {
+        (self.aot_hash_probes, self.aot_hash_matches)
+    }
+
+    pub fn aot_enabled(&self) -> bool {
+        !self.aot_hashes.is_empty()
     }
 
     #[inline(always)]
@@ -256,6 +270,12 @@ impl BlockCache {
 
     pub fn aot_record_hash(&mut self, page: u64, hash: u64) -> Option<u64> {
         let orig = self.aot_hashes.get(&hash).copied();
+
+        self.aot_hash_probes += 1;
+        if orig.is_some() {
+            self.aot_hash_matches += 1;
+        }
+
         if page < AOT_TABLE_MAX_PAGES {
             if self.aot_page_table.len() <= page as usize {
                 self.aot_page_table.resize(page as usize + 1, AOT_UNKNOWN);

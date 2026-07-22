@@ -99,6 +99,7 @@ def _snapshots_referenced_by_instances() -> set[str]:
 
 _REGISTRY_TTL = 86400
 _REGISTRY_CACHE = cache_dir() / "snapshots.json"
+_REGISTRY_VERSION_MARKER = cache_dir() / "snapshots.json.sdkver"
 
 
 def catalog() -> list[dict]:
@@ -106,8 +107,15 @@ def catalog() -> list[dict]:
     return fetch_registry()
 
 
+def _registry_cache_version_matches() -> bool:
+    try:
+        return _REGISTRY_VERSION_MARKER.read_text().strip() == _version()
+    except OSError:
+        return False
+
+
 def fetch_registry() -> list[dict]:
-    if _REGISTRY_CACHE.exists():
+    if _REGISTRY_CACHE.exists() and _registry_cache_version_matches():
         age = time.time() - _REGISTRY_CACHE.stat().st_mtime
         if age < _REGISTRY_TTL:
             return json.loads(_REGISTRY_CACHE.read_text())["snapshots"]
@@ -124,6 +132,7 @@ def fetch_registry() -> list[dict]:
 
         _REGISTRY_CACHE.parent.mkdir(parents=True, exist_ok=True)
         _REGISTRY_CACHE.write_bytes(data)
+        _REGISTRY_VERSION_MARKER.write_text(_version())
         return json.loads(data)["snapshots"]
     except Exception as e:
         if _REGISTRY_CACHE.exists():

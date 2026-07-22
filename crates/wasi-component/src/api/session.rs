@@ -12,6 +12,27 @@ use riscv_core::Hart;
 
 const PYRUNNER_SENTINEL: &str = "---VPOD_DONE---";
 
+const AOT_MISMATCH_PROBE_THRESHOLD: u64 = 64;
+
+fn warn_if_aot_mismatch(hart: &Hart) {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    if !hart.blocks.aot_enabled() {
+        return;
+    }
+    let (probes, matches) = hart.blocks.aot_match_stats();
+    if probes >= AOT_MISMATCH_PROBE_THRESHOLD
+        && matches == 0
+        && !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
+        eprintln!(
+            "[vpod] warning: the bundled AOT module does not match this snapshot; \
+             running at interpreter speed. Upgrade the vpod package or re-pull \
+             the snapshot so the two agree."
+        );
+    }
+}
+
 pub struct Session {
     pub bus: MachineBus,
     pub hart: Hart,
@@ -149,6 +170,8 @@ impl SessionManager {
             repl::wait_for_prompt(&mut bus, &mut hart, &prompt_bytes);
             bus.uart.drain_tx();
         }
+
+        warn_if_aot_mismatch(&hart);
 
         let id = self.next_id.get();
         self.next_id.set(id + 1);
@@ -380,6 +403,8 @@ impl SessionManager {
         } else {
             (true, false, false, b"# ".to_vec())
         };
+
+        warn_if_aot_mismatch(&hart);
 
         let id = self.next_id.get();
         self.next_id.set(id + 1);
