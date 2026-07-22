@@ -5,7 +5,9 @@ use crate::decode::{CompressedInstruction, Instruction, sign_extend};
 use crate::execute::{ExecContext, take_exception};
 use crate::extensions as ext;
 use crate::mmu::{Mmu, MmuFault};
+use crate::perf;
 use crate::system_bus::SystemBus;
+use crate::trap::StepResult;
 
 pub const MAX_BLOCK_OPS: usize = 64;
 
@@ -63,6 +65,14 @@ pub enum AluKind {
     ZextH,
     Rev8,
     OrcB,
+    Sh1add,
+    Sh2add,
+    Sh3add,
+    AddUw,
+    Sh1addUw,
+    Sh2addUw,
+    Sh3addUw,
+    SlliUw,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -143,6 +153,10 @@ pub enum Op {
         rs1: u8,
         imm: i64,
     },
+
+    Fallback {
+        raw: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -172,7 +186,27 @@ impl Slot {
 pub struct BlockCache {
     slots: Vec<Slot>,
     page_bitmap: Vec<u64>,
+    code_generation: u64,
+
+    aot_hashes: rustc_hash::FxHashMap<u64, u64>,
+    aot_page_table: Vec<u64>,
+    aot_evict_generation: u64,
+    aot_hash_probes: u64,
+    aot_hash_matches: u64,
+
+    #[cfg(feature = "aot-trace")]
+    trace: std::collections::HashMap<u64, u64>,
 }
+
+pub enum AotResolve {
+    Hit(u64),
+    Miss,
+    Unknown,
+}
+
+const AOT_UNKNOWN: u64 = u64::MAX;
+const AOT_MISS: u64 = u64::MAX - 1;
+const AOT_TABLE_MAX_PAGES: u64 = 1 << 20;
 
 impl Default for BlockCache {
     fn default() -> Self {
@@ -191,7 +225,77 @@ impl BlockCache {
         Self {
             slots,
             page_bitmap: Vec::new(),
+            code_generation: 1,
+            aot_hashes: rustc_hash::FxHashMap::default(),
+            aot_page_table: Vec::new(),
+            aot_evict_generation: 0,
+            aot_hash_probes: 0,
+            aot_hash_matches: 0,
+            #[cfg(feature = "aot-trace")]
+            trace: std::collections::HashMap::new(),
         }
+    }
+
+    pub fn aot_init(&mut self, hashes: &[(u64, u64)]) {
+        self.aot_hashes = hashes.iter().copied().collect();
+        self.aot_page_table.clear();
+        self.aot_evict_generation = self.aot_evict_generation.wrapping_add(1);
+        self.aot_hash_probes = 0;
+        self.aot_hash_matches = 0;
+    }
+
+    pub fn aot_match_stats(&self) -> (u64, u64) {
+        (self.aot_hash_probes, self.aot_hash_matches)
+    }
+
+    pub fn aot_enabled(&self) -> bool {
+        !self.aot_hashes.is_empty()
+    }
+
+    #[inline(always)]
+    pub fn aot_resolve(&mut self, page: u64) -> AotResolve {
+        match self.aot_page_table.get(page as usize) {
+            Some(&AOT_UNKNOWN) => AotResolve::Unknown,
+            Some(&AOT_MISS) => AotResolve::Miss,
+            Some(&orig) => AotResolve::Hit(orig),
+            None => {
+                if self.aot_hashes.is_empty() || page >= AOT_TABLE_MAX_PAGES {
+                    AotResolve::Miss
+                } else {
+                    AotResolve::Unknown
+                }
+            }
+        }
+    }
+
+    pub fn aot_record_hash(&mut self, page: u64, hash: u64) -> Option<u64> {
+        let orig = self.aot_hashes.get(&hash).copied();
+
+        self.aot_hash_probes += 1;
+        if orig.is_some() {
+            self.aot_hash_matches += 1;
+        }
+
+        if page < AOT_TABLE_MAX_PAGES {
+            if self.aot_page_table.len() <= page as usize {
+                self.aot_page_table.resize(page as usize + 1, AOT_UNKNOWN);
+            }
+            self.aot_page_table[page as usize] = orig.unwrap_or(AOT_MISS);
+        }
+        self.mark_page(page);
+
+        orig
+    }
+
+    #[cfg(feature = "aot-trace")]
+    #[inline(always)]
+    pub fn trace_exec(&mut self, physical_address: u64) {
+        *self.trace.entry(physical_address).or_insert(0) += 1;
+    }
+
+    #[cfg(feature = "aot-trace")]
+    pub fn trace_counts(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
+        self.trace.iter().map(|(&pa, &n)| (pa, n))
     }
 
     #[inline(always)]
@@ -230,6 +334,19 @@ impl BlockCache {
         }
 
         self.page_bitmap[word] |= 1 << (page % 64);
+
+        self.code_generation = self.code_generation.wrapping_add(1);
+    }
+
+    #[inline(always)]
+    pub fn code_generation(&self) -> u64 {
+        self.code_generation
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn page_has_code(&self, page: u64) -> bool {
+        let word = (page / 64) as usize;
+        word < self.page_bitmap.len() && self.page_bitmap[word] & (1 << (page % 64)) != 0
     }
 
     #[inline(always)]
@@ -242,7 +359,19 @@ impl BlockCache {
         }
     }
 
+    #[inline(always)]
+    pub fn aot_evict_generation(&self) -> u64 {
+        self.aot_evict_generation
+    }
+
     fn evict_page(&mut self, page: u64) {
+        perf::note_store_page_eviction();
+
+        self.aot_evict_generation = self.aot_evict_generation.wrapping_add(1);
+        if let Some(entry) = self.aot_page_table.get_mut(page as usize) {
+            *entry = AOT_UNKNOWN;
+        }
+
         for slot in &mut self.slots {
             if slot.tag != u64::MAX && slot.tag >> 12 == page {
                 *slot = Slot::EMPTY;
@@ -258,6 +387,9 @@ impl BlockCache {
         }
 
         self.page_bitmap.clear();
+
+        self.aot_page_table.clear();
+        self.aot_evict_generation = self.aot_evict_generation.wrapping_add(1);
     }
 }
 
@@ -280,14 +412,20 @@ pub fn decode_block<B: SystemBus>(bus: &mut B, physical_address: u64) -> Option<
             }
 
             let high_halfword = bus.read_halfword(physical_address + offset_in_block + 2) as u32;
+            let raw = low_halfword | (high_halfword << 16);
 
-            match decode_full(low_halfword | (high_halfword << 16)) {
+            match decode_full(raw) {
                 Some(op) => (op, 4u8),
-                None => break,
+                None => {
+                    if fallback_stops_block(raw) {
+                        break;
+                    }
+                    (Op::Fallback { raw }, 4u8)
+                }
             }
         };
 
-        let terminator = matches!(op, Op::Branch { .. } | Op::Jal { .. } | Op::Jalr { .. });
+        let terminator = matches!(op, Op::Jal { .. } | Op::Jalr { .. });
         ops.push(DecodedInsn {
             op,
             pc_off: offset_in_block as u16,
@@ -308,6 +446,11 @@ pub fn decode_block<B: SystemBus>(bus: &mut B, physical_address: u64) -> Option<
         ops: ops.into_boxed_slice(),
         byte_len: offset_in_block as u32,
     })
+}
+
+#[inline(always)]
+fn fallback_stops_block(raw: u32) -> bool {
+    (raw & 0x7f == 0x73 && (raw >> 12) & 0x7 == 0) || raw & 0x707f == 0x100f
 }
 
 fn decode_full(raw: u32) -> Option<Op> {
@@ -442,6 +585,7 @@ fn decode_full(raw: u32) -> Option<Op> {
 
             let kind_imm = match funct3 {
                 0x0 => Some((AluKind::Addw, imm)),
+                0x1 if funct7 == 0x04 || funct7 == 0x05 => Some((AluKind::SlliUw, imm & 0x3f)),
                 0x1 => match funct7 {
                     0x00 => Some((AluKind::Sllw, shamt)),
                     0x30 => match shamt {
@@ -491,7 +635,10 @@ fn decode_full(raw: u32) -> Option<Op> {
                 (0x5, 0x05) => AluKind::Max,
                 (0x6, 0x05) => AluKind::Minu,
                 (0x7, 0x05) => AluKind::Maxu,
-                (0x4, 0x04) => AluKind::ZextH,
+                // Zba: shifted add
+                (0x2, 0x10) => AluKind::Sh1add,
+                (0x4, 0x10) => AluKind::Sh2add,
+                (0x6, 0x10) => AluKind::Sh3add,
                 _ => return None,
             };
             Some(Op::AluReg { kind, rd, rs1, rs2 })
@@ -510,6 +657,13 @@ fn decode_full(raw: u32) -> Option<Op> {
                 (0x7, 0x01) => AluKind::Remuw,
                 (0x1, 0x30) => AluKind::Rolw,
                 (0x5, 0x30) => AluKind::Rorw,
+                // Zbb: zext.h is `packw rd, rs1, x0`, so it only decodes with rs2 == 0.
+                (0x4, 0x04) if rs2 == 0 => AluKind::ZextH,
+                // Zba: zero-extended shifted add
+                (0x0, 0x04) => AluKind::AddUw,
+                (0x2, 0x10) => AluKind::Sh1addUw,
+                (0x4, 0x10) => AluKind::Sh2addUw,
+                (0x6, 0x10) => AluKind::Sh3addUw,
                 _ => return None,
             };
 
@@ -848,7 +1002,7 @@ fn decode_compressed(raw: u16) -> Option<Op> {
 }
 
 #[inline(always)]
-fn alu(kind: AluKind, lhs: u64, rhs: u64) -> u64 {
+pub(crate) fn alu(kind: AluKind, lhs: u64, rhs: u64) -> u64 {
     match kind {
         AluKind::Add => lhs.wrapping_add(rhs),
         AluKind::Sub => lhs.wrapping_sub(rhs),
@@ -911,6 +1065,15 @@ fn alu(kind: AluKind, lhs: u64, rhs: u64) -> u64 {
         AluKind::SextH => lhs as i16 as i64 as u64,
         AluKind::ZextH => lhs as u16 as u64,
         AluKind::Rev8 => lhs.swap_bytes(),
+        // Zba
+        AluKind::Sh1add => (lhs << 1).wrapping_add(rhs),
+        AluKind::Sh2add => (lhs << 2).wrapping_add(rhs),
+        AluKind::Sh3add => (lhs << 3).wrapping_add(rhs),
+        AluKind::AddUw => (lhs as u32 as u64).wrapping_add(rhs),
+        AluKind::Sh1addUw => ((lhs as u32 as u64) << 1).wrapping_add(rhs),
+        AluKind::Sh2addUw => ((lhs as u32 as u64) << 2).wrapping_add(rhs),
+        AluKind::Sh3addUw => ((lhs as u32 as u64) << 3).wrapping_add(rhs),
+        AluKind::SlliUw => (lhs as u32 as u64) << (rhs & 0x3f),
         AluKind::OrcB => {
             let mut result = 0u64;
             for i in 0..8 {
@@ -927,9 +1090,10 @@ pub fn exec_block<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     block: &Block,
     entry_pc: u64,
-    satp: u64,
-) -> u64 {
+    mut satp: u64,
+) -> (u64, StepResult) {
     let mut retired_instructions: u64 = 0;
+    let mut pending: u64 = 0;
 
     for decoded_instruction in block.ops.iter() {
         let pc = entry_pc.wrapping_add(decoded_instruction.pc_off as u64);
@@ -954,12 +1118,11 @@ pub fn exec_block<B: SystemBus>(
             Op::Load { kind, rd, rs1, imm } => {
                 let virtual_address = ctx.regs.read(rs1 as usize).wrapping_add(imm as u64);
 
-                ctx.regs.pc = pc;
-                match do_load(ctx, satp, kind, virtual_address) {
+                match do_load(ctx, satp, kind, virtual_address, pc) {
                     Ok(v) => ctx.regs.write(rd as usize, v),
                     Err(()) => {
-                        ctx.csr.instret = ctx.csr.instret.wrapping_add(retired_instructions);
-                        return retired_instructions + 1;
+                        ctx.csr.instret = ctx.csr.instret.wrapping_add(pending);
+                        return (retired_instructions + 1, StepResult::Ok);
                     }
                 }
             }
@@ -971,10 +1134,9 @@ pub fn exec_block<B: SystemBus>(
             } => {
                 let virtual_address = ctx.regs.read(rs1 as usize).wrapping_add(imm as u64);
                 let val = ctx.regs.read(rs2 as usize);
-                ctx.regs.pc = pc;
-                if do_store(ctx, satp, kind, virtual_address, val).is_err() {
-                    ctx.csr.instret = ctx.csr.instret.wrapping_add(retired_instructions);
-                    return retired_instructions + 1;
+                if do_store(ctx, satp, kind, virtual_address, val, pc).is_err() {
+                    ctx.csr.instret = ctx.csr.instret.wrapping_add(pending);
+                    return (retired_instructions + 1, StepResult::Ok);
                 }
             }
             Op::Branch {
@@ -994,16 +1156,11 @@ pub fn exec_block<B: SystemBus>(
                     BranchKind::Bgeu => a >= b,
                 };
 
-                ctx.regs.pc = if taken {
-                    pc.wrapping_add(offset as u64)
-                } else {
-                    pc.wrapping_add(decoded_instruction.ilen as u64)
-                };
-
-                retired_instructions += 1;
-                ctx.csr.instret = ctx.csr.instret.wrapping_add(retired_instructions);
-
-                return retired_instructions;
+                if taken {
+                    ctx.regs.pc = pc.wrapping_add(offset as u64);
+                    ctx.csr.instret = ctx.csr.instret.wrapping_add(pending + 1);
+                    return (retired_instructions + 1, StepResult::Ok);
+                }
             }
             Op::Jal { rd, offset } => {
                 ctx.regs.write(
@@ -1012,10 +1169,9 @@ pub fn exec_block<B: SystemBus>(
                 );
 
                 ctx.regs.pc = pc.wrapping_add(offset as u64);
-                retired_instructions += 1;
-                ctx.csr.instret = ctx.csr.instret.wrapping_add(retired_instructions);
+                ctx.csr.instret = ctx.csr.instret.wrapping_add(pending + 1);
 
-                return retired_instructions;
+                return (retired_instructions + 1, StepResult::Ok);
             }
             Op::Jalr { rd, rs1, imm } => {
                 let target = ctx.regs.read(rs1 as usize).wrapping_add(imm as u64) & !1;
@@ -1025,26 +1181,49 @@ pub fn exec_block<B: SystemBus>(
                 );
 
                 ctx.regs.pc = target;
-                retired_instructions += 1;
-                ctx.csr.instret = ctx.csr.instret.wrapping_add(retired_instructions);
+                ctx.csr.instret = ctx.csr.instret.wrapping_add(pending + 1);
 
-                return retired_instructions;
+                return (retired_instructions + 1, StepResult::Ok);
+            }
+            Op::Fallback { raw } => {
+                perf::note_fallback_op();
+                ctx.regs.pc = pc;
+                ctx.csr.instret = ctx.csr.instret.wrapping_add(pending);
+                pending = 0;
+
+                let result = crate::execute::exec_raw(ctx, raw, pc);
+                retired_instructions += 1;
+
+                let next_pc = pc.wrapping_add(decoded_instruction.ilen as u64);
+                if !matches!(result, StepResult::Ok) || ctx.regs.pc != next_pc || *ctx.is_waiting {
+                    return (retired_instructions, result);
+                }
+
+                let new_satp = effective_satp(*ctx.priv_mode, ctx.csr.satp);
+                if new_satp != satp {
+                    return (retired_instructions, result);
+                }
+                satp = new_satp;
+                continue;
             }
         }
 
         retired_instructions += 1;
+        pending += 1;
     }
 
     ctx.regs.pc = entry_pc.wrapping_add(block.byte_len as u64);
-    ctx.csr.instret = ctx.csr.instret.wrapping_add(retired_instructions);
-    retired_instructions
+    ctx.csr.instret = ctx.csr.instret.wrapping_add(pending);
+    (retired_instructions, StepResult::Ok)
 }
 
-fn do_load<B: SystemBus>(
+#[inline(always)]
+pub(crate) fn do_load<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     satp: u64,
     kind: LoadKind,
     virtual_address: u64,
+    pc: u64,
 ) -> Result<u64, ()> {
     let size: u64 = match kind {
         LoadKind::Lb | LoadKind::Lbu => 1,
@@ -1053,15 +1232,65 @@ fn do_load<B: SystemBus>(
         LoadKind::Ld => 8,
     };
 
+    let offset_in_page = virtual_address & 0xFFF;
+    if offset_in_page + size <= 0x1000
+        && let Some(host_page) =
+            ctx.mmu
+                .load_fast_lookup(virtual_address, satp, ctx.bus.ram_epoch())
+    {
+        perf::note_load_fast_hit();
+
+        let raw = unsafe {
+            let p = host_page.add(offset_in_page as usize);
+            match size {
+                1 => *p as u64,
+                2 => u16::from_le((p as *const u16).read_unaligned()) as u64,
+                4 => u32::from_le((p as *const u32).read_unaligned()) as u64,
+                _ => u64::from_le((p as *const u64).read_unaligned()),
+            }
+        };
+
+        #[cfg(debug_assertions)]
+        {
+            let shadow = raw_load(ctx.mmu, ctx.bus, satp, virtual_address, size)
+                .expect("load fast-path hit but slow path faulted");
+            assert_eq!(
+                raw, shadow,
+                "load fast path diverged at va={virtual_address:#x} size={size}"
+            );
+        }
+
+        return Ok(extend_load(kind, raw));
+    }
+
+    do_load_slow(ctx, satp, kind, virtual_address, size, pc)
+}
+
+#[cold]
+#[inline(never)]
+fn do_load_slow<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    satp: u64,
+    kind: LoadKind,
+    virtual_address: u64,
+    size: u64,
+    pc: u64,
+) -> Result<u64, ()> {
     let raw = match raw_load(ctx.mmu, ctx.bus, satp, virtual_address, size) {
         Ok(v) => v,
         Err(f) => {
+            ctx.regs.pc = pc;
             take_exception(ctx, f.mcause(), f.tval());
             return Err(());
         }
     };
 
-    Ok(match kind {
+    Ok(extend_load(kind, raw))
+}
+
+#[inline(always)]
+fn extend_load(kind: LoadKind, raw: u64) -> u64 {
+    match kind {
         LoadKind::Lb => raw as u8 as i8 as i64 as u64,
         LoadKind::Lbu => raw as u8 as u64,
         LoadKind::Lh => raw as u16 as i16 as i64 as u64,
@@ -1069,15 +1298,17 @@ fn do_load<B: SystemBus>(
         LoadKind::Lw => raw as u32 as i32 as i64 as u64,
         LoadKind::Lwu => raw as u32 as u64,
         LoadKind::Ld => raw,
-    })
+    }
 }
 
-fn do_store<B: SystemBus>(
+#[inline(always)]
+pub(crate) fn do_store<B: SystemBus>(
     ctx: &mut ExecContext<B>,
     satp: u64,
     kind: StoreKind,
     virtual_address: u64,
     val: u64,
+    pc: u64,
 ) -> Result<(), ()> {
     let size: u64 = match kind {
         StoreKind::Sb => 1,
@@ -1086,6 +1317,63 @@ fn do_store<B: SystemBus>(
         StoreKind::Sd => 8,
     };
 
+    let offset_in_page = virtual_address & 0xFFF;
+    if offset_in_page + size <= 0x1000
+        && let Some(host_page) = ctx.mmu.store_fast_lookup(
+            virtual_address,
+            satp,
+            ctx.bus.ram_epoch(),
+            ctx.blocks.code_generation(),
+        )
+    {
+        perf::note_store_fast_hit();
+
+        #[cfg(debug_assertions)]
+        {
+            let physical_address = ctx
+                .mmu
+                .translate_store(virtual_address, satp, ctx.bus)
+                .expect("store fast-path hit but slow path faulted");
+            assert!(
+                !ctx.blocks.page_has_code(physical_address >> 12),
+                "store fast path would skip a required SMC eviction at va={virtual_address:#x}"
+            );
+            let shadow = ctx
+                .bus
+                .ram_store_page(physical_address)
+                .expect("store fast-path hit on a non-RAM page");
+            assert_eq!(
+                shadow as usize, host_page as usize,
+                "store fast path diverged at va={virtual_address:#x} size={size}"
+            );
+        }
+
+        unsafe {
+            let p = host_page.add(offset_in_page as usize);
+            match size {
+                1 => *p = val as u8,
+                2 => (p as *mut u16).write_unaligned((val as u16).to_le()),
+                4 => (p as *mut u32).write_unaligned((val as u32).to_le()),
+                _ => (p as *mut u64).write_unaligned(val.to_le()),
+            }
+        }
+
+        return Ok(());
+    }
+
+    do_store_slow(ctx, satp, virtual_address, val, size, pc)
+}
+
+#[cold]
+#[inline(never)]
+fn do_store_slow<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    satp: u64,
+    virtual_address: u64,
+    val: u64,
+    size: u64,
+    pc: u64,
+) -> Result<(), ()> {
     match raw_store(
         ctx.mmu,
         ctx.bus,
@@ -1097,12 +1385,142 @@ fn do_store<B: SystemBus>(
     ) {
         Ok(()) => Ok(()),
         Err(f) => {
+            ctx.regs.pc = pc;
             take_exception(ctx, f.mcause(), f.tval());
             Err(())
         }
     }
 }
 
+#[inline(always)]
+pub(crate) fn _load_span_page<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    satp: u64,
+    span_lo: u64,
+    span_hi: u64,
+) -> Option<*const u8> {
+    if span_lo >> 12 != span_hi >> 12 {
+        return None;
+    }
+
+    ctx.mmu.load_fast_lookup(span_lo, satp, ctx.bus.ram_epoch())
+}
+
+#[inline(always)]
+pub(crate) fn _store_span_page<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    satp: u64,
+    span_lo: u64,
+    span_hi: u64,
+) -> Option<*mut u8> {
+    if span_lo >> 12 != span_hi >> 12 {
+        return None;
+    }
+
+    ctx.mmu.store_fast_lookup(
+        span_lo,
+        satp,
+        ctx.bus.ram_epoch(),
+        ctx.blocks.code_generation(),
+    )
+}
+
+#[inline(always)]
+pub(crate) fn _span_load<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    host_page: *const u8,
+    satp: u64,
+    kind: LoadKind,
+    virtual_address: u64,
+) -> u64 {
+    let size: u64 = match kind {
+        LoadKind::Lb | LoadKind::Lbu => 1,
+        LoadKind::Lh | LoadKind::Lhu => 2,
+        LoadKind::Lw | LoadKind::Lwu => 4,
+        LoadKind::Ld => 8,
+    };
+    let offset_in_page = virtual_address & 0xFFF;
+    debug_assert!(offset_in_page + size <= 0x1000);
+    perf::note_load_fast_hit();
+
+    let raw = unsafe {
+        let p = host_page.add(offset_in_page as usize);
+        match size {
+            1 => *p as u64,
+            2 => u16::from_le((p as *const u16).read_unaligned()) as u64,
+            4 => u32::from_le((p as *const u32).read_unaligned()) as u64,
+            _ => u64::from_le((p as *const u64).read_unaligned()),
+        }
+    };
+
+    #[cfg(debug_assertions)]
+    {
+        let shadow = raw_load(ctx.mmu, ctx.bus, satp, virtual_address, size)
+            .expect("span load covered by page check but slow path faulted");
+        assert_eq!(
+            raw, shadow,
+            "span load diverged at va={virtual_address:#x} size={size}"
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (ctx, satp);
+
+    extend_load(kind, raw)
+}
+
+#[inline(always)]
+pub(crate) fn _span_store<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    host_page: *mut u8,
+    satp: u64,
+    kind: StoreKind,
+    virtual_address: u64,
+    val: u64,
+) {
+    let size: u64 = match kind {
+        StoreKind::Sb => 1,
+        StoreKind::Sh => 2,
+        StoreKind::Sw => 4,
+        StoreKind::Sd => 8,
+    };
+    let offset_in_page = virtual_address & 0xFFF;
+    debug_assert!(offset_in_page + size <= 0x1000);
+    perf::note_store_fast_hit();
+
+    #[cfg(debug_assertions)]
+    {
+        let physical_address = ctx
+            .mmu
+            .translate_store(virtual_address, satp, ctx.bus)
+            .expect("span store covered by page check but slow path faulted");
+        assert!(
+            !ctx.blocks.page_has_code(physical_address >> 12),
+            "span store would skip a required SMC eviction at va={virtual_address:#x}"
+        );
+        let shadow = ctx
+            .bus
+            .ram_store_page(physical_address)
+            .expect("span store hit on a non-RAM page");
+        assert_eq!(
+            shadow as usize, host_page as usize,
+            "span store diverged at va={virtual_address:#x} size={size}"
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (ctx, satp);
+
+    unsafe {
+        let p = host_page.add(offset_in_page as usize);
+        match size {
+            1 => *p = val as u8,
+            2 => (p as *mut u16).write_unaligned((val as u16).to_le()),
+            4 => (p as *mut u32).write_unaligned((val as u32).to_le()),
+            _ => (p as *mut u64).write_unaligned(val.to_le()),
+        }
+    }
+}
+
+#[inline]
 pub fn raw_load<B: SystemBus>(
     mmu: &mut Mmu,
     bus: &mut B,
@@ -1110,7 +1528,11 @@ pub fn raw_load<B: SystemBus>(
     virtual_address: u64,
     size: u64,
 ) -> Result<u64, MmuFault> {
-    if (virtual_address & 0xFFF) + size > 0x1000 {
+    perf::note_load();
+    let offset_in_page = virtual_address & 0xFFF;
+
+    if offset_in_page + size > 0x1000 {
+        perf::note_cross_page();
         let mut buf = [0u8; 8];
 
         for i in 0..size {
@@ -1119,19 +1541,20 @@ pub fn raw_load<B: SystemBus>(
             buf[i as usize] = bus.read_byte(byte_physical_address);
         }
 
-        Ok(u64::from_le_bytes(buf))
-    } else {
-        let physical_address = mmu.translate_load(virtual_address, satp, bus)?;
-
-        Ok(match size {
-            1 => bus.read_byte(physical_address) as u64,
-            2 => bus.read_halfword(physical_address) as u64,
-            4 => bus.read_word(physical_address) as u64,
-            _ => bus.read_doubleword(physical_address),
-        })
+        return Ok(u64::from_le_bytes(buf));
     }
+
+    let physical_address = mmu.translate_load(virtual_address, satp, bus)?;
+
+    Ok(match size {
+        1 => bus.read_byte(physical_address) as u64,
+        2 => bus.read_halfword(physical_address) as u64,
+        4 => bus.read_word(physical_address) as u64,
+        _ => bus.read_doubleword(physical_address),
+    })
 }
 
+#[inline]
 pub fn raw_store<B: SystemBus>(
     mmu: &mut Mmu,
     bus: &mut B,
@@ -1141,7 +1564,9 @@ pub fn raw_store<B: SystemBus>(
     val: u64,
     size: u64,
 ) -> Result<(), MmuFault> {
+    perf::note_store();
     if (virtual_address & 0xFFF) + size > 0x1000 {
+        perf::note_cross_page();
         let bytes = val.to_le_bytes();
 
         for i in 0..size {
@@ -1160,6 +1585,17 @@ pub fn raw_store<B: SystemBus>(
             4 => bus.write_word(physical_address, val as u32),
             _ => bus.write_doubleword(physical_address, val),
         }
+
+        // Fill after the write: the write already materialized/dirty-tracked
+        // the page, so ram_epoch is stable and notify_store just ran (any
+        // code on this page was evicted; code_generation guards refills).
+        mmu.store_fast_fill(
+            virtual_address >> 12,
+            satp,
+            physical_address,
+            blocks.code_generation(),
+            bus,
+        );
     }
     Ok(())
 }
@@ -1180,6 +1616,55 @@ mod tests {
             mem.load_at(addr as usize, &w.to_le_bytes());
         }
         mem
+    }
+
+    const ZBA_PROGRAM: &[(u64, u32)] = &[
+        (0x00, 0x00500093), // addi    x1, x0, 5
+        (0x04, 0x06400113), // addi    x2, x0, 100
+        (0x08, 0x2020a233), // sh1add  x4, x1, x2
+        (0x0c, 0x2020c2b3), // sh2add  x5, x1, x2
+        (0x10, 0x2020e1b3), // sh3add  x3, x1, x2
+        (0x14, 0xfff00313), // addi    x6, x0, -1
+        (0x18, 0x082303bb), // add.uw  x7, x6, x2
+        (0x1c, 0x0843141b), // slli.uw x8, x6, 4
+        (0x20, 0x202364bb), // sh3add.uw x9, x6, x2
+        (0x24, 0x0803453b), // zext.h  x10, x6
+        (0x28, 0x00000073), // ecall
+    ];
+
+    const ZBA_EXPECTED: &[(usize, u64)] = &[
+        (4, 110),           // (5 << 1) + 100
+        (5, 120),           // (5 << 2) + 100
+        (3, 140),           // (5 << 3) + 100
+        (7, 0x1_0000_0063), // zext32(-1) + 100
+        (8, 0xf_ffff_fff0), // zext32(-1) << 4
+        (9, 0x8_0000_005c), // (zext32(-1) << 3) + 100
+        (10, 0xffff),       // zext.h(-1)
+    ];
+
+    #[test]
+    fn zba_block_path() {
+        let mut mem = mem_with(ZBA_PROGRAM);
+        let mut hart = Hart::new(0);
+
+        assert_eq!(hart.run(&mut mem, 32), StepResult::Ok);
+        assert_eq!(hart.regs.pc, 0x28);
+        for &(reg, want) in ZBA_EXPECTED {
+            assert_eq!(hart.regs.read(reg), want, "x{reg} on the block path");
+        }
+    }
+
+    #[test]
+    fn zba_step_path_matches_block_path() {
+        let mut mem = mem_with(ZBA_PROGRAM);
+        let mut hart = Hart::new(0);
+
+        while hart.regs.pc != 0x28 {
+            assert_eq!(hart.step(&mut mem), StepResult::Ok);
+        }
+        for &(reg, want) in ZBA_EXPECTED {
+            assert_eq!(hart.regs.read(reg), want, "x{reg} on the single-step path");
+        }
     }
 
     #[test]

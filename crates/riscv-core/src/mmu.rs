@@ -1,3 +1,4 @@
+use crate::perf;
 use crate::system_bus::SystemBus;
 
 const PTE_V: u64 = 1 << 0;
@@ -26,9 +27,64 @@ impl TlbEntry {
     };
 }
 
+#[derive(Clone, Copy)]
+struct LoadFastEntry {
+    virt_page_num: u64,
+    satp: u64,
+    ram_epoch: u64,
+    epoch: u32,
+    host_page: *const u8,
+}
+
+impl LoadFastEntry {
+    const EMPTY: Self = Self {
+        virt_page_num: u64::MAX,
+        satp: 0,
+        ram_epoch: 0,
+        epoch: 0,
+        host_page: std::ptr::null(),
+    };
+}
+
+unsafe impl Send for LoadFastEntry {}
+unsafe impl Sync for LoadFastEntry {}
+
+#[derive(Clone, Copy)]
+struct StoreFastEntry {
+    virt_page_num: u64,
+    satp: u64,
+    ram_epoch: u64,
+    code_generation: u64,
+    epoch: u32,
+    host_page: *mut u8,
+}
+
+impl StoreFastEntry {
+    const EMPTY: Self = Self {
+        virt_page_num: u64::MAX,
+        satp: 0,
+        ram_epoch: 0,
+        code_generation: 0,
+        epoch: 0,
+        host_page: std::ptr::null_mut(),
+    };
+}
+
+unsafe impl Send for StoreFastEntry {}
+unsafe impl Sync for StoreFastEntry {}
+
 pub struct Mmu {
     tlb: [TlbEntry; TLB_SIZE],
+    load_fast: [LoadFastEntry; TLB_SIZE],
+    store_fast: [StoreFastEntry; TLB_SIZE],
     epoch: u32,
+
+    load_vpage: u64,
+    load_ppage: u64,
+    load_satp: u64,
+    store_vpage: u64,
+    store_ppage: u64,
+    store_satp: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,7 +130,15 @@ impl Mmu {
     pub fn new() -> Self {
         Self {
             tlb: [TlbEntry::EMPTY; TLB_SIZE],
+            load_fast: [LoadFastEntry::EMPTY; TLB_SIZE],
+            store_fast: [StoreFastEntry::EMPTY; TLB_SIZE],
             epoch: 1,
+            load_vpage: u64::MAX,
+            load_ppage: 0,
+            load_satp: u64::MAX,
+            store_vpage: u64::MAX,
+            store_ppage: 0,
+            store_satp: u64::MAX,
         }
     }
 
@@ -83,6 +147,8 @@ impl Mmu {
         if self.epoch == 0 {
             self.epoch = 1;
         }
+        self.load_vpage = u64::MAX;
+        self.store_vpage = u64::MAX;
     }
 
     #[inline(always)]
@@ -94,6 +160,90 @@ impl Mmu {
             Some((entry.phys_page_num, entry.flags))
         } else {
             None
+        }
+    }
+
+    #[inline(always)]
+    pub fn load_fast_lookup(
+        &self,
+        virtual_address: u64,
+        satp: u64,
+        ram_epoch: u64,
+    ) -> Option<*const u8> {
+        let virt_page_num = virtual_address >> 12;
+        let entry = &self.load_fast[(virt_page_num & TLB_MASK) as usize];
+
+        if entry.virt_page_num == virt_page_num
+            && entry.satp == satp
+            && entry.epoch == self.epoch
+            && entry.ram_epoch == ram_epoch
+        {
+            Some(entry.host_page)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn store_fast_lookup(
+        &self,
+        virtual_address: u64,
+        satp: u64,
+        ram_epoch: u64,
+        code_generation: u64,
+    ) -> Option<*mut u8> {
+        let virt_page_num = virtual_address >> 12;
+        let entry = &self.store_fast[(virt_page_num & TLB_MASK) as usize];
+
+        if entry.virt_page_num == virt_page_num
+            && entry.satp == satp
+            && entry.epoch == self.epoch
+            && entry.ram_epoch == ram_epoch
+            && entry.code_generation == code_generation
+        {
+            Some(entry.host_page)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub fn store_fast_fill(
+        &mut self,
+        virt_page_num: u64,
+        satp: u64,
+        physical_address: u64,
+        code_generation: u64,
+        bus: &mut impl SystemBus,
+    ) {
+        if let Some(host_page) = bus.ram_store_page(physical_address) {
+            self.store_fast[(virt_page_num & TLB_MASK) as usize] = StoreFastEntry {
+                virt_page_num,
+                satp,
+                ram_epoch: bus.ram_epoch(),
+                code_generation,
+                epoch: self.epoch,
+                host_page,
+            };
+        }
+    }
+
+    #[inline]
+    fn load_fast_fill(
+        &mut self,
+        virt_page_num: u64,
+        satp: u64,
+        physical_address: u64,
+        bus: &mut impl SystemBus,
+    ) {
+        if let Some(host_page) = bus.ram_load_page(physical_address) {
+            self.load_fast[(virt_page_num & TLB_MASK) as usize] = LoadFastEntry {
+                virt_page_num,
+                satp,
+                ram_epoch: bus.ram_epoch(),
+                epoch: self.epoch,
+                host_page,
+            };
         }
     }
 
@@ -115,6 +265,7 @@ impl Mmu {
         bus: &mut impl SystemBus,
     ) -> Result<u64, MmuFault> {
         if satp >> 60 == 0 {
+            perf::note_bare_translate();
             return Ok(virtual_address);
         }
 
@@ -122,9 +273,11 @@ impl Mmu {
         if let Some((ppn, flags)) = self.lookup(vpn)
             && flags & PTE_X != 0
         {
+            perf::note_tlb_hit();
             return Ok((ppn << 12) | (virtual_address & 0xfff));
         }
 
+        perf::note_tlb_walk();
         self.walk(virtual_address, satp, false, true, bus)
             .map_err(|_| MmuFault::InstructionPageFault(virtual_address))
     }
@@ -135,19 +288,42 @@ impl Mmu {
         satp: u64,
         bus: &mut impl SystemBus,
     ) -> Result<u64, MmuFault> {
+        let vpn = virtual_address >> 12;
+
         if satp >> 60 == 0 {
+            perf::note_bare_translate();
+            self.load_fast_fill(vpn, satp, virtual_address, bus);
             return Ok(virtual_address);
         }
 
-        let vpn = virtual_address >> 12;
+        if vpn == self.load_vpage && satp == self.load_satp {
+            perf::note_tlb_hit();
+            let pa = (self.load_ppage << 12) | (virtual_address & 0xfff);
+            self.load_fast_fill(vpn, satp, pa, bus);
+            return Ok(pa);
+        }
+
         if let Some((ppn, flags)) = self.lookup(vpn)
             && flags & PTE_R != 0
         {
-            return Ok((ppn << 12) | (virtual_address & 0xfff));
+            perf::note_tlb_hit();
+            self.load_vpage = vpn;
+            self.load_ppage = ppn;
+            self.load_satp = satp;
+            let pa = (ppn << 12) | (virtual_address & 0xfff);
+            self.load_fast_fill(vpn, satp, pa, bus);
+            return Ok(pa);
         }
 
-        self.walk(virtual_address, satp, false, false, bus)
-            .map_err(|_| MmuFault::LoadPageFault(virtual_address))
+        perf::note_tlb_walk();
+        let pa = self
+            .walk(virtual_address, satp, false, false, bus)
+            .map_err(|_| MmuFault::LoadPageFault(virtual_address))?;
+        self.load_vpage = vpn;
+        self.load_ppage = pa >> 12;
+        self.load_satp = satp;
+        self.load_fast_fill(vpn, satp, pa, bus);
+        Ok(pa)
     }
 
     pub fn translate_store(
@@ -157,18 +333,34 @@ impl Mmu {
         bus: &mut impl SystemBus,
     ) -> Result<u64, MmuFault> {
         if satp >> 60 == 0 {
+            perf::note_bare_translate();
             return Ok(virtual_address);
         }
 
         let vpn = virtual_address >> 12;
+        if vpn == self.store_vpage && satp == self.store_satp {
+            perf::note_tlb_hit();
+            return Ok((self.store_ppage << 12) | (virtual_address & 0xfff));
+        }
+
         if let Some((ppn, flags)) = self.lookup(vpn)
             && flags & (PTE_W | PTE_D) == (PTE_W | PTE_D)
         {
+            perf::note_tlb_hit();
+            self.store_vpage = vpn;
+            self.store_ppage = ppn;
+            self.store_satp = satp;
             return Ok((ppn << 12) | (virtual_address & 0xfff));
         }
 
-        self.walk(virtual_address, satp, true, false, bus)
-            .map_err(|_| MmuFault::StorePageFault(virtual_address))
+        perf::note_tlb_walk();
+        let pa = self
+            .walk(virtual_address, satp, true, false, bus)
+            .map_err(|_| MmuFault::StorePageFault(virtual_address))?;
+        self.store_vpage = vpn;
+        self.store_ppage = pa >> 12;
+        self.store_satp = satp;
+        Ok(pa)
     }
 
     fn walk(

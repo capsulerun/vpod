@@ -26,6 +26,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Generate AOT stub
+        run: ./scripts/aot-stub.sh
+
       - name: Build WASM component
         run: cargo build --release --target wasm32-wasip2 -p wasi-component
 
@@ -44,6 +47,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip2
+
+      - name: Generate AOT stub
+        run: ./scripts/aot-stub.sh
 
       - name: Build WASM component
         run: cargo build --release --target wasm32-wasip2 -p wasi-component
@@ -65,6 +71,11 @@ jobs:
       - name: Install bsdtar
         run: sudo apt-get update && sudo apt-get install -y libarchive-tools
 
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
+
       - name: Build Default Snapshot
         run: ./scripts/build-default-snapshot.sh
 
@@ -80,6 +91,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip2
+
+      - name: Generate AOT stub
+        run: ./scripts/aot-stub.sh
 
       - name: Build WASM library
         run: cargo build --release --target wasm32-wasip2 -p wasi-component --lib

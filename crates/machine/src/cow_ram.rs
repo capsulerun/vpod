@@ -1,13 +1,21 @@
 // Copy-on-write guest RAM.
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const PAGE_SIZE: usize = 4096;
+
+static EPOCH_SOURCE: AtomicU64 = AtomicU64::new(1);
+
+fn next_epoch() -> u64 {
+    EPOCH_SOURCE.fetch_add(1, Ordering::Relaxed)
+}
 
 pub struct CowRam {
     base: Arc<Vec<u8>>,
     pages: Vec<Option<Box<[u8]>>>,
     len: usize,
     mask: u64,
+    epoch: u64,
 }
 
 impl CowRam {
@@ -27,6 +35,7 @@ impl CowRam {
             pages: vec![None; num_pages],
             len,
             mask: ram_size - 1,
+            epoch: next_epoch(),
         }
     }
 
@@ -43,6 +52,7 @@ impl CowRam {
             pages: vec![None; num_pages],
             len: logical_len,
             mask: ram_size - 1,
+            epoch: next_epoch(),
         }
     }
 
@@ -52,7 +62,23 @@ impl CowRam {
             pages: vec![None; self.pages.len()],
             len: self.len,
             mask: self.mask,
+            epoch: next_epoch(),
         }
+    }
+
+    #[inline(always)]
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    #[inline(always)]
+    pub fn page_ptr(&self, page: usize) -> *const u8 {
+        self.page_ref(page).as_ptr()
+    }
+
+    #[inline(always)]
+    pub fn page_mut_ptr(&mut self, page: usize) -> *mut u8 {
+        self.page_mut(page).as_mut_ptr()
     }
 
     #[inline(always)]
@@ -80,14 +106,16 @@ impl CowRam {
 
     #[inline(always)]
     fn page_mut(&mut self, page: usize) -> &mut [u8] {
-        let base = &self.base;
-
-        self.pages[page].get_or_insert_with(|| {
+        if self.pages[page].is_none() {
+            let start = page * PAGE_SIZE;
             let mut owned = vec![0u8; PAGE_SIZE].into_boxed_slice();
-            owned.copy_from_slice(&base[page * PAGE_SIZE..(page + 1) * PAGE_SIZE]);
+            owned.copy_from_slice(&self.base[start..start + PAGE_SIZE]);
+            self.pages[page] = Some(owned);
 
-            owned
-        })
+            self.epoch = next_epoch();
+        }
+
+        self.pages[page].as_mut().unwrap()
     }
 
     #[inline(always)]
@@ -245,5 +273,6 @@ impl CowRam {
 
         self.base = Arc::new(padded);
         self.pages = vec![None; num_pages];
+        self.epoch = next_epoch();
     }
 }

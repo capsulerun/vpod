@@ -3,6 +3,11 @@ name = "native-cli"
 version = "0.0.0"
 edition.workspace = true
 
+[features]
+perf = ["riscv-core/perf-counters"]
+aot = ["riscv-core/aot"]
+aot-trace = ["riscv-core/aot-trace"]
+
 [dependencies]
 machine = { path = "../machine" }
 riscv-core = { path = "../riscv-core" }

@@ -6,6 +6,8 @@
   <a href="https://github.com/capsulerun/vpod/actions/workflows/ci.yml" target="_blank">
     <img src="https://img.shields.io/github/actions/workflow/status/capsulerun/vpod/ci.yml?branch=main&label=CI&logo=github" alt="CI">
   </a>
+
+[Documentation](https://docs.vpod.sh/quickstart) • [Issues](https://github.com/capsulerun/vpod/issues/new)
 </div>
 
 <br>
@@ -26,7 +28,7 @@ pip install vpod
 
 ### Persistent session (Recommended)
 
-All calls share the same running VM. Using a context manager (`with`) automatically cleans up resources when done:
+All calls share the same running sandbox. Using a context manager (`with`) automatically cleans up resources when done:
 
 ```python
 from vpod import Sandbox
@@ -76,12 +78,12 @@ Pause a running sandbox and resume it later — no daemon, no background process
 from vpod import Sandbox
 
 with Sandbox.create() as sbx:
-    sbx.commands.run("pip install numpy")
+    sbx.commands.run("uv pip install --system requests")
     instance_id = sbx.suspend()
 
 # Later (even from a new process):
 sbx = Sandbox.resume(instance_id)
-sbx.code.run("import numpy; print(numpy.__version__)")
+sbx.code.run("import requests; print(requests.__version__)")
 ```
 
 | Method | Description |
@@ -106,7 +108,7 @@ sbx.close()             # Clean up the sandbox process
 
 ## Snapshots
 
-The first call to `Sandbox.create()` downloads the VM snapshot and caches it locally. Subsequent calls use the cache instantly.
+The first call to `Sandbox.create()` downloads the snapshot and caches it locally. Subsequent calls use the cache instantly.
 
 To pre-download (e.g. in a Dockerfile or CI setup):
 
@@ -125,20 +127,9 @@ snapshots.pull("alpine:latest")
 |:---|:---|:---|:---|
 | `alpine` | 3.23.0 | Minimal Alpine Linux snapshot. | 256 MB |
 | `vsnap-base` | 0.1.0 | Alpine-based general-purpose snapshot with Python. | 256 MB |
+| `vsnap-base-512mb` | 0.1.0 | Same as `vsnap-base` with more memory headroom, for web servers and larger installs. | 512 MB |
 | `vsnap-data` | 0.1.0 | Alpine-based snapshot with `numpy`, `pandas`, and `scipy`. | 512 MB |
 
-## How it works
+## Documentation
 
-A `vpod` runs a RISC‑V virtual machine compiled to WebAssembly. The core implements the **RV64GC** specification:
-
-- **G (General-purpose)**: I/M/A/F/D extensions for integer, multiply/divide, atomics, and floating-point.
-- **C (Compressed)**: 30% smaller code size, improving memory efficiency.
-
-The WASM component communicates with the host through WASI 0.2, providing controlled access to networking and I/O while keeping all execution state isolated inside the sandbox.
-
-## Limitations
-
-- **Emulation overhead**: No hardware acceleration in WASM. CPU-intensive workloads run slower than native.
-- **No GPU access**: CUDA, Metal, and hardware ML accelerators are not yet available.
-
-For full documentation and to report issues, visit the [main GitHub repository](https://github.com/capsulerun/vpod).
+Visit the [Vpod documentation](https://docs.vpod.sh/quickstart) for the full guide and API reference. To report issues or contribute, head to the [main GitHub repository](https://github.com/capsulerun/vpod).

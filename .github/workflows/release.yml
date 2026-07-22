@@ -7,58 +7,72 @@ on:
         description: 'Version to publish (e.g. 0.2.0)'
         required: true
         type: string
-      publish_crate:
-        description: 'Publish vpod to crates.io'
+      snapshot:
+        description: 'Snapshot to trace the AOT module against'
         required: false
-        default: true
-        type: boolean
+        default: 'alpine-3.23.0-256mb'
+        type: string
       publish_python:
         description: 'Publish Python SDK to PyPI'
         required: false
         default: true
         type: boolean
+      build_snapshots:
+        description: 'Rebuild + publish registry snapshots first (only when guest content changed — republishing changes their sha256 and degrades AOT for older releases)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
 
 jobs:
-  publish-crate:
-    name: Publish – crates.io (vpod)
-    if: ${{ inputs.publish_crate }}
+
+  build-snapshots:
+    if: ${{ inputs.build_snapshots }}
+    uses: ./.github/workflows/build-snapshots.yml
+    with:
+      version: ${{ inputs.version }}
+      publish: true
+    secrets: inherit
+
+  build-aot:
+    needs: [build-snapshots]
+    if: ${{ !cancelled() && !failure() }}
+    uses: ./.github/workflows/build-aot.yml
+    with:
+      snapshot: ${{ inputs.snapshot }}
+
+  # Must exist before build-binaries can attach assets to it.
+  create-release:
+    name: Create draft release
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Inject version
-        run: |
-          V="${{ inputs.version }}"
-          sed -i "s/^version = \".*\"/version = \"$V\"/" crates/vpod/Cargo.toml
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-wasip2
-
-      - name: Build WASM component (required by vpod build.rs)
-        run: |
-          cargo build --release --target wasm32-wasip2 -p wasi-component
-          cp target/wasm32-wasip2/release/vpod-wasi-cli.wasm crates/vpod/
-
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Publish to crates.io
+      - name: Create draft
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p vpod --allow-dirty
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ inputs.version }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists — reusing it"
+            exit 0
+          fi
+          gh release create "$TAG" --draft --generate-notes --title "$TAG"
+
+  build-binaries:
+    needs: [build-aot, create-release]
+    uses: ./.github/workflows/build-binaries.yml
+    with:
+      tag: v${{ inputs.version }}
+      snapshot: ${{ inputs.snapshot }}
 
   publish-python:
     name: Publish – PyPI (Python SDK)
-    if: ${{ inputs.publish_python }}
+    # An explicit `if` replaces the implicit success() check, so guard it back.
+    if: ${{ !cancelled() && !failure() && inputs.publish_python }}
+    needs: build-aot
     runs-on: ubuntu-latest
 
     steps:
@@ -71,15 +85,17 @@ jobs:
           sed -i "s/^version = \".*\"/version = \"$V\"/" sdks/python/pyproject.toml
           sed -i "s/^__version__ = \".*\"/__version__ = \"$V\"/" sdks/python/vpod/__init__.py
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Fetch AOT engine modules
+        uses: actions/download-artifact@v4
         with:
-          targets: wasm32-wasip2
+          name: aot-wasm
+          path: dist/aot
 
-      - name: Build WASM component for Python SDK
+      - name: Place modules in the SDK
         run: |
-          cargo build --release --target wasm32-wasip2 -p wasi-component --lib
-          cp target/wasm32-wasip2/release/vpod_wasi_lib.wasm sdks/python/vpod/
+          cp dist/aot/vpod_wasi_lib_aot.wasm sdks/python/vpod/
+          cp dist/aot/vpod_wasi_lib.wasm     sdks/python/vpod/
+          ls -lh sdks/python/vpod/*.wasm
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -93,9 +109,42 @@ jobs:
         working-directory: sdks/python
         run: python -m build
 
+      - name: Verify the wheel carries both modules
+        working-directory: sdks/python
+        run: |
+          WHEEL=$(ls dist/*.whl)
+          python3 -c "
+          import sys, zipfile
+          names = zipfile.ZipFile('$WHEEL').namelist()
+          for want in ('vpod/vpod_wasi_lib_aot.wasm', 'vpod/vpod_wasi_lib.wasm'):
+              if want not in names:
+                  sys.exit(f'{want} missing from the wheel')
+              print(want, 'ok')
+          "
+
       - name: Publish to PyPI
         working-directory: sdks/python
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: twine upload dist/*
+
+  attach-provenance:
+    name: Attach AOT provenance
+    needs: [build-aot, create-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch AOT artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: aot-wasm
+          path: dist/aot
+
+      - name: Upload provenance to draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ inputs.version }}
+        run: |
+          cp dist/aot/TRACED_SNAPSHOT aot-provenance.txt
+          gh release upload "$TAG" aot-provenance.txt --clobber

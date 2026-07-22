@@ -22,6 +22,10 @@ pub fn run(
         eprintln!("[vpod] Press Ctrl-C to exit the emulator.");
     }
 
+    if cfg!(feature = "perf") {
+        eprintln!("[vpod] perf counters on: Ctrl-P prints and resets them.");
+    }
+
     if trace_insns > 0 {
         run_trace(bus, hart, trace_insns);
         return;
@@ -53,7 +57,24 @@ pub fn run(
         terminal::poll_stdin(bus, snap_save, hart, snap_flags);
 
         bus.flush_console_to_stdout();
-        match hart.run(bus, interval) {
+
+        if hart.is_waiting {
+            hart.is_waiting = false;
+
+            if !bus.net_rx_pending() {
+                const MAX_IDLE_SLEEP_NS: u64 = 1_000_000;
+                let sleep_ns = bus
+                    .clint
+                    .nanos_until_timer()
+                    .unwrap_or(MAX_IDLE_SLEEP_NS)
+                    .min(MAX_IDLE_SLEEP_NS);
+
+                std::thread::sleep(std::time::Duration::from_nanos(sleep_ns));
+                bus.clint.advance_by_nanos(sleep_ns);
+            }
+        }
+
+        match hart.run_until_wait(bus, interval) {
             StepResult::Ok => {}
             StepResult::Trap(cause) => {
                 eprintln!(

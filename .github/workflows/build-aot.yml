@@ -1,0 +1,145 @@
+name: Build AOT
+
+# Traces a snapshot, translates its hot blocks, and emits the engine modules
+# every other workflow consumes. See docs/design/release-strategy.md.
+#
+# The output is wasm32-wasip2 and therefore host-independent: one build serves
+# all five platform targets. Running this inside build-binaries' matrix would
+# pay the whole pipeline five times.
+
+on:
+  workflow_call:
+    inputs:
+      snapshot:
+        description: 'Snapshot id to trace against'
+        required: false
+        default: 'alpine-3.23.0-256mb'
+        type: string
+  workflow_dispatch:
+    inputs:
+      snapshot:
+        description: 'Snapshot id to trace against'
+        required: false
+        default: 'alpine-3.23.0-256mb'
+        type: string
+
+jobs:
+  build-aot:
+    name: Trace and translate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve snapshot in registry
+        id: registry
+        env:
+          SNAPSHOT: ${{ inputs.snapshot }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, urllib.request
+
+          snap_id = os.environ["SNAPSHOT"]
+          registry = json.load(urllib.request.urlopen(
+              "https://registry.vpod.sh/v1/snapshots.json", timeout=60))
+          entry = next((s for s in registry["snapshots"] if s["id"] == snap_id), None)
+          if entry is None:
+              raise SystemExit(f"snapshot '{snap_id}' not in registry")
+          print(f"sha256={entry['sha256']}")
+          print(f"url={entry['url']}")
+          PY
+
+      - name: Cache AOT modules
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: dist/aot
+          key: >-
+            aot-${{ inputs.snapshot }}-${{ steps.registry.outputs.sha256 }}-${{ hashFiles(
+              'crates/riscv-core/**',
+              'crates/machine/**',
+              'crates/vpod-translate/**',
+              'crates/wasi-component/**',
+              'scripts/aot-snapshot.sh',
+              'scripts/build-wasm.sh') }}
+
+      - name: Install Rust
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Cache cargo
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: aot-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Fetch snapshot
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          SNAPSHOT: ${{ inputs.snapshot }}
+          SNAPSHOT_URL: ${{ steps.registry.outputs.url }}
+          SNAPSHOT_SHA256: ${{ steps.registry.outputs.sha256 }}
+        run: |
+          python3 -m pip install --quiet lz4
+          python3 - <<'PY'
+          import hashlib, os, shutil, urllib.request
+          from pathlib import Path
+          import lz4.frame
+
+          snap_id = os.environ["SNAPSHOT"]
+          url = os.environ["SNAPSHOT_URL"]
+          sha256 = os.environ["SNAPSHOT_SHA256"]
+
+          dist = Path("dist"); dist.mkdir(exist_ok=True)
+          packed = dist / f"{snap_id}.snap.lz4"
+          with urllib.request.urlopen(url, timeout=300) as r, open(packed, "wb") as f:
+              shutil.copyfileobj(r, f)
+
+          digest = hashlib.sha256(packed.read_bytes()).hexdigest()
+          if digest != sha256:
+              raise SystemExit(f"checksum mismatch: {digest} != {sha256}")
+
+          out = dist / f"{snap_id}.snap"
+          with lz4.frame.open(str(packed), "rb") as src, open(out, "wb") as dst:
+              shutil.copyfileobj(src, dst)
+          packed.unlink()
+          print(f"{out} ({out.stat().st_size/1e6:.1f} MB)")
+          PY
+
+      - name: Trace and translate
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: ./scripts/aot-snapshot.sh "dist/${{ inputs.snapshot }}.snap" --force
+
+      - name: Build engine modules
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-wasm.sh
+
+      - name: Collect
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p dist/aot
+          cp sdks/python/vpod/vpod_wasi_lib_aot.wasm dist/aot/
+          cp sdks/python/vpod/vpod_wasi_lib.wasm dist/aot/
+          cp target/wasm32-wasip2/release/vpod-wasi-cli.wasm dist/aot/
+          printf '%s %s\n' "${{ inputs.snapshot }}" "${{ steps.registry.outputs.sha256 }}" > dist/aot/TRACED_SNAPSHOT
+          ls -lh dist/aot
+
+      - name: Verify
+        run: |
+          for f in vpod_wasi_lib_aot.wasm vpod_wasi_lib.wasm vpod-wasi-cli.wasm; do
+            test -s "dist/aot/$f" || { echo "missing dist/aot/$f" >&2; exit 1; }
+          done
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: aot-wasm
+          path: dist/aot
+          retention-days: 1
+          overwrite: true

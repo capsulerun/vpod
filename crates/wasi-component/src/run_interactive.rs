@@ -10,7 +10,7 @@ const OUTPUT_HOLD_CYCLES: u32 = 3;
 pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
     let stdin = wasi::cli::stdin::get_stdin();
 
-    const POLL_INTERVAL_ACTIVE: u64 = 32768;
+    const POLL_INTERVAL_ACTIVE: u64 = 131_072;
     const POLL_INTERVAL_IDLE: u64 = 8192;
     const POLL_INTERVAL_NET: u64 = 4096;
     const IDLE_TIMEOUT_NS: u64 = 50_000_000;
@@ -20,6 +20,8 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
     let mut pending: Vec<u8> = Vec::new();
     let mut hold_cycles = 0u32;
     let mut active_ticks = 0u32;
+
+    let stdin_pollable = stdin.subscribe();
 
     loop {
         let interval = if bus.net_rx_pending() {
@@ -33,7 +35,7 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
         bus.clint.advance_by_instructions(interval);
         bus.poll(hart);
 
-        if poll_stdin(bus, &stdin) {
+        if poll_stdin(bus, &stdin, &stdin_pollable) {
             bus.poll(hart);
             idle_ticks = 0;
             active_ticks = 512;
@@ -123,8 +125,7 @@ fn flush_pending(pending: &mut Vec<u8>) {
     pending.clear();
 }
 
-fn poll_stdin(bus: &mut MachineBus, stdin: &InputStream) -> bool {
-    let pollable = stdin.subscribe();
+fn poll_stdin(bus: &mut MachineBus, stdin: &InputStream, pollable: &poll::Pollable) -> bool {
     if !pollable.ready() {
         return false;
     }

@@ -3,8 +3,14 @@ name = "riscv-core"
 version = "0.0.0"
 edition = "2024"
 
+[features]
+perf-counters = []
+aot = []
+aot-trace = []
+
 [dependencies]
 log = "0.4"
+rustc-hash = "2.1"
 
 [dev-dependencies]
 env_logger = "0.11"

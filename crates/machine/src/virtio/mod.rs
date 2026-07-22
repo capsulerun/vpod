@@ -1,8 +1,10 @@
 pub mod blk;
 pub mod console;
 pub mod fs;
+pub mod https_gateway;
 pub mod net;
 pub mod slirp;
+pub mod tls_proxy;
 
 use crate::RAM_BASE;
 use crate::cow_ram::CowRam;

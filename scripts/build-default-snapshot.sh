@@ -46,14 +46,14 @@ echo ""
 
 echo "── Checking host tools..."
 MISSING=""
-for cmd in curl bsdtar cpio gzip cargo; do
+for cmd in curl bsdtar cpio gzip cargo zig; do
     command -v "$cmd" >/dev/null || MISSING="$MISSING $cmd"
 done
 if [ -n "$MISSING" ]; then
     echo "ERROR: missing tools:$MISSING"
-    echo "  macOS  : brew install libarchive"
-    echo "  Debian : apt install libarchive-tools bsdtar cpio"
-    echo "  Fedora : dnf install bsdtar libarchive"
+    echo "  macOS  : brew install libarchive zig"
+    echo "  Debian : apt install libarchive-tools bsdtar cpio zig"
+    echo "  Fedora : dnf install bsdtar libarchive zig"
     echo "  Windows: use WSL2 and follow the Linux instructions"
     exit 1
 fi
@@ -63,7 +63,7 @@ mkdir -p "$ROOT/dist" "$ALPINE_DIR"
 
 
 echo "── Building vpod..."
-(cd "$ROOT" && cargo build --release --bin vpod-native)
+(cd "$ROOT" && cargo build --release -p native-cli --bin vpod-native)
 
 
 if [ ! -f "$OPENSBI_FW" ]; then
@@ -121,6 +121,41 @@ printf 'https://dl-cdn.alpinelinux.org/alpine/v%s/main\nhttps://dl-cdn.alpinelin
     "$ALPINE_MINOR" "$ALPINE_MINOR" > "$OVERLAY/etc/apk/repositories"
 echo 'nameserver 8.8.8.8' > "$OVERLAY/etc/resolv.conf"
 
+mkdir -p "$OVERLAY/usr/local/share/ca-certificates"
+cp "$ROOT/crates/machine/assets/tls/vpod-ca-cert.pem" \
+    "$OVERLAY/usr/local/share/ca-certificates/vpod-ca.crt"
+
+mkdir -p "$OVERLAY/etc/ssl/vpod"
+cp "$ROOT/crates/machine/assets/tls/vpod-ca-cert.pem" \
+    "$OVERLAY/etc/ssl/vpod/ca-only.pem"
+
+
+echo "── Cross-compiling vpod ssl_client (riscv64-musl, static)..."
+zig cc -target riscv64-linux-musl -Os -static -s \
+    -o "$OVERLAY/usr/lib/vpod/vpod-ssl-client" \
+    "$ROOT/guest/tls/vpod_ssl_client.c"
+chmod +x "$OVERLAY/usr/lib/vpod/vpod-ssl-client"
+
+mkdir -p "$OVERLAY/etc/vpod"
+cat > "$OVERLAY/etc/vpod/pydaemon-warm-imports" << 'WARM_EOF'
+# Warm set for the python3 shim/daemon path (commands.run("python3 ...")
+WARM_EOF
+cat > "$OVERLAY/etc/vpod/pyrunner-warm-imports" << 'WARM_EOF'
+# Warm set for pyrunner, the persistent code.run() interpreter.
+WARM_EOF
+
+mkdir -p "$OVERLAY/etc/uv"
+cat > "$OVERLAY/etc/uv/uv.toml" << 'UV_EOF'
+python-preference = "only-system"
+UV_EOF
+
+echo "── Cross-compiling vpod python shim (riscv64-musl, dynamic)..."
+zig cc -target riscv64-linux-musl -Os -dynamic -s \
+    -o "$OVERLAY/usr/lib/vpod/vpod-python-shim" \
+    "$ROOT/guest/warmpy/vpod_python_shim.c"
+chmod +x "$OVERLAY/usr/lib/vpod/vpod-python-shim"
+cp "$ROOT/guest/warmpy/pydaemon.py" "$OVERLAY/usr/lib/vpod/pydaemon.py"
+
 cat > "$OVERLAY/sbin/init" << 'INIT_EOF'
 #!/bin/sh
 
@@ -156,17 +191,40 @@ if [ -c /dev/hvc0 ]; then
 fi
 
 export TERM=dumb
-export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+export HOME=/root
+
+export SSL_CERT_FILE=/etc/ssl/vpod/ca-only.pem
+export REQUESTS_CA_BUNDLE=/etc/ssl/vpod/ca-only.pem
+export PIP_CERT=/etc/ssl/vpod/ca-only.pem
+export NODE_EXTRA_CA_CERTS=/etc/ssl/vpod/ca-only.pem
+
 export ENV=''
 unset HISTFILE
 set +o history 2>/dev/null || true
-exec setsid sh -c 'HISTFILE=/dev/null HISTSIZE=0 SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt exec sh </dev/ttyS0 >/dev/ttyS0 2>&1'
+exec setsid sh -c 'HISTFILE=/dev/null HISTSIZE=0 HOME=/root SSL_CERT_FILE=/etc/ssl/vpod/ca-only.pem exec sh </dev/ttyS0 >/dev/ttyS0 2>&1'
 INIT_EOF
 chmod +x "$OVERLAY/sbin/init"
 ln -sf /sbin/init "$OVERLAY/init"
 
 cat > "$OVERLAY/usr/lib/vpod/pyrunner.py" << 'PYRUNNER_EOF'
 import sys, io, traceback, base64
+
+try:
+    import ssl, urllib.request
+except ImportError:
+    pass
+
+try:
+    with open("/etc/vpod/pyrunner-warm-imports") as _f:
+        for _line in _f:
+            _name = _line.split("#", 1)[0].strip()
+            if _name:
+                try:
+                    __import__(_name)
+                except Exception:
+                    pass
+except OSError:
+    pass
 
 _globals = {}
 _sentinel = "---VPOD_DONE---"
@@ -237,11 +295,36 @@ cat "$PART_MINI" "$PART_OVL" > "$OUT"
 rm -f "$PART_MINI" "$PART_OVL"
 echo "   Done: $OUT ($(du -sh "$OUT" | cut -f1))"
 
-# SNAP="$ROOT/dist/vsnap-base-${RAM_MB}mb.snap"
-SNAP="$ROOT/dist/alpine-3.23.0-256mb.snap"
+SNAP="$ROOT/dist/alpine-3.23.0-${RAM_MB}mb.snap"
 BOOTARGS="root=/dev/ram0 rw console=ttyS0 earlycon init=/sbin/init"
 
 echo "── Booting guest to pre-install ca-certificates + python3..."
+
+CA_MARKER="$(sed -n '2p' "$ROOT/crates/machine/assets/tls/vpod-ca-cert.pem")"
+BUILD_LOG="$ROOT/dist/.snapshot-build.log"
+NOW="$(date -u '+%Y-%m-%d %H:%M:%S')"
+
+
+SETUP_CMD=""
+SETUP_CMD="${SETUP_CMD}date -s '$NOW'; "
+SETUP_CMD="${SETUP_CMD}sed -i 's|https://|http://|g' /etc/apk/repositories; "
+SETUP_CMD="${SETUP_CMD}apk update --allow-untrusted; "
+
+SETUP_CMD="${SETUP_CMD}apk add --allow-untrusted ca-certificates python3 uv; "
+SETUP_CMD="${SETUP_CMD}rm -f /usr/lib/python3.*/EXTERNALLY-MANAGED; mkdir -p /root/.cache; "
+
+SETUP_CMD="${SETUP_CMD}update-ca-certificates; "
+SETUP_CMD="${SETUP_CMD}grep -qF '$CA_MARKER' /etc/ssl/certs/ca-certificates.crt || cat /usr/local/share/ca-certificates/vpod-ca.crt >> /etc/ssl/certs/ca-certificates.crt; "
+SETUP_CMD="${SETUP_CMD}if grep -qF '$CA_MARKER' /etc/ssl/certs/ca-certificates.crt; then echo VPOD_CA_INSTALLED; else echo VPOD_CA_FAILED; fi; "
+SETUP_CMD="${SETUP_CMD}sed -i 's|http://|https://|g' /etc/apk/repositories; "
+SETUP_CMD="${SETUP_CMD}cp /usr/bin/ssl_client /usr/bin/ssl_client.real && cp /usr/lib/vpod/vpod-ssl-client /usr/bin/ssl_client && chmod +x /usr/bin/ssl_client && echo VPOD_SSL_CLIENT_SWAPPED; "
+SETUP_CMD="${SETUP_CMD}PYBIN=\$(readlink -f /usr/bin/python3) && cp \$PYBIN /usr/bin/python3.real && cp /usr/lib/vpod/vpod-python-shim \$PYBIN && chmod +x \$PYBIN /usr/bin/python3.real && echo VPOD_PY_SHIM_INSTALLED; "
+SETUP_CMD="${SETUP_CMD}/usr/bin/python3.real /usr/lib/vpod/pydaemon.py </dev/null >/dev/null 2>&1 & "
+SETUP_CMD="${SETUP_CMD}n=0; while [ ! -S /run/vpod-pyd.sock ] && [ \$n -lt 300 ]; do sleep 0.1; n=\$((n+1)); done; "
+SETUP_CMD="${SETUP_CMD}[ -S /run/vpod-pyd.sock ] && /usr/bin/python3 -c 'print(\"VPOD_PYD_READY\")'; "
+
+SETUP_CMD="${SETUP_CMD}sync"
+
 "$VPOD" \
     "$KERNEL" \
     --bios "$OPENSBI_FW" \
@@ -249,11 +332,46 @@ echo "── Booting guest to pre-install ca-certificates + python3..."
     --ram "$RAM_MB" \
     --bootargs "$BOOTARGS" \
     --net \
-    --setup "date -s '$(date -u '+%Y-%m-%d %H:%M:%S')'; sed -i 's|https://|http://|g' /etc/apk/repositories; apk update --allow-untrusted; apk add --allow-untrusted ca-certificates python3; sed -i 's|http://|https://|g' /etc/apk/repositories; sync" \
+    --setup "$SETUP_CMD" \
     --snapshot-save "$SNAP" \
-    --snapshot-python
+    --snapshot-python 2>&1 | tee "$BUILD_LOG"
+
+if ! grep -q VPOD_CA_INSTALLED "$BUILD_LOG"; then
+    echo "" >&2
+    echo "error: the vpod proxy CA is not in the guest trust store." >&2
+    echo "       HTTPS interception (:443) would fail at runtime. Aborting the build." >&2
+    echo "       (see $BUILD_LOG for the guest setup output)" >&2
+    exit 1
+fi
+if ! grep -q VPOD_SSL_CLIENT_SWAPPED "$BUILD_LOG"; then
+    echo "" >&2
+    echo "error: the vpod ssl_client was not installed over busybox's." >&2
+    echo "       wget https would pay the full guest-TLS cost. Aborting the build." >&2
+    echo "       (see $BUILD_LOG for the guest setup output)" >&2
+    exit 1
+fi
+if ! grep -q VPOD_PY_SHIM_INSTALLED "$BUILD_LOG"; then
+    echo "" >&2
+    echo "error: the vpod python shim was not installed over the real python3." >&2
+    echo "       every python3 invocation would pay the ~0.65s cold start. Aborting the build." >&2
+    echo "       (see $BUILD_LOG for the guest setup output)" >&2
+    exit 1
+fi
+if ! grep -q VPOD_PYD_READY "$BUILD_LOG"; then
+    echo "" >&2
+    echo "error: the warm-python daemon did not come up (no socket, or the" >&2
+    echo "       shim→daemon round-trip failed). Aborting the build." >&2
+    echo "       (see $BUILD_LOG for the guest setup output)" >&2
+    exit 1
+fi
+rm -f "$BUILD_LOG"
+
+
 
 echo ""
 echo "=== Done ==="
 echo ""
 echo "Snapshot: $SNAP"
+echo ""
+echo "Next (optional), to build and bake AOT-translated blocks:"
+echo "  ./scripts/aot-snapshot.sh \"$SNAP\""

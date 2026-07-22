@@ -5,8 +5,8 @@ from .execution import CodeExecution
 class Code:
     """Code execution interface for a sandbox — persistent Python REPL."""
 
-    def __init__(self, exports, snapshot_path: str, get_session_id):
-        self._exports = exports
+    def __init__(self, get_exports, snapshot_path: str, get_session_id):
+        self._get_exports = get_exports
         self._snapshot_path = snapshot_path
         self._get_session_id = get_session_id
 
@@ -19,7 +19,7 @@ class Code:
                 "Use 'with Sandbox.create() as sandbox:'"
             )
 
-        result = unwrap_result(self._exports["session-exec"](session_id, "\x00" + code, timeout))
+        result = unwrap_result(self._get_exports()["session-exec"](session_id, "\x00" + code, timeout))
         output = result.stdout if hasattr(result, 'stdout') else str(result)
         stderr = result.stderr if hasattr(result, 'stderr') else ""
 

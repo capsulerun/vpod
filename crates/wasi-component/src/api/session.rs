@@ -12,6 +12,27 @@ use riscv_core::Hart;
 
 const PYRUNNER_SENTINEL: &str = "---VPOD_DONE---";
 
+const AOT_MISMATCH_PROBE_THRESHOLD: u64 = 64;
+
+fn warn_if_aot_mismatch(hart: &Hart) {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    if !hart.blocks.aot_enabled() {
+        return;
+    }
+    let (probes, matches) = hart.blocks.aot_match_stats();
+    if probes >= AOT_MISMATCH_PROBE_THRESHOLD
+        && matches == 0
+        && !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
+        eprintln!(
+            "[vpod] warning: the bundled AOT module does not match this snapshot; \
+             running at interpreter speed. Upgrade the vpod package or re-pull \
+             the snapshot so the two agree."
+        );
+    }
+}
+
 pub struct Session {
     pub bus: MachineBus,
     pub hart: Hart,
@@ -150,6 +171,8 @@ impl SessionManager {
             bus.uart.drain_tx();
         }
 
+        warn_if_aot_mismatch(&hart);
+
         let id = self.next_id.get();
         self.next_id.set(id + 1);
         self.sessions.borrow_mut().insert(
@@ -223,7 +246,7 @@ impl SessionManager {
                 .trim_end()
                 .to_string();
 
-            let ctrl_bytes = session.bus.uart_ctrl.drain_tx();
+            let ctrl_bytes = repl::drain_ctrl_with_grace(&mut session.bus, &mut session.hart);
             let exit_code = match ctrl_bytes.first() {
                 Some(byte) => *byte as u32,
                 None => {
@@ -265,7 +288,7 @@ impl SessionManager {
 
             let mut timed_out = false;
             let exit_code = if session.is_shell {
-                let ctrl_bytes = session.bus.uart_ctrl.drain_tx();
+                let ctrl_bytes = repl::drain_ctrl_with_grace(&mut session.bus, &mut session.hart);
                 match ctrl_bytes.first() {
                     Some(byte) => *byte as u32,
                     None => {
@@ -381,6 +404,8 @@ impl SessionManager {
             (true, false, false, b"# ".to_vec())
         };
 
+        warn_if_aot_mismatch(&hart);
+
         let id = self.next_id.get();
         self.next_id.set(id + 1);
         self.sessions.borrow_mut().insert(
@@ -401,7 +426,7 @@ impl SessionManager {
 }
 
 fn restart_pyrunner(session: &mut Session) {
-    let restart = b"pkill -9 -f pyrunner.py; python3 /usr/lib/vpod/pyrunner.py &\n";
+    let restart = b"pkill -9 -f pyrunner.py; PYR=/usr/bin/python3.real; [ -x $PYR ] || PYR=python3; $PYR /usr/lib/vpod/pyrunner.py &\n";
     for byte in restart {
         session.bus.uart.push_rx(*byte);
     }

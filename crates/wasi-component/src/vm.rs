@@ -4,7 +4,7 @@ use machine::machine_bus::MachineBus;
 use machine::snapshot;
 use machine::virtio::fs::Mount;
 use riscv_core::Hart;
-use std::io::{BufReader, Read};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone)]
@@ -77,29 +77,25 @@ enum Compression {
     Raw,
 }
 
-fn detect_compression(path: &Path) -> Result<Compression, String> {
-    let mut file =
-        std::fs::File::open(path).map_err(|e| format!("failed to open {:?}: {e}", path))?;
-    let mut magic = [0u8; 4];
-    let n = file
-        .read(&mut magic)
-        .map_err(|e| format!("failed to read file magic: {e}"))?;
-    if n >= 4 && magic == [0x04, 0x22, 0x4D, 0x18] {
-        Ok(Compression::Lz4)
+fn detect_compression_bytes(data: &[u8]) -> Compression {
+    if data.len() >= 4 && data[..4] == [0x04, 0x22, 0x4D, 0x18] {
+        Compression::Lz4
     } else {
-        Ok(Compression::Raw)
+        Compression::Raw
     }
 }
 
 pub fn _read_base_and_tail(path: &Path) -> Result<(CowRam, Vec<u8>, u8), String> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| format!("failed to open snapshot {:?}: {e}", path))?;
+    let data =
+        std::fs::read(path).map_err(|e| format!("failed to read snapshot {:?}: {e}", path))?;
+    let compression = detect_compression_bytes(&data);
+    let cursor = std::io::Cursor::new(data);
 
-    match detect_compression(path)? {
+    match compression {
         Compression::Lz4 => {
-            snapshot::load_base_and_tail(&mut BufReader::new(FrameDecoder::new(file)))
+            snapshot::load_base_and_tail(&mut BufReader::new(FrameDecoder::new(cursor)))
         }
-        Compression::Raw => snapshot::load_base_and_tail(&mut BufReader::new(file)),
+        Compression::Raw => snapshot::load_base_and_tail(&mut BufReader::new(cursor)),
     }
     .map_err(|e| format!("failed to load snapshot base: {e}"))
 }
@@ -113,7 +109,9 @@ pub fn _bus_from_base(
     let mut bus = MachineBus::new(ram_size, base.clone_shared());
     bus.attach_net();
     bus.attach_fs(vec![]);
-    let hart = Hart::new(0x1000);
+
+    let mut hart = Hart::new(0x1000);
+    hart.blocks.aot_init(riscv_core::aot::AOT_PAGE_HASHES);
 
     for (i, m) in mounts.iter().enumerate() {
         if let Some(fs) = bus.fs_devices.get_mut(i) {
@@ -140,6 +138,7 @@ pub fn _load(config: _VmConfig) -> Result<(MachineBus, Hart, u8), String> {
     bus.attach_net();
     bus.attach_fs(vec![]);
     let mut hart = Hart::new(0x1000);
+    hart.blocks.aot_init(riscv_core::aot::AOT_PAGE_HASHES);
 
     if let Some(disk_path) = config.disk {
         let file = std::fs::OpenOptions::new()
@@ -152,17 +151,19 @@ pub fn _load(config: _VmConfig) -> Result<(MachineBus, Hart, u8), String> {
             .map_err(|e| format!("failed to attach disk: {e}"))?;
     }
 
-    let snapshot_file = std::fs::File::open(config.snapshot)
-        .map_err(|e| format!("failed to open snapshot {:?}: {e}", config.snapshot))?;
+    let snapshot_data = std::fs::read(config.snapshot)
+        .map_err(|e| format!("failed to read snapshot {:?}: {e}", config.snapshot))?;
+    let compression = detect_compression_bytes(&snapshot_data);
+    let snapshot_cursor = std::io::Cursor::new(snapshot_data);
 
-    let flags = match detect_compression(config.snapshot)? {
+    let flags = match compression {
         Compression::Lz4 => snapshot::restore(
             &mut bus,
             &mut hart,
-            &mut BufReader::new(FrameDecoder::new(snapshot_file)),
+            &mut BufReader::new(FrameDecoder::new(snapshot_cursor)),
         ),
         Compression::Raw => {
-            snapshot::restore(&mut bus, &mut hart, &mut BufReader::new(snapshot_file))
+            snapshot::restore(&mut bus, &mut hart, &mut BufReader::new(snapshot_cursor))
         }
     }
     .map_err(|e| format!("failed to restore snapshot: {e}"))?;

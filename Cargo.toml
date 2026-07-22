@@ -1,6 +1,10 @@
 [workspace]
-members = ["crates/riscv-core", "crates/machine", "crates/native-cli", "crates/wasi-component", "crates/vpod"]
+members = ["crates/riscv-core", "crates/machine", "crates/native-cli", "crates/wasi-component", "crates/vpod", "crates/vpod-translate"]
 resolver = "3"
 
 [workspace.package]
 edition = "2024"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

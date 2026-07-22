@@ -7,7 +7,7 @@ from typing import Optional
 
 from . import snapshots
 from .snapshots import cache_dir
-from ._component import load_component, locate_wasm
+from ._component import _maybe_upgrade_tier, active_tier, load_component, locate_wasm
 from ._result import unwrap_result as _unwrap_result
 from .code import Code
 from .commands import Commands
@@ -45,21 +45,24 @@ class Sandbox:
         wasm_path = locate_wasm()
 
         self._snapshot_path = "snap/" + snapshot_path.name
+        self._snapshot_file = snapshot_path
         self._mounts = _parse_mounts(mounts) if mounts else []
 
         mount_dirs = [m["host_path"] for m in self._mounts]
         self._store, self._exports = load_component(wasm_path, snapshot_path, mount_dirs or None)
         self._shell_session_id: Optional[int] = None
         self._in_context = False
+        self._tier = active_tier()
+        self._migrating = False
 
         self.commands = Commands(
-            self._exports,
+            lambda: self._exports,
             self._snapshot_path,
             self._get_shell_session_id,
         )
 
         self.code = Code(
-            self._exports,
+            lambda: self._exports,
             self._snapshot_path,
             self._get_code_session_id,
         )
@@ -68,21 +71,76 @@ class Sandbox:
     def create(cls, snapshot: str = "vsnap-base:latest", mounts: dict[str, str] | None = None) -> "Sandbox":
         return cls(snapshot, mounts=mounts)
 
-    def _get_shell_session_id(self) -> int:
-        if self._shell_session_id is None:
-            mount_entries = []
-            for i, m in enumerate(self._mounts):
-                entry = object.__new__(type("MountEntry", (), {}))
-                object.__setattr__(entry, "host-alias", f"mount{i}")
-                object.__setattr__(entry, "guest-path", m["guest_path"])
-                object.__setattr__(entry, "writable", m["writable"])
-                mount_entries.append(entry)
+    def _mount_entries(self) -> list:
+        mount_entries = []
+        for i, m in enumerate(self._mounts):
+            entry = object.__new__(type("MountEntry", (), {}))
+            object.__setattr__(entry, "host-alias", f"mount{i}")
+            object.__setattr__(entry, "guest-path", m["guest_path"])
+            object.__setattr__(entry, "writable", m["writable"])
+            mount_entries.append(entry)
+        return mount_entries
 
+    def _get_shell_session_id(self) -> int:
+        self._maybe_upgrade_engine()
+        if self._shell_session_id is None:
             result = self._exports["session-start"](
-                self._snapshot_path, _DEFAULT_SHELL, _DEFAULT_PROMPT, mount_entries
+                self._snapshot_path, _DEFAULT_SHELL, _DEFAULT_PROMPT, self._mount_entries()
             )
             self._shell_session_id = int(_unwrap_result(result))
         return self._shell_session_id
+
+    def _maybe_upgrade_engine(self) -> None:
+        """Hop this sandbox onto the AOT tier once its cache lands."""
+        if self._tier != "base" or self._migrating:
+            return
+
+        _maybe_upgrade_tier()
+        if active_tier() != "aot":
+            return
+
+        self._migrating = True
+        try:
+            mount_dirs = [m["host_path"] for m in self._mounts] or None
+
+            if self._shell_session_id is None:
+                try:
+                    self._store, self._exports = load_component(
+                        locate_wasm(), self._snapshot_file, mount_dirs
+                    )
+                except Exception:
+                    return
+            else:
+                old_store, old_exports = self._store, self._exports
+                try:
+                    instance_id = self.suspend()
+                except Exception:
+                    return
+                delta_rel = f"instances/{instance_id}/delta.bin"
+
+                def _resume(exports) -> None:
+                    result = exports["session-resume"](
+                        self._snapshot_path, delta_rel, _DEFAULT_SHELL,
+                        _DEFAULT_PROMPT, self._mount_entries(),
+                    )
+                    self._shell_session_id = int(_unwrap_result(result))
+
+                try:
+                    self._store, self._exports = load_component(
+                        locate_wasm(), self._snapshot_file, mount_dirs
+                    )
+                    _resume(self._exports)
+                except Exception:
+                    self._store, self._exports = old_store, old_exports
+                    _resume(old_exports)
+                    Sandbox.destroy(instance_id)
+                    return
+
+                Sandbox.destroy(instance_id)
+
+            self._tier = "aot"
+        finally:
+            self._migrating = False
 
     def _get_code_session_id(self) -> Optional[int]:
         if not self._in_context:
@@ -141,6 +199,7 @@ class Sandbox:
 
         snapshot_file = meta["snapshot"].removeprefix("snap/")
         override = os.environ.get("VPOD_SNAPSHOT")
+
         if override and Path(override).exists():
             snapshot_path = Path(override)
         else:
@@ -182,13 +241,16 @@ class Sandbox:
 
         instance = cls.__new__(cls)
         instance._snapshot_path = snap_rel
+        instance._snapshot_file = snapshot_path
+        instance._tier = active_tier()
+        instance._migrating = False
         instance._mounts = saved_mounts
         instance._store = store
         instance._exports = exports
         instance._shell_session_id = session_id
         instance._in_context = True
-        instance.commands = Commands(exports, snap_rel, instance._get_shell_session_id)
-        instance.code = Code(exports, snap_rel, instance._get_code_session_id)
+        instance.commands = Commands(lambda: instance._exports, snap_rel, instance._get_shell_session_id)
+        instance.code = Code(lambda: instance._exports, snap_rel, instance._get_code_session_id)
 
         Sandbox.destroy(instance_id)
         return instance
@@ -206,8 +268,10 @@ class Sandbox:
     def list_instances() -> list[dict]:
         """List all suspended instances."""
         manifest_path = INSTANCES_DIR / "manifest.json"
+
         if not manifest_path.exists():
             return []
+
         return json.loads(manifest_path.read_text())
 
     @staticmethod
@@ -222,8 +286,10 @@ class Sandbox:
     @staticmethod
     def _remove_from_manifest(instance_id: str) -> None:
         manifest_path = INSTANCES_DIR / "manifest.json"
+
         if not manifest_path.exists():
             return
+
         entries = json.loads(manifest_path.read_text())
         entries = [e for e in entries if e["id"] != instance_id]
         manifest_path.write_text(json.dumps(entries, indent=2))

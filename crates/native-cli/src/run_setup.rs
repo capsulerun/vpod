@@ -18,6 +18,7 @@ pub fn run(
     bus.uart.capture_tx.set(true);
     bus.uart_data.capture_tx.set(true);
 
+    push_line(bus, b"");
     wait_for_prompt(bus, hart, true);
 
     for (i, cmd) in cmds.iter().enumerate() {
@@ -95,11 +96,18 @@ fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, verbose: bool) -> Vec<
     for _ in 0..8_000_000u32 {
         if hart.is_waiting {
             hart.is_waiting = false;
+
+            if !bus.net_rx_pending() && !bus.net_has_active_connections() {
+                bus.clint.fast_forward_to_timer();
+            } else if !bus.net_rx_pending() {
+                std::thread::sleep(std::time::Duration::from_micros(200));
+                bus.clint.advance_by_nanos(200_000);
+            }
         }
         let interval = if bus.net_rx_pending() { 4096 } else { STEP };
         bus.clint.advance_by_instructions(interval);
         bus.poll(hart);
-        match hart.run(bus, interval) {
+        match hart.run_until_wait(bus, interval) {
             StepResult::Ok => {}
             StepResult::Trap(cause) => {
                 eprintln!("[vpod-setup] trap {:?} at pc={:#x}", cause, hart.regs.pc);
@@ -146,7 +154,10 @@ fn python_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
     wait_for_prompt(bus, hart, false);
     drain_all(bus);
 
-    push_line(bus, b"python3 /usr/lib/vpod/pyrunner.py &");
+    push_line(
+        bus,
+        b"PYR=/usr/bin/python3.real; [ -x $PYR ] || PYR=python3; $PYR /usr/lib/vpod/pyrunner.py &",
+    );
     wait_for_prompt(bus, hart, false);
     drain_all(bus);
 
@@ -158,12 +169,19 @@ fn python_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
     for _ in 0..2_000_000u32 {
         if hart.is_waiting {
             hart.is_waiting = false;
+
+            if !bus.net_rx_pending() && !bus.net_has_active_connections() {
+                bus.clint.fast_forward_to_timer();
+            } else if !bus.net_rx_pending() {
+                std::thread::sleep(std::time::Duration::from_micros(200));
+                bus.clint.advance_by_nanos(200_000);
+            }
         }
 
         bus.clint.advance_by_instructions(8192);
         bus.poll(hart);
 
-        match hart.run(bus, 8192) {
+        match hart.run_until_wait(bus, 8192) {
             riscv_core::StepResult::Ok => {}
             _ => break,
         }

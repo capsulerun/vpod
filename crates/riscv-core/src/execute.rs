@@ -2,18 +2,77 @@
 
 use crate::block::{self, BlockCache};
 use crate::csr::{
-    Csr, MSTATUS_FS, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP, MSTATUS_SIE, MSTATUS_SPIE,
+    Csr, MIP_MTIP, MSTATUS_FS, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP, MSTATUS_SIE, MSTATUS_SPIE,
     MSTATUS_SPP, PrivMode,
 };
 use crate::decode::{Instruction, sign_extend};
 use crate::extensions as ext;
 use crate::gpr::Gpr;
 use crate::mmu::{Mmu, MmuFault};
+use crate::perf;
 use crate::system_bus::SystemBus;
 use crate::trap::{StepResult, TrapCause};
 
+#[cfg(feature = "aot")]
+use crate::aot;
+
 pub const ICACHE_SIZE: usize = 4096;
 const ICACHE_TAG_SHIFT: u32 = 1 + ICACHE_SIZE.trailing_zeros();
+
+pub const FETCH_TLB_SIZE: usize = 256;
+
+#[derive(Clone, Copy)]
+pub struct FetchTlbEntry {
+    pub vpage: u64,
+    pub ppage: u64,
+    pub satp: u64,
+}
+
+pub struct FetchTlb {
+    pub entries: Box<[FetchTlbEntry; FETCH_TLB_SIZE]>,
+}
+
+impl FetchTlb {
+    pub fn new() -> Self {
+        Self {
+            entries: Box::new(
+                [FetchTlbEntry {
+                    vpage: u64::MAX,
+                    ppage: 0,
+                    satp: u64::MAX,
+                }; FETCH_TLB_SIZE],
+            ),
+        }
+    }
+
+    #[inline(always)]
+    pub fn lookup(&self, vpage: u64, satp: u64) -> Option<u64> {
+        let entry = &self.entries[(vpage as usize) & (FETCH_TLB_SIZE - 1)];
+        if entry.vpage == vpage && entry.satp == satp {
+            Some(entry.ppage)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn insert(&mut self, vpage: u64, ppage: u64, satp: u64) {
+        self.entries[(vpage as usize) & (FETCH_TLB_SIZE - 1)] =
+            FetchTlbEntry { vpage, ppage, satp };
+    }
+
+    pub fn flush(&mut self) {
+        for entry in self.entries.iter_mut() {
+            entry.vpage = u64::MAX;
+        }
+    }
+}
+
+impl Default for FetchTlb {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 const OP_LUI: u32 = 0x37;
 const OP_AUIPC: u32 = 0x17;
@@ -64,9 +123,7 @@ pub struct ExecContext<'a, B: SystemBus> {
     pub bus: &'a mut B,
     pub priv_mode: &'a mut PrivMode,
     pub lr_addr: &'a mut Option<u64>,
-    pub fetch_vpage: &'a mut u64,
-    pub fetch_ppage: &'a mut u64,
-    pub fetch_satp: &'a mut u64,
+    pub fetch_tlb: &'a mut FetchTlb,
 
     pub icache_tags: &'a mut Box<[u64; ICACHE_SIZE]>,
     pub icache_data: &'a mut Box<[u32; ICACHE_SIZE]>,
@@ -75,22 +132,39 @@ pub struct ExecContext<'a, B: SystemBus> {
 }
 
 fn invalidate_fetch_cache<B: SystemBus>(ctx: &mut ExecContext<B>) {
-    *ctx.fetch_vpage = u64::MAX;
+    ctx.fetch_tlb.flush();
 
     ctx.icache_tags.fill(u64::MAX);
 }
 
 pub fn run<B: SystemBus>(ctx: &mut ExecContext<B>, max_steps: u64) -> StepResult {
+    run_impl::<B, false>(ctx, max_steps)
+}
+
+pub fn run_until_wait<B: SystemBus>(ctx: &mut ExecContext<B>, max_steps: u64) -> StepResult {
+    run_impl::<B, true>(ctx, max_steps)
+}
+
+fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
+    ctx: &mut ExecContext<B>,
+    max_steps: u64,
+) -> StepResult {
     let mut remaining = max_steps as i64;
 
     while remaining > 0 {
         if let Some(irq) = ctx.csr.pending_interrupt(*ctx.priv_mode) {
-            *ctx.fetch_vpage = u64::MAX;
+            if irq == 7 && ctx.bus.timer_interrupt_pending() == Some(false) {
+                ctx.csr.mip &= !MIP_MTIP;
+                continue;
+            }
+
+            ctx.fetch_tlb.flush();
             *ctx.is_waiting = false;
             match take_interrupt(ctx, irq) {
                 StepResult::Ok => {}
                 other => return other,
             }
+
             remaining -= 1;
             continue;
         }
@@ -99,14 +173,22 @@ pub fn run<B: SystemBus>(ctx: &mut ExecContext<B>, max_steps: u64) -> StepResult
         let effective_satp = block::effective_satp(*ctx.priv_mode, ctx.csr.satp);
 
         let virtual_page = pc >> 12;
-        let fetch_pa = if virtual_page == *ctx.fetch_vpage && effective_satp == *ctx.fetch_satp {
-            (*ctx.fetch_ppage << 12) | (pc & 0xfff)
+        let fetch_pa = if let Some(ppage) = ctx.fetch_tlb.lookup(virtual_page, effective_satp) {
+            perf::note_fetch_page_hit();
+            #[cfg(debug_assertions)]
+            debug_assert_eq!(
+                ctx.mmu
+                    .translate_fetch(pc, effective_satp, ctx.bus)
+                    .map(|pa| pa >> 12),
+                Ok(ppage),
+                "fetch TLB hit disagrees with slow-path translation"
+            );
+            (ppage << 12) | (pc & 0xfff)
         } else {
+            perf::note_fetch_translate();
             match ctx.mmu.translate_fetch(pc, effective_satp, ctx.bus) {
                 Ok(pa) => {
-                    *ctx.fetch_vpage = virtual_page;
-                    *ctx.fetch_ppage = pa >> 12;
-                    *ctx.fetch_satp = effective_satp;
+                    ctx.fetch_tlb.insert(virtual_page, pa >> 12, effective_satp);
                     pa
                 }
                 Err(fault) => {
@@ -120,20 +202,86 @@ pub fn run<B: SystemBus>(ctx: &mut ExecContext<B>, max_steps: u64) -> StepResult
             }
         };
 
+        #[cfg(feature = "aot")]
+        if let Some(key_pa) = aot_page_key(ctx, fetch_pa) {
+            let priv_at_entry = *ctx.priv_mode;
+            if let Some(retired) = aot::dispatch(
+                ctx,
+                key_pa,
+                pc,
+                effective_satp,
+                remaining as u64,
+                fetch_pa >> 12,
+            ) {
+                aot::note_dispatch(retired);
+                perf::note_retired(priv_at_entry, retired);
+                remaining -= retired as i64;
+                continue;
+            }
+        }
+
+        #[cfg(feature = "aot-trace")]
+        ctx.blocks.trace_exec(fetch_pa);
+
         if let Some(cached) = ctx.blocks.lookup(fetch_pa) {
-            remaining -= block::exec_block(ctx, &cached, pc, effective_satp) as i64;
+            perf::note_block_hit();
+            let priv_at_entry = *ctx.priv_mode;
+            let (retired, result) = block::exec_block(ctx, &cached, pc, effective_satp);
+            perf::note_retired(priv_at_entry, retired);
+            remaining -= retired as i64;
+
+            match result {
+                StepResult::Ok => {}
+                other => return other,
+            }
+
+            if STOP_ON_WFI && *ctx.is_waiting {
+                return StepResult::Ok;
+            }
+
             continue;
         }
 
         if let Some(decoded) = block::decode_block(ctx.bus, fetch_pa) {
+            perf::note_block_decode();
+
             let cached = ctx.blocks.insert(fetch_pa, decoded);
-            remaining -= block::exec_block(ctx, &cached, pc, effective_satp) as i64;
+            let priv_at_entry = *ctx.priv_mode;
+            let (retired, result) = block::exec_block(ctx, &cached, pc, effective_satp);
+
+            perf::note_retired(priv_at_entry, retired);
+
+            remaining -= retired as i64;
+            match result {
+                StepResult::Ok => {}
+                other => return other,
+            }
+            if STOP_ON_WFI && *ctx.is_waiting {
+                return StepResult::Ok;
+            }
             continue;
         }
+
+        perf::note_single_step();
+        #[cfg(feature = "perf-counters")]
+        {
+            let low = ctx.bus.read_halfword(fetch_pa) as u32;
+            let raw = if low & 0x3 == 0x3 {
+                low | ((ctx.bus.read_halfword(fetch_pa + 2) as u32) << 16)
+            } else {
+                low
+            };
+            perf::note_single_step_op(raw);
+        }
+        perf::note_retired(*ctx.priv_mode, 1);
 
         match step(ctx) {
             StepResult::Ok => {}
             other => return other,
+        }
+
+        if STOP_ON_WFI && *ctx.is_waiting {
+            return StepResult::Ok;
         }
 
         remaining -= 1;
@@ -142,11 +290,47 @@ pub fn run<B: SystemBus>(ctx: &mut ExecContext<B>, max_steps: u64) -> StepResult
     StepResult::Ok
 }
 
+#[cfg(feature = "aot")]
+#[inline(always)]
+pub(crate) fn aot_page_key<B: SystemBus>(ctx: &mut ExecContext<B>, fetch_pa: u64) -> Option<u64> {
+    use crate::block::AotResolve;
+
+    let page = fetch_pa >> 12;
+    match ctx.blocks.aot_resolve(page) {
+        AotResolve::Hit(orig) => Some((orig << 12) | (fetch_pa & 0xfff)),
+        AotResolve::Miss => None,
+        AotResolve::Unknown => aot_page_key_hash(ctx, fetch_pa, page),
+    }
+}
+
+#[cfg(feature = "aot")]
+#[cold]
+#[inline(never)]
+fn aot_page_key_hash<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    fetch_pa: u64,
+    page: u64,
+) -> Option<u64> {
+    let base = page << 12;
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for i in 0..512u64 {
+        hash ^= ctx.bus.read_doubleword(base + i * 8);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    ctx.blocks
+        .aot_record_hash(page, hash)
+        .map(|orig| (orig << 12) | (fetch_pa & 0xfff))
+}
+
 pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
     if let Some(irq) = ctx.csr.pending_interrupt(*ctx.priv_mode) {
-        *ctx.fetch_vpage = u64::MAX;
-        *ctx.is_waiting = false;
-        return take_interrupt(ctx, irq);
+        if irq == 7 && ctx.bus.timer_interrupt_pending() == Some(false) {
+            ctx.csr.mip &= !MIP_MTIP;
+        } else {
+            ctx.fetch_tlb.flush();
+            *ctx.is_waiting = false;
+            return take_interrupt(ctx, irq);
+        }
     }
 
     let pc = ctx.regs.pc;
@@ -158,16 +342,16 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
 
     let virtual_page = pc >> 12;
     let fetch_physical_address =
-        if virtual_page == *ctx.fetch_vpage && effective_satp == *ctx.fetch_satp {
-            (*ctx.fetch_ppage << 12) | (pc & 0xfff)
+        if let Some(ppage) = ctx.fetch_tlb.lookup(virtual_page, effective_satp) {
+            (ppage << 12) | (pc & 0xfff)
         } else {
             let physical_address = match ctx.mmu.translate_fetch(pc, effective_satp, ctx.bus) {
                 Ok(pa) => pa,
                 Err(fault) => return trap_from_mmu(ctx, fault),
             };
-            *ctx.fetch_vpage = virtual_page;
-            *ctx.fetch_ppage = physical_address >> 12;
-            *ctx.fetch_satp = effective_satp;
+
+            ctx.fetch_tlb
+                .insert(virtual_page, physical_address >> 12, effective_satp);
             physical_address
         };
 
@@ -183,9 +367,8 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
                 Err(f) => return trap_from_mmu(ctx, f),
             };
 
-            *ctx.fetch_vpage = next_pc >> 12;
-            *ctx.fetch_ppage = next_pa >> 12;
-            *ctx.fetch_satp = effective_satp;
+            ctx.fetch_tlb
+                .insert(next_pc >> 12, next_pa >> 12, effective_satp);
             let hi = ctx.bus.read_halfword(next_pa) as u32;
 
             lo | (hi << 16)
@@ -203,6 +386,14 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
         }
     };
 
+    exec_raw(ctx, instruction_encoding, pc)
+}
+
+pub(crate) fn exec_raw<B: SystemBus>(
+    ctx: &mut ExecContext<B>,
+    instruction_encoding: u32,
+    pc: u64,
+) -> StepResult {
     let result = if instruction_encoding & 0x3 != 0x3 {
         exec_compressed(ctx, instruction_encoding as u16)
     } else {
@@ -486,29 +677,34 @@ fn exec_full<B: SystemBus>(
             let shamt = (imm & 0x1f) as u32;
             let funct7 = inst.funct7();
 
-            let val: i32 = match inst.funct3() {
-                0x0 => rs1.wrapping_add(imm as u32) as i32,
-                0x1 => match funct7 {
-                    0x00 => (rs1 << shamt) as i32, // slliw
-                    0x30 => match shamt {
-                        // Zbb: clzw/ctzw/cpopw
-                        0 => rs1.leading_zeros() as i32,  // clzw
-                        1 => rs1.trailing_zeros() as i32, // ctzw
-                        2 => rs1.count_ones() as i32,     // cpopw
+            let val: u64 = if inst.funct3() == 0x1 && (funct7 == 0x04 || funct7 == 0x05) {
+                (rs1 as u64) << ((imm & 0x3f) as u32)
+            } else {
+                let word: i32 = match inst.funct3() {
+                    0x0 => rs1.wrapping_add(imm as u32) as i32,
+                    0x1 => match funct7 {
+                        0x00 => (rs1 << shamt) as i32, // slliw
+                        0x30 => match shamt {
+                            // Zbb: clzw/ctzw/cpopw
+                            0 => rs1.leading_zeros() as i32,  // clzw
+                            1 => rs1.trailing_zeros() as i32, // ctzw
+                            2 => rs1.count_ones() as i32,     // cpopw
+                            _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+                        },
+                        _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+                    },
+                    0x5 => match funct7 {
+                        0x00 => (rs1 >> shamt) as i32,          // srliw
+                        0x20 => (rs1 as i32) >> shamt,          // sraiw
+                        0x30 => rs1.rotate_right(shamt) as i32, // roriw (Zbb)
                         _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
                     },
                     _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
-                },
-                0x5 => match funct7 {
-                    0x00 => (rs1 >> shamt) as i32,          // srliw
-                    0x20 => (rs1 as i32) >> shamt,          // sraiw
-                    0x30 => rs1.rotate_right(shamt) as i32, // roriw (Zbb)
-                    _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
-                },
-                _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
+                };
+                word as i64 as u64
             };
 
-            ctx.regs.write(inst.rd(), val as i64 as u64);
+            ctx.regs.write(inst.rd(), val);
             ctx.regs.pc = pc.wrapping_add(4);
         }
 
@@ -561,8 +757,10 @@ fn exec_full<B: SystemBus>(
                 } // max
                 (0x6, 0x05) => rs1.min(rs2), // minu
                 (0x7, 0x05) => rs1.max(rs2), // maxu
-                // Zbb: zext.h (pack rs2=x0, funct7=0x04)
-                (0x4, 0x04) => rs1 as u16 as u64, // zext.h
+                // Zba: shifted add
+                (0x2, 0x10) => (rs1 << 1).wrapping_add(rs2), // sh1add
+                (0x4, 0x10) => (rs1 << 2).wrapping_add(rs2), // sh2add
+                (0x6, 0x10) => (rs1 << 3).wrapping_add(rs2), // sh3add
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
 
@@ -590,6 +788,13 @@ fn exec_full<B: SystemBus>(
                 (0x5, 0x30) => {
                     ((rs1 as u32).rotate_right((rs2 & 0x1f) as u32)) as i32 as i64 as u64
                 }
+                // Zbb: zext.h is `packw rd, rs1, x0`, so it only decodes with rs2 == 0.
+                (0x4, 0x04) if inst.rs2() == 0 => rs1 as u16 as u64,
+                // Zba: zero-extended shifted add
+                (0x0, 0x04) => (rs1 as u32 as u64).wrapping_add(rs2), // add.uw
+                (0x2, 0x10) => ((rs1 as u32 as u64) << 1).wrapping_add(rs2), // sh1add.uw
+                (0x4, 0x10) => ((rs1 as u32 as u64) << 2).wrapping_add(rs2), // sh2add.uw
+                (0x6, 0x10) => ((rs1 as u32 as u64) << 3).wrapping_add(rs2), // sh3add.uw
                 _ => return StepResult::Trap(TrapCause::IllegalInstruction(raw)),
             };
 
@@ -752,9 +957,6 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                 ctx.csr.mstatus |= MSTATUS_SPIE;
                 *ctx.priv_mode = PrivMode::from_bits(spp);
                 ctx.regs.pc = ctx.csr.sepc;
-                ctx.mmu.flush();
-
-                invalidate_fetch_cache(ctx);
                 return StepResult::Ok;
             }
             0x302 => {
@@ -772,13 +974,12 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                 ctx.csr.mstatus |= MSTATUS_MPIE;
                 *ctx.priv_mode = PrivMode::from_bits(mpp);
                 ctx.regs.pc = ctx.csr.mepc;
-                ctx.mmu.flush();
-
-                invalidate_fetch_cache(ctx);
                 return StepResult::Ok;
             }
             0x105 => {
                 // WFI
+                perf::note_wfi();
+
                 *ctx.is_waiting = true;
                 ctx.regs.pc = pc.wrapping_add(4);
 
@@ -1346,8 +1547,6 @@ fn take_interrupt<B: SystemBus>(ctx: &mut ExecContext<B>, irq_bit: u64) -> StepR
         ctx.regs.pc = ctx.csr.mtvec & !3;
     }
 
-    ctx.mmu.flush();
-    invalidate_fetch_cache(ctx);
     StepResult::Ok
 }
 
@@ -1383,9 +1582,6 @@ pub fn take_exception<B: SystemBus>(ctx: &mut ExecContext<B>, cause: u64, tval: 
         *ctx.priv_mode = PrivMode::M;
         ctx.regs.pc = ctx.csr.mtvec & !3;
     }
-
-    ctx.mmu.flush();
-    invalidate_fetch_cache(ctx);
 }
 
 // Zbb: orc.b

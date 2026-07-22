@@ -404,12 +404,18 @@ impl Csr {
         self.mstatus = (self.mstatus & preserved) | (value & MSTATUS_WRITE_MASK);
     }
 
+    #[inline(always)]
     pub fn pending_interrupt(&self, priv_mode: PrivMode) -> Option<u64> {
         let pending = self.mip & self.mie;
         if pending == 0 {
             return None;
         }
+        self.pending_interrupt_slow(priv_mode, pending)
+    }
 
+    #[cold]
+    #[inline(never)]
+    fn pending_interrupt_slow(&self, priv_mode: PrivMode, pending: u64) -> Option<u64> {
         let mie_bit = (self.mstatus & MSTATUS_MIE) != 0;
         let sie_bit = (self.mstatus & MSTATUS_SIE) != 0;
 
