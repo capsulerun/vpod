@@ -18,10 +18,12 @@ for snap in dist/alpine-3.23.0-256mb.snap dist/alpine-3.23.0-512mb.snap dist/vsn
 done
 
 mkdir -p "$OUT"
-lz4 -9 -f dist/alpine-3.23.0-256mb.snap "$OUT/alpine-3.23.0-256mb.snap"
+# Snapshots are natively lz4-framed since 0.5.0; recompress from the raw
+# stream so the registry serves exactly one layer (see build-snapshots.yml).
+lz4 -d -c dist/alpine-3.23.0-256mb.snap | lz4 -9 > "$OUT/alpine-3.23.0-256mb.snap"
 cp "$OUT/alpine-3.23.0-256mb.snap" "$OUT/vsnap-base-256mb.snap"
-lz4 -9 -f dist/alpine-3.23.0-512mb.snap "$OUT/vsnap-base-512mb.snap"
-lz4 -9 -f dist/vsnap-data-512mb.snap "$OUT/vsnap-data-512mb.snap"
+lz4 -d -c dist/alpine-3.23.0-512mb.snap | lz4 -9 > "$OUT/vsnap-base-512mb.snap"
+lz4 -d -c dist/vsnap-data-512mb.snap | lz4 -9 > "$OUT/vsnap-data-512mb.snap"
 
 CATALOG="$CATALOG" OUT="$OUT" python3 - <<'PY'
 import hashlib, json, os

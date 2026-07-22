@@ -72,10 +72,14 @@ jobs:
       - name: Compress for the registry
         run: |
           mkdir -p dist/registry
-          lz4 -9 -f dist/alpine-3.23.0-256mb.snap dist/registry/alpine-3.23.0-256mb.snap
+          # Snapshots are natively lz4-framed since 0.5.0. Recompress from the
+          # raw stream at -9 so the registry serves exactly ONE well-compressed
+          # layer: the SDK download path strips one lz4 layer and expects VPOD
+          # bytes underneath (pre-0.5.0 engines cannot read lz4-framed input).
+          lz4 -d -c dist/alpine-3.23.0-256mb.snap | lz4 -9 > dist/registry/alpine-3.23.0-256mb.snap
           cp dist/registry/alpine-3.23.0-256mb.snap dist/registry/vsnap-base-256mb.snap
-          lz4 -9 -f dist/alpine-3.23.0-512mb.snap dist/registry/vsnap-base-512mb.snap
-          lz4 -9 -f dist/vsnap-data-512mb.snap dist/registry/vsnap-data-512mb.snap
+          lz4 -d -c dist/alpine-3.23.0-512mb.snap | lz4 -9 > dist/registry/vsnap-base-512mb.snap
+          lz4 -d -c dist/vsnap-data-512mb.snap    | lz4 -9 > dist/registry/vsnap-data-512mb.snap
           ls -lh dist/registry
 
       - name: Generate snapshots.json
