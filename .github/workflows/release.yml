@@ -76,7 +76,6 @@ jobs:
 
   publish-python:
     name: Publish – PyPI (Python SDK)
-    # An explicit `if` replaces the implicit success() check, so guard it back.
     if: ${{ !cancelled() && !failure() && inputs.publish_python }}
     needs: build-aot
     runs-on: ubuntu-latest

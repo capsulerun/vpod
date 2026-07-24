@@ -149,8 +149,8 @@ impl SniResolver {
         let subject = Name::from_str(&format!("CN={sni}")).map_err(|e| e.to_string())?;
 
         let now = SystemTime::now();
-        let not_before =
-            Time::try_from(now - Duration::from_secs(24 * 3600)).map_err(|e| e.to_string())?;
+        let not_before = Time::try_from(now - Duration::from_secs(3650 * 24 * 3600))
+            .map_err(|e| e.to_string())?;
         let not_after = Time::try_from(now + Duration::from_secs(825 * 24 * 3600))
             .map_err(|e| e.to_string())?;
         let validity = Validity {
