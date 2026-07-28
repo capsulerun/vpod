@@ -158,6 +158,16 @@ cat > "$OVERLAY/etc/uv/uv.toml" << 'UV_EOF'
 python-preference = "only-system"
 UV_EOF
 
+# Enables docker usage
+mkdir -p "$OVERLAY/etc/docker"
+cat > "$OVERLAY/etc/docker/daemon.json" << 'DOCKER_EOF'
+{
+  "iptables": false,
+  "bridge": "none",
+  "storage-driver": "overlay2"
+}
+DOCKER_EOF
+
 echo "── Cross-compiling vpod python shim (riscv64-musl, dynamic)..."
 zig cc -target riscv64-linux-musl -Os -dynamic -s \
     -o "$OVERLAY/usr/lib/vpod/vpod-python-shim" \
@@ -174,6 +184,11 @@ mount -t proc     proc     /proc
 mount -t sysfs    sysfs    /sys
 mount -t devtmpfs devtmpfs /dev
 mount -t tmpfs    tmpfs    /tmp
+
+# Container runtime primitives (docker/podman/buildah): a mounted cgroup2
+mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
+echo '+cpu +memory +pids +io' > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
+modprobe overlay 2>/dev/null || true
 
 hostname vpod
 ip link set lo up 2>/dev/null || true
@@ -206,6 +221,9 @@ export SSL_CERT_FILE=/etc/ssl/vpod/ca-only.pem
 export REQUESTS_CA_BUNDLE=/etc/ssl/vpod/ca-only.pem
 export PIP_CERT=/etc/ssl/vpod/ca-only.pem
 export NODE_EXTRA_CA_CERTS=/etc/ssl/vpod/ca-only.pem
+
+# Enables container/docker runtimes
+export DOCKER_RAMDISK=1
 
 export ENV=''
 unset HISTFILE
