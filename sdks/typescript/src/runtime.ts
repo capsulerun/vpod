@@ -1,5 +1,6 @@
 import type {
     ExecutionResult,
+    PullResult,
     WorkerCall,
     WorkerMessage,
 } from "./worker/protocol.js";
@@ -108,6 +109,25 @@ export class SandboxRuntime {
 
     ready(): Promise<number> {
         return this.#ready;
+    }
+
+    /**
+     * Resolve a snapshot through the registry, serving it from OPFS when it is already cached.
+     */
+    pullSnapshot(
+        name?: string,
+        options: { registryUrl?: string; force?: boolean } = {},
+    ): Promise<PullResult> {
+        return this.#call<PullResult>({
+            kind: "pull-snapshot",
+            name,
+            registryUrl: options.registryUrl,
+            force: options.force,
+        });
+    }
+
+    storageQuota(): Promise<{ usage: number; quota: number } | null> {
+        return this.#call({ kind: "storage-quota" });
     }
 
     fetchSnapshot(url: string, name?: string): Promise<SnapshotMount> {

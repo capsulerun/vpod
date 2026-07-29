@@ -4,6 +4,8 @@
 
 import { mountSnapshot } from "../shims/filesystem.js";
 import { pollStats } from "../shims/io.js";
+import { evictById, pullSnapshot } from "../snapshots/pull.js";
+import { SnapshotStore } from "../snapshots/store.js";
 import type {
     ExecutionResult,
     WorkerCall,
@@ -64,8 +66,55 @@ function requireExecutor(): Executor {
     return executor;
 }
 
+const mountedSnapshotIds = new Map<string, string>();
+
+async function explainRejectedSnapshot(
+    snapshotPath: string,
+    thrown: unknown,
+): Promise<unknown> {
+    const message = String((thrown as { payload?: unknown })?.payload ?? thrown);
+    const id = mountedSnapshotIds.get(snapshotPath);
+    if (!message.includes("invalid snapshot magic") || id === undefined) {
+        return thrown;
+    }
+
+    await evictById(id);
+    return new Error(
+        `vpod: the guest rejected snapshot '${id}' with "invalid snapshot magic". ` +
+            `A snapshot compressed twice looks exactly like this, and its checksum ` +
+            `still matches because the extra layer is what was served. The cached ` +
+            `copy has been dropped so a retry refetches; if the registry itself is ` +
+            `serving it double-framed, the retry fails identically.`,
+    );
+}
+
 async function handle(call: WorkerCall): Promise<unknown> {
     switch (call.kind) {
+        case "pull-snapshot": {
+            const pulled = await pullSnapshot({
+                name: call.name,
+                registryUrl: call.registryUrl,
+                force: call.force,
+            });
+            const snapshotPath = mountSnapshot(
+                `${pulled.entry.id}.snap`,
+                pulled.bytes,
+            );
+            mountedSnapshotIds.set(snapshotPath, pulled.entry.id);
+            return {
+                snapshotPath,
+                id: pulled.entry.id,
+                byteLength: pulled.bytes.byteLength,
+                source: pulled.source,
+                fetchMilliseconds: pulled.fetchMilliseconds,
+                verifyMilliseconds: pulled.verifyMilliseconds,
+                storeMilliseconds: pulled.storeMilliseconds,
+            };
+        }
+
+        case "storage-quota":
+            return SnapshotStore.quota();
+
         case "fetch-snapshot": {
             const response = await fetch(call.url);
             if (!response.ok) {
@@ -90,12 +139,16 @@ async function handle(call: WorkerCall): Promise<unknown> {
         }
 
         case "session-start":
-            return requireExecutor().sessionStart(
-                call.snapshotPath,
-                call.command,
-                call.prompt,
-                [],
-            );
+            try {
+                return requireExecutor().sessionStart(
+                    call.snapshotPath,
+                    call.command,
+                    call.prompt,
+                    [],
+                );
+            } catch (thrown: unknown) {
+                throw await explainRejectedSnapshot(call.snapshotPath, thrown);
+            }
 
         case "session-exec":
             return requireExecutor().sessionExec(

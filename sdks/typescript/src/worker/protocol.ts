@@ -14,7 +14,24 @@ export interface ExecutionResult {
     exitCode: number;
 }
 
+export interface PullResult {
+    snapshotPath: string;
+    id: string;
+    byteLength: number;
+    source: "opfs" | "network";
+    fetchMilliseconds: number;
+    verifyMilliseconds: number;
+    storeMilliseconds: number;
+}
+
 export type WorkerCall =
+    | {
+          kind: "pull-snapshot";
+          name?: string;
+          registryUrl?: string;
+          force?: boolean;
+      }
+    | { kind: "storage-quota" }
     | { kind: "fetch-snapshot"; url: string; name?: string }
     | { kind: "mount-snapshot"; name: string; bytes: ArrayBuffer }
     | {
