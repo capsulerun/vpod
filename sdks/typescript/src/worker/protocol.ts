@@ -1,7 +1,3 @@
-/**
- * Messages between the page and the Worker the emulator runs in.
- */
-
 export interface WorkerInit {
     kind: "init";
     componentUrl: string;
@@ -24,22 +20,22 @@ export interface PullResult {
     storeMilliseconds: number;
 }
 
+export interface SnapshotMount {
+    snapshotPath: string;
+    byteLength: number;
+}
+
+export interface SuspendResult {
+    deltaBytes: ArrayBuffer;
+    byteLength: number;
+}
+
 export type WorkerCall =
-    | {
-          kind: "pull-snapshot";
-          name?: string;
-          registryUrl?: string;
-          force?: boolean;
-      }
+    | { kind: "pull-snapshot"; name?: string; registryUrl?: string; force?: boolean }
     | { kind: "storage-quota" }
     | { kind: "fetch-snapshot"; url: string; name?: string }
     | { kind: "mount-snapshot"; name: string; bytes: ArrayBuffer }
-    | {
-          kind: "session-start";
-          snapshotPath: string;
-          command: string;
-          prompt: string;
-      }
+    | { kind: "session-start"; snapshotPath: string; command: string; prompt: string }
     | {
           kind: "session-exec";
           handle: bigint;
@@ -47,11 +43,11 @@ export type WorkerCall =
           timeoutSeconds: bigint | null;
       }
     | { kind: "session-close"; handle: bigint }
-    | { kind: "session-suspend"; handle: bigint; deltaPath: string }
+    | { kind: "session-suspend"; handle: bigint }
     | {
           kind: "session-resume";
           snapshotPath: string;
-          deltaPath: string;
+          deltaBytes: ArrayBuffer;
           command: string;
           prompt: string;
       }
@@ -73,3 +69,10 @@ export interface WorkerReady {
 }
 
 export type WorkerMessage = WorkerReply | WorkerReady;
+
+export function describeThrown(thrown: unknown): string {
+    if (thrown instanceof Error) {
+        return thrown.stack ?? thrown.message;
+    }
+    return String((thrown as { payload?: unknown })?.payload ?? thrown);
+}

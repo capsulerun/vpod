@@ -145,9 +145,6 @@ async function readBody(
     return bytes;
 }
 
-/**
- * Drop a cached snapshot so the next pull refetches it.
- */
 export async function evict(store: SnapshotStore, entry: SnapshotEntry): Promise<void> {
     await store.remove(snapshotFileName(entry));
     await store.remove(digestFileName(entry));

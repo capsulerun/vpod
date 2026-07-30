@@ -1,12 +1,36 @@
+import { setAssetBaseUrl } from "./asset-base.js";
+
+setAssetBaseUrl(new URL("./", import.meta.url));
+
+export { Sandbox, Commands, Code } from "./sandbox.js";
+export type { SandboxOptions, RunOptions } from "./sandbox.js";
+
+export {
+    CommandResult,
+    CodeExecution,
+    parseCodeOutput,
+    normalizeLineEndings,
+} from "./execution.js";
+
 export { SandboxRuntime } from "./runtime.js";
+export type { SandboxRuntimeOptions, StorageQuota } from "./runtime.js";
+
+export { InstanceStore } from "./instances.js";
+export type { InstanceRecord, SuspendedInstance } from "./instances.js";
+
+export * as snapshots from "./snapshots/index.js";
+
+export { WorkerTransport } from "./transport/worker.js";
+export { createInlineTransport } from "./transport/inline.js";
+export type { ExecutorTransport } from "./transport/types.js";
+
 export type {
-    SandboxRuntimeOptions,
+    ExecutionResult,
+    PullResult,
     SnapshotMount,
-} from "./runtime.js";
-export type { ExecutionResult, PullResult } from "./worker/protocol.js";
-export { DEFAULT_REGISTRY_URL, resolveSnapshot } from "./snapshots/catalogue.js";
-export { evictById } from "./snapshots/pull.js";
-export type { Catalogue, SnapshotEntry } from "./snapshots/types.js";
+    SuspendResult,
+} from "./worker/protocol.js";
+
 export { setSocketBackend, socketBackendName } from "./shims/sockets.js";
 export type {
     SocketBackend,

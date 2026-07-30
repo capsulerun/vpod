@@ -1,0 +1,187 @@
+import {
+    deltaPath,
+    mountDelta,
+    mountSnapshot,
+    readGuestFile,
+    removeGuestFile,
+} from "../shims/filesystem.js";
+import { pollStats } from "../shims/io.js";
+import { evictById, pullSnapshot } from "../snapshots/pull.js";
+import { SnapshotStore } from "../snapshots/store.js";
+import type { ExecutionResult, WorkerCall } from "./protocol.js";
+
+interface Executor {
+    sessionStart(
+        snapshotPath: string,
+        command: string,
+        prompt: string,
+        mounts: never[],
+    ): bigint;
+    sessionExec(
+        handle: bigint,
+        code: string,
+        timeout: bigint | undefined,
+    ): ExecutionResult;
+    sessionClose(handle: bigint): void;
+    sessionSuspend(handle: bigint, deltaPath: string): bigint;
+    sessionResume(
+        snapshotPath: string,
+        deltaPath: string,
+        command: string,
+        prompt: string,
+        mounts: never[],
+    ): bigint;
+}
+
+export class Dispatcher {
+    #executor: Executor | null = null;
+    #componentLoadMilliseconds = 0;
+    #mountedSnapshotIds = new Map<string, string>();
+    #nextDeltaId = 1;
+
+    async load(componentUrl: string): Promise<number> {
+        const startedAt = performance.now();
+        const module = (await import(/* @vite-ignore */ componentUrl)) as {
+            executor: Executor;
+        };
+        this.#executor = module.executor;
+        this.#componentLoadMilliseconds = performance.now() - startedAt;
+        return this.#componentLoadMilliseconds;
+    }
+
+    get componentLoadMilliseconds(): number {
+        return this.#componentLoadMilliseconds;
+    }
+
+    #requireExecutor(): Executor {
+        if (this.#executor === null) {
+            throw new Error("vpod: the component is not loaded yet");
+        }
+        return this.#executor;
+    }
+
+    async #explainRejectedSnapshot(
+        snapshotPath: string,
+        thrown: unknown,
+    ): Promise<unknown> {
+        const message = String((thrown as { payload?: unknown })?.payload ?? thrown);
+        const id = this.#mountedSnapshotIds.get(snapshotPath);
+        if (!message.includes("invalid snapshot magic") || id === undefined) {
+            return thrown;
+        }
+
+        await evictById(id);
+        return new Error(
+            `vpod: the guest rejected snapshot '${id}' with "invalid snapshot magic". ` +
+                `A snapshot compressed twice looks exactly like this. The cached copy ` +
+                `has been dropped so a retry refetches; if the registry itself serves ` +
+                `it double-framed, the retry fails identically.`,
+        );
+    }
+
+    async handle(call: WorkerCall): Promise<unknown> {
+        switch (call.kind) {
+            case "pull-snapshot": {
+                const pulled = await pullSnapshot({
+                    name: call.name,
+                    registryUrl: call.registryUrl,
+                    force: call.force,
+                });
+                const snapshotPath = mountSnapshot(`${pulled.entry.id}.snap`, pulled.bytes);
+                this.#mountedSnapshotIds.set(snapshotPath, pulled.entry.id);
+                return {
+                    snapshotPath,
+                    id: pulled.entry.id,
+                    byteLength: pulled.bytes.byteLength,
+                    source: pulled.source,
+                    fetchMilliseconds: pulled.fetchMilliseconds,
+                    verifyMilliseconds: pulled.verifyMilliseconds,
+                    storeMilliseconds: pulled.storeMilliseconds,
+                };
+            }
+
+            case "storage-quota":
+                return SnapshotStore.quota();
+
+            case "fetch-snapshot": {
+                const response = await fetch(call.url);
+                if (!response.ok) {
+                    throw new Error(
+                        `vpod: snapshot fetch failed with ${response.status} for ${call.url}`,
+                    );
+                }
+                const name = call.name ?? call.url.split("/").pop()!;
+                const bytes = new Uint8Array(await response.arrayBuffer());
+                return { snapshotPath: mountSnapshot(name, bytes), byteLength: bytes.byteLength };
+            }
+
+            case "mount-snapshot": {
+                const bytes = new Uint8Array(call.bytes);
+                return {
+                    snapshotPath: mountSnapshot(call.name, bytes),
+                    byteLength: bytes.byteLength,
+                };
+            }
+
+            case "session-start":
+                try {
+                    return this.#requireExecutor().sessionStart(
+                        call.snapshotPath,
+                        call.command,
+                        call.prompt,
+                        [],
+                    );
+                } catch (thrown: unknown) {
+                    throw await this.#explainRejectedSnapshot(call.snapshotPath, thrown);
+                }
+
+            case "session-exec":
+                return this.#requireExecutor().sessionExec(
+                    call.handle,
+                    call.code,
+                    call.timeoutSeconds ?? undefined,
+                );
+
+            case "session-close":
+                this.#requireExecutor().sessionClose(call.handle);
+                return null;
+
+            case "session-suspend": {
+                const name = `suspend-${this.#nextDeltaId++}.bin`;
+                const path = deltaPath(name);
+                this.#requireExecutor().sessionSuspend(call.handle, path);
+
+                const bytes = readGuestFile(path);
+                if (bytes === null) {
+                    throw new Error(`vpod: suspend produced no delta at ${path}`);
+                }
+                removeGuestFile(path);
+
+                const copy = bytes.slice();
+                return { deltaBytes: copy.buffer, byteLength: copy.byteLength };
+            }
+
+            case "session-resume": {
+                const name = `resume-${this.#nextDeltaId++}.bin`;
+                const path = mountDelta(name, new Uint8Array(call.deltaBytes));
+                try {
+                    return this.#requireExecutor().sessionResume(
+                        call.snapshotPath,
+                        path,
+                        call.command,
+                        call.prompt,
+                        [],
+                    );
+                } finally {
+                    removeGuestFile(path);
+                }
+            }
+
+            case "poll-stats":
+                return pollStats();
+
+            case "component-load-milliseconds":
+                return this.#componentLoadMilliseconds;
+        }
+    }
+}

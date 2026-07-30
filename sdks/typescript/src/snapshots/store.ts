@@ -9,8 +9,15 @@ interface SyncAccessHandle {
     close(): void;
 }
 
+interface WritableStream {
+    write(data: BufferSource): Promise<void>;
+    close(): Promise<void>;
+}
+
 interface FileHandle {
-    createSyncAccessHandle(): Promise<SyncAccessHandle>;
+    createSyncAccessHandle?(): Promise<SyncAccessHandle>;
+    createWritable?(options?: { keepExistingData?: boolean }): Promise<WritableStream>;
+    getFile?(): Promise<Blob>;
 }
 
 interface DirectoryHandle {
@@ -40,33 +47,58 @@ export class SnapshotStore {
     }
 
     async read(name: string): Promise<Uint8Array | null> {
-        let handle: SyncAccessHandle;
+        let file: FileHandle;
         try {
-            const file = await this.#directory.getFileHandle(name);
-            handle = await file.createSyncAccessHandle();
+            file = await this.#directory.getFileHandle(name);
         } catch {
             return null;
         }
 
-        try {
-            const bytes = new Uint8Array(handle.getSize());
-            handle.read(bytes, { at: 0 });
-            return bytes;
-        } finally {
-            handle.close();
+        const openSync = file.createSyncAccessHandle;
+        if (openSync !== undefined) {
+            const handle = await openSync.call(file);
+            try {
+                const bytes = new Uint8Array(handle.getSize());
+                handle.read(bytes, { at: 0 });
+                return bytes;
+            } finally {
+                handle.close();
+            }
         }
+
+        if (file.getFile === undefined) {
+            throw new Error("vpod: this file handle can neither be read synchronously nor as a File");
+        }
+        return new Uint8Array(await (await file.getFile()).arrayBuffer());
     }
 
     async write(name: string, bytes: Uint8Array): Promise<void> {
         const file = await this.#directory.getFileHandle(name, { create: true });
-        const handle = await file.createSyncAccessHandle();
-        try {
-            handle.truncate(0);
-            handle.write(bytes, { at: 0 });
-            handle.flush();
-        } finally {
-            handle.close();
+
+        const openSync = file.createSyncAccessHandle;
+        if (openSync !== undefined) {
+            const handle = await openSync.call(file);
+            try {
+                handle.truncate(0);
+                handle.write(bytes, { at: 0 });
+                handle.flush();
+            } finally {
+                handle.close();
+            }
+            return;
         }
+
+        const openWritable = file.createWritable;
+        if (openWritable === undefined) {
+            throw new Error(
+                "vpod: this file handle supports neither createSyncAccessHandle nor " +
+                    "createWritable, so nothing can be stored here",
+            );
+        }
+
+        const writable = await openWritable.call(file);
+        await writable.write(bytes as BufferSource);
+        await writable.close();
     }
 
     async readText(name: string): Promise<string | null> {

@@ -86,9 +86,6 @@ async function readCachedCatalogue(
     }
 }
 
-/**
- * Resolve `name:tag` against the catalogue.
- */
 export function resolveSnapshot(
     snapshots: SnapshotEntry[],
     name: string,
