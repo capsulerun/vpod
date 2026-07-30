@@ -1,16 +1,13 @@
 //Gateway for guest connections to :443
 
 use std::collections::VecDeque;
-use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 
-use rustls::pki_types::ServerName;
-use rustls::{ClientConfig, ClientConnection};
+use rustls::ClientConfig;
 use std::sync::Arc;
 
 use super::tls_proxy::{Timing, TlsContext, TlsProxy};
+use super::upstream::{PREAMBLE_PREFIX, Upstream, UpstreamMode, UpstreamStatus};
 
-pub const PREAMBLE_PREFIX: &[u8] = b"VPOD-CONNECT ";
 const PREAMBLE_MAX: usize = 280;
 
 enum GatewayState {
@@ -156,6 +153,7 @@ impl HttpsGateway {
         }
 
         match PlainBridge::connect(
+            self.ctx.upstream_mode(),
             self.upstream_config.clone(),
             self.dst_ip,
             port,
@@ -188,8 +186,7 @@ fn parse_preamble(line: &[u8]) -> Option<(String, u16)> {
 }
 
 struct PlainBridge {
-    client: ClientConnection,
-    upstream: TcpStream,
+    upstream: Upstream,
     to_guest: VecDeque<u8>,
     failed: bool,
     upstream_closed: bool,
@@ -201,32 +198,17 @@ struct PlainBridge {
 
 impl PlainBridge {
     fn connect(
+        mode: UpstreamMode,
         client_config: Arc<ClientConfig>,
         dst_ip: [u8; 4],
         port: u16,
         host: &str,
         timing: Option<Timing>,
     ) -> Result<Self, String> {
-        let addr = SocketAddrV4::new(Ipv4Addr::from(dst_ip), port);
-
-        // See if better alternative for cfg
-        #[cfg(target_family = "wasm")]
-        let stream = TcpStream::connect(addr);
-
-        #[cfg(not(target_family = "wasm"))]
-        let stream = TcpStream::connect_timeout(&addr.into(), std::time::Duration::from_secs(10));
-
-        let stream = stream.map_err(|e| e.to_string())?;
-        stream.set_nonblocking(true).ok();
-        stream.set_nodelay(true).ok();
-
-        let server_name = ServerName::try_from(host.to_string()).map_err(|e| e.to_string())?;
-        let client =
-            ClientConnection::new(client_config, server_name).map_err(|e| e.to_string())?;
+        let upstream = Upstream::connect(mode, client_config, dst_ip, port, host)?;
 
         let bridge = Self {
-            client,
-            upstream: stream,
+            upstream,
             to_guest: VecDeque::new(),
             failed: false,
             upstream_closed: false,
@@ -242,7 +224,7 @@ impl PlainBridge {
     }
 
     fn push_from_guest(&mut self, bytes: &[u8]) {
-        if self.client.writer().write_all(bytes).is_err() {
+        if self.upstream.send_plaintext(bytes).is_err() {
             self.failed = true;
             return;
         }
@@ -269,23 +251,15 @@ impl PlainBridge {
             return;
         }
 
-        if !self.client.is_handshaking() {
+        if !self.upstream.handshaking() {
             self.upstream_hs_done = true;
         }
 
-        while !self.upstream_closed && self.client.wants_write() {
-            match self.client.write_tls(&mut self.upstream) {
-                Ok(0) => break,
-                Ok(_) => {}
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(e) => {
-                    if self.upstream_hs_done {
-                        log::debug!("plain_bridge: upstream write ended: {e}");
-                        self.upstream_closed = true;
-                        break;
-                    }
-
-                    log::warn!("plain_bridge: upstream write error: {e}");
+        if !self.upstream_closed {
+            match self.upstream.service() {
+                UpstreamStatus::Open => {}
+                UpstreamStatus::Closed => self.upstream_closed = true,
+                UpstreamStatus::Failed => {
                     self.failed = true;
                     return;
                 }
@@ -293,51 +267,12 @@ impl PlainBridge {
         }
 
         let mut buf = [0u8; 16384];
-        while !self.upstream_closed {
-            loop {
-                match self.client.reader().read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => self.to_guest.extend(&buf[..n]),
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(_) => break,
-                }
-            }
-
-            match self.client.read_tls(&mut self.upstream) {
-                Ok(0) => self.upstream_closed = true,
-                Ok(_) => {
-                    if let Err(e) = self.client.process_new_packets() {
-                        if self.upstream_hs_done {
-                            log::debug!("plain_bridge: upstream closed uncleanly: {e}");
-                            self.upstream_closed = true;
-                        } else {
-                            log::warn!("plain_bridge: upstream tls error: {e}");
-                            self.failed = true;
-                            return;
-                        }
-                    }
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(e) => {
-                    if self.upstream_hs_done {
-                        log::debug!("plain_bridge: upstream read ended: {e}");
-                        self.upstream_closed = true;
-                    } else {
-                        log::warn!("plain_bridge: upstream read error: {e}");
-                        self.failed = true;
-                        return;
-                    }
-                }
-            }
-        }
-
         loop {
-            match self.client.reader().read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => self.to_guest.extend(&buf[..n]),
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(_) => break,
+            let n = self.upstream.read_plaintext(&mut buf);
+            if n == 0 {
+                break;
             }
+            self.to_guest.extend(&buf[..n]);
         }
 
         if let Some(t) = &mut self.timing
@@ -362,8 +297,8 @@ impl PlainBridge {
 #[cfg(test)]
 mod tests {
     use super::super::tls_proxy::{
-        ca_cert_pem, client_config_trusting, spawn_test_upstream, spawn_test_upstream_rst,
-        spawn_test_upstream_streaming,
+        ca_cert_pem, client_config_trusting, spawn_plaintext_host, spawn_test_upstream,
+        spawn_test_upstream_rst, spawn_test_upstream_streaming,
     };
     use super::*;
     use std::time::Duration;
@@ -405,6 +340,41 @@ mod tests {
             "expected upstream reply, got {got:?}"
         );
         assert!(gateway.eof(), "upstream close must surface as EOF");
+    }
+
+    #[test]
+    fn host_terminated_upstream_announces_the_target_and_sends_no_tls() {
+        let (port, announced, host) = spawn_plaintext_host(UPSTREAM_REPLY);
+        let ctx = TlsContext::new()
+            .unwrap()
+            .with_upstream_mode(UpstreamMode::HostTerminates);
+        let mut gateway =
+            HttpsGateway::new_test(&ctx, [127, 0, 0, 1], client_config_trusting(ca_cert_pem()));
+
+        let wire = format!("VPOD-CONNECT localhost {port}\nGET / HTTP/1.0\r\n\r\n");
+        gateway.push_from_guest(wire.as_bytes());
+
+        let mut got = Vec::new();
+        for _ in 0..2000 {
+            drain(&mut gateway, &mut got);
+            if gateway.eof() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        drain(&mut gateway, &mut got);
+        let _ = host.join();
+
+        assert_eq!(
+            announced.recv().unwrap(),
+            format!("VPOD-CONNECT localhost {port}"),
+            "the host must be told which name to dial"
+        );
+        assert!(!gateway.failed(), "plaintext upstream failed");
+        assert!(
+            got.windows(5).any(|w| w == b"hello"),
+            "expected the host's plaintext reply, got {got:?}"
+        );
     }
 
     #[test]
@@ -565,6 +535,8 @@ mod tests {
 #[cfg(test)]
 mod native_probe {
     use super::*;
+    use rustls::ClientConnection;
+    use rustls::pki_types::ServerName;
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::time::{Duration, Instant};

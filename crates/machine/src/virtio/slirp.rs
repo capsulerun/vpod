@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::collections::hash_map::Entry;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant};
@@ -534,38 +535,20 @@ impl SlirpBackend {
                 return;
             }
 
-            if let Ok(sock) = UdpSocket::bind("0.0.0.0:0") {
-                sock.set_nonblocking(true).ok();
+            if self.relay_dns_upstream(data, guest_mac, src_ip, src_port) {
+                return;
+            }
 
-                let dns_servers = [
-                    (1, 1, 1, 1),        // Cloudflare DNS
-                    (8, 8, 8, 8),        // Google DNS
-                    (208, 67, 222, 222), // OpenDNS
-                ];
-
-                let mut sent = false;
-                for server in dns_servers.iter() {
-                    let socket_addr = SocketAddrV4::new(
-                        Ipv4Addr::new(server.0, server.1, server.2, server.3),
-                        53,
-                    );
-
-                    if sock.send_to(data, socket_addr).is_ok() {
-                        sent = true;
-                        break;
-                    }
-                }
-
-                if sent {
-                    self.dns_pending.push(DnsPending {
-                        sock,
-                        guest_mac,
-                        src_ip,
-                        src_port,
-                        query: data.to_vec(),
-                        created: Instant::now(),
-                    });
-                }
+            if let Some(question) = parse_dns_question(data) {
+                let servfail = build_dns_reply(data, &question, &[], DNS_RCODE_SERVFAIL);
+                let udp_reply = make_udp_payload(53, src_port, &servfail);
+                self.rx_pending.push_back(make_ip_frame(
+                    &guest_mac,
+                    &GW_IP,
+                    &src_ip,
+                    IP_PROTO_UDP,
+                    &udp_reply,
+                ));
             }
 
             return;
@@ -577,17 +560,23 @@ impl SlirpBackend {
             dst_port,
         };
         let src_mac: [u8; 6] = eth_src(frame).try_into().unwrap();
-        let conn = self.udp_conns.entry(key.clone()).or_insert_with(|| {
-            let sock = UdpSocket::bind("0.0.0.0:0").expect("udp bind");
-            sock.set_nonblocking(true).ok();
+        let conn = match self.udp_conns.entry(key.clone()) {
+            Entry::Occupied(existing) => existing.into_mut(),
+            Entry::Vacant(slot) => {
+                let Ok(sock) = UdpSocket::bind("0.0.0.0:0") else {
+                    log::debug!("slirp: no udp available, dropping datagram to port {dst_port}");
+                    return;
+                };
+                sock.set_nonblocking(true).ok();
 
-            UdpConn {
-                sock,
-                guest_mac: src_mac,
-                src_ip,
-                src_port,
+                slot.insert(UdpConn {
+                    sock,
+                    guest_mac: src_mac,
+                    src_ip,
+                    src_port,
+                })
             }
-        });
+        };
 
         let dst = SocketAddrV4::new(Ipv4Addr::from(dst_ip), dst_port);
         let _ = conn.sock.send_to(data, dst);
@@ -604,6 +593,46 @@ impl SlirpBackend {
             );
             self.rx_pending.push_back(pkt);
         }
+    }
+
+    fn relay_dns_upstream(
+        &mut self,
+        query: &[u8],
+        guest_mac: [u8; 6],
+        src_ip: [u8; 4],
+        src_port: u16,
+    ) -> bool {
+        let Ok(sock) = UdpSocket::bind("0.0.0.0:0") else {
+            return false;
+        };
+        sock.set_nonblocking(true).ok();
+
+        let dns_servers = [
+            (1, 1, 1, 1),        // Cloudflare DNS
+            (8, 8, 8, 8),        // Google DNS
+            (208, 67, 222, 222), // OpenDNS
+        ];
+
+        let sent = dns_servers.iter().any(|server| {
+            let socket_addr =
+                SocketAddrV4::new(Ipv4Addr::new(server.0, server.1, server.2, server.3), 53);
+            sock.send_to(query, socket_addr).is_ok()
+        });
+
+        if !sent {
+            return false;
+        }
+
+        self.dns_pending.push(DnsPending {
+            sock,
+            guest_mac,
+            src_ip,
+            src_port,
+            query: query.to_vec(),
+            created: Instant::now(),
+        });
+
+        true
     }
 
     fn handle_dhcp(&mut self, frame: &[u8], dhcp: &[u8]) {

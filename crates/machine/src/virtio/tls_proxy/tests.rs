@@ -3,6 +3,8 @@ use super::testutil::{
     spawn_test_upstream_streaming,
 };
 use super::*;
+use rustls::ClientConnection;
+use rustls::pki_types::ServerName;
 use std::net::TcpListener;
 use std::thread;
 
@@ -169,6 +171,92 @@ fn end_to_end_bridge_delivers_upstream_reply() {
     assert!(
         got.windows(5).any(|w| w == b"hello"),
         "did not receive upstream reply, got {got:?}"
+    );
+}
+
+#[test]
+fn host_terminated_proxy_forwards_the_sni_as_a_preamble() {
+    const REPLY: &[u8] = b"HTTP/1.0 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+
+    let (port, announced, host) = spawn_plaintext_host(REPLY);
+
+    let ctx = TlsContext::new().unwrap();
+    let mut proxy = TlsProxy::new_test_with_mode(
+        ctx.server_config.clone(),
+        ctx.client_config.clone(),
+        [127, 0, 0, 1],
+        port,
+        UpstreamMode::HostTerminates,
+    );
+
+    let mut guest_roots = RootCertStore::empty();
+    let vpod_ca_der = Certificate::from_pem(CA_CERT_PEM)
+        .unwrap()
+        .to_der()
+        .unwrap();
+    guest_roots.add(CertificateDer::from(vpod_ca_der)).unwrap();
+    let guest_cfg = Arc::new(
+        ClientConfig::builder_with_provider(provider())
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(guest_roots)
+            .with_no_client_auth(),
+    );
+
+    let mut guest =
+        ClientConnection::new(guest_cfg, ServerName::try_from("localhost").unwrap()).unwrap();
+
+    let mut request_sent = false;
+    let mut got = Vec::new();
+    for _ in 0..2000 {
+        let mut out = Vec::new();
+        while guest.wants_write() {
+            guest.write_tls(&mut out).unwrap();
+        }
+
+        if !out.is_empty() {
+            proxy.push_from_guest(&out);
+        }
+
+        let mut buf = [0u8; 16384];
+        while let Some(n) = proxy.pull_to_guest(&mut buf) {
+            let mut slice = &buf[..n];
+            while !slice.is_empty() {
+                guest.read_tls(&mut slice).unwrap();
+            }
+            guest.process_new_packets().unwrap();
+        }
+
+        if !request_sent && !guest.is_handshaking() {
+            guest.writer().write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
+            request_sent = true;
+        }
+
+        let mut buf = [0u8; 1024];
+        if let Ok(n) = guest.reader().read(&mut buf)
+            && n > 0
+        {
+            got.extend_from_slice(&buf[..n]);
+        }
+
+        if got.windows(5).any(|w| w == b"hello") {
+            break;
+        }
+
+        assert!(!proxy.failed(), "proxy failed before delivering the reply");
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    let _ = host.join();
+
+    assert_eq!(
+        announced.recv().unwrap(),
+        format!("VPOD-CONNECT localhost {port}"),
+        "the SNI name must reach the host, since it is the only name pip gave us"
+    );
+    assert!(
+        got.windows(5).any(|w| w == b"hello"),
+        "guest did not get the host's reply back through the MITM, got {got:?}"
     );
 }
 

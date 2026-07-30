@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -15,10 +14,10 @@ use p256::ecdsa::{DerSignature, SigningKey};
 use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use rand_core::{OsRng, RngCore};
 use rustls::crypto::CryptoProvider;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
-use rustls::{ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection};
+use rustls::{ClientConfig, RootCertStore, ServerConfig, ServerConnection};
 use x509_cert::Certificate;
 use x509_cert::builder::{Builder, CertificateBuilder, Profile};
 use x509_cert::ext::pkix::name::GeneralName;
@@ -28,6 +27,8 @@ use x509_cert::serial_number::SerialNumber;
 use x509_cert::spki::SubjectPublicKeyInfoOwned;
 use x509_cert::time::{Time, Validity};
 
+use super::upstream::{Upstream, UpstreamMode, UpstreamStatus};
+
 #[cfg(test)]
 mod testutil;
 
@@ -36,7 +37,7 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use testutil::{
-    client_config_trusting, spawn_test_upstream, spawn_test_upstream_rst,
+    client_config_trusting, spawn_plaintext_host, spawn_test_upstream, spawn_test_upstream_rst,
     spawn_test_upstream_streaming,
 };
 
@@ -47,6 +48,7 @@ pub const CA_CERT_PEM: &str = include_str!("../../../assets/tls/vpod-ca-cert.pem
 pub struct TlsContext {
     server_config: Arc<ServerConfig>,
     client_config: Arc<ClientConfig>,
+    upstream_mode: UpstreamMode,
 }
 
 impl TlsContext {
@@ -82,11 +84,22 @@ impl TlsContext {
         Ok(Self {
             server_config: Arc::new(server_config),
             client_config: Arc::new(client_config),
+            upstream_mode: UpstreamMode::from_env(),
         })
     }
 
     pub(crate) fn upstream_config(&self) -> Arc<ClientConfig> {
         self.client_config.clone()
+    }
+
+    pub(crate) fn upstream_mode(&self) -> UpstreamMode {
+        self.upstream_mode
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_upstream_mode(mut self, mode: UpstreamMode) -> Self {
+        self.upstream_mode = mode;
+        self
     }
 }
 
@@ -215,11 +228,11 @@ fn rand_serial() -> u64 {
 
 pub struct TlsProxy {
     server: ServerConnection,
-    client: Option<ClientConnection>,
-    upstream: Option<TcpStream>,
+    upstream: Option<Upstream>,
     dst_ip: [u8; 4],
     upstream_port: u16,
     client_config: Arc<ClientConfig>,
+    upstream_mode: UpstreamMode,
     to_guest: VecDeque<u8>,
     failed: bool,
     upstream_closed: bool,
@@ -285,11 +298,11 @@ impl TlsProxy {
 
         Ok(Self {
             server,
-            client: None,
             upstream: None,
             dst_ip,
             upstream_port: 443,
             client_config: ctx.client_config.clone(),
+            upstream_mode: ctx.upstream_mode,
             to_guest: VecDeque::new(),
             failed: false,
             upstream_closed: false,
@@ -358,13 +371,13 @@ impl TlsProxy {
             t.mark("guest handshake done");
         }
 
-        if self.client.is_none()
+        if self.upstream.is_none()
             && !self.server.is_handshaking()
             && let Some(sni) = self.server.server_name().map(|s| s.to_string())
         {
             self.connect_upstream(&sni);
 
-            if let (Some(t), true) = (&mut self.timing, self.client.is_some())
+            if let (Some(t), true) = (&mut self.timing, self.upstream.is_some())
                 && !t.upstream_connected
             {
                 t.upstream_connected = true;
@@ -372,14 +385,14 @@ impl TlsProxy {
             }
         }
 
-        if let Some(client) = self.client.as_mut() {
+        if let Some(upstream) = self.upstream.as_mut() {
             let mut buf = [0u8; 16384];
 
             loop {
                 match self.server.reader().read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        if client.writer().write_all(&buf[..n]).is_err() {
+                        if upstream.send_plaintext(&buf[..n]).is_err() {
                             self.failed = true;
                             return;
                         }
@@ -391,23 +404,6 @@ impl TlsProxy {
         }
 
         self.service_upstream();
-
-        if let Some(client) = self.client.as_mut() {
-            let mut buf = [0u8; 16384];
-            loop {
-                match client.reader().read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if self.server.writer().write_all(&buf[..n]).is_err() {
-                            self.failed = true;
-                            return;
-                        }
-                    }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(_) => break,
-                }
-            }
-        }
 
         if self.upstream_closed && !self.close_notified {
             self.server.send_close_notify();
@@ -450,113 +446,53 @@ impl TlsProxy {
     }
 
     fn connect_upstream(&mut self, sni: &str) {
-        let addr = SocketAddrV4::new(Ipv4Addr::from(self.dst_ip), self.upstream_port);
-
-        #[cfg(target_family = "wasm")]
-        let stream = TcpStream::connect(addr);
-
-        #[cfg(not(target_family = "wasm"))]
-        let stream = TcpStream::connect_timeout(&addr.into(), Duration::from_secs(10));
-
-        let stream = match stream {
-            Ok(s) => s,
-            Err(_) => {
+        match Upstream::connect(
+            self.upstream_mode,
+            self.client_config.clone(),
+            self.dst_ip,
+            self.upstream_port,
+            sni,
+        ) {
+            Ok(upstream) => self.upstream = Some(upstream),
+            Err(e) => {
+                log::warn!("tls_proxy: upstream to {sni} failed: {e}");
                 self.failed = true;
-                return;
             }
-        };
-        stream.set_nonblocking(true).ok();
-        stream.set_nodelay(true).ok();
-
-        let server_name = match ServerName::try_from(sni.to_string()) {
-            Ok(n) => n,
-            Err(_) => {
-                self.failed = true;
-                return;
-            }
-        };
-
-        match ClientConnection::new(self.client_config.clone(), server_name) {
-            Ok(mut c) => {
-                c.set_buffer_limit(None);
-                self.client = Some(c);
-                self.upstream = Some(stream);
-            }
-            Err(_) => self.failed = true,
         }
     }
 
     fn service_upstream(&mut self) {
-        if self.client.is_none() || self.upstream.is_none() {
+        let Some(upstream) = self.upstream.as_mut() else {
             return;
-        }
+        };
 
-        let handshook = !self.client.as_ref().unwrap().is_handshaking();
-        while !self.upstream_closed && self.client.as_ref().unwrap().wants_write() {
-            let sock = self.upstream.as_mut().unwrap();
-            match self.client.as_mut().unwrap().write_tls(sock) {
-                Ok(0) => break,
-                Ok(_) => {}
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(_) => {
-                    if handshook {
-                        self.upstream_closed = true;
-                        break;
-                    }
-
+        if !self.upstream_closed {
+            match upstream.service() {
+                UpstreamStatus::Open => {}
+                UpstreamStatus::Closed => self.upstream_closed = true,
+                UpstreamStatus::Failed => {
                     self.failed = true;
                     return;
                 }
             }
         }
 
-        while !self.upstream_closed {
-            let sock = self.upstream.as_mut().unwrap();
-            match self.client.as_mut().unwrap().read_tls(sock) {
-                Ok(0) => {
-                    self.upstream_closed = true;
-                }
-                Ok(_) => {
-                    if self.client.as_mut().unwrap().process_new_packets().is_err() {
-                        if handshook {
-                            self.upstream_closed = true;
-                        } else {
-                            self.failed = true;
-                            return;
-                        }
-                    }
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(_) => {
-                    if handshook {
-                        self.upstream_closed = true;
-                    } else {
-                        self.failed = true;
-                        return;
-                    }
-                }
+        let mut buf = [0u8; 16384];
+        loop {
+            let n = upstream.read_plaintext(&mut buf);
+            if n == 0 {
+                break;
             }
-
-            let mut buf = [0u8; 16384];
-            loop {
-                match self.client.as_mut().unwrap().reader().read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if self.server.writer().write_all(&buf[..n]).is_err() {
-                            self.failed = true;
-                            return;
-                        }
-                    }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(_) => break,
-                }
+            if self.server.writer().write_all(&buf[..n]).is_err() {
+                self.failed = true;
+                return;
             }
         }
 
         let upstream_handshaking = self
-            .client
+            .upstream
             .as_ref()
-            .map(|c| c.is_handshaking())
+            .map(|u| u.handshaking())
             .unwrap_or(true);
         if let Some(t) = &mut self.timing
             && t.upstream_connected
@@ -581,16 +517,32 @@ impl TlsProxy {
         dst_ip: [u8; 4],
         upstream_port: u16,
     ) -> Self {
+        Self::new_test_with_mode(
+            server_config,
+            client_config,
+            dst_ip,
+            upstream_port,
+            UpstreamMode::TerminateHere,
+        )
+    }
+
+    fn new_test_with_mode(
+        server_config: Arc<ServerConfig>,
+        client_config: Arc<ClientConfig>,
+        dst_ip: [u8; 4],
+        upstream_port: u16,
+        upstream_mode: UpstreamMode,
+    ) -> Self {
         let mut server = ServerConnection::new(server_config).unwrap();
         server.set_buffer_limit(None);
 
         Self {
             server,
-            client: None,
             upstream: None,
             dst_ip,
             upstream_port,
             client_config,
+            upstream_mode,
             to_guest: VecDeque::new(),
             failed: false,
             upstream_closed: false,
