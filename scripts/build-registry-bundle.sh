@@ -68,52 +68,37 @@ done
 echo "framing verified: one lz4 layer over VPOD"
 
 CATALOG="$CATALOG" OUT="$OUT" PREFIX="$PREFIX" VERSION="$VERSION" \
-REGISTRY_BASE="$REGISTRY_BASE" SKIP_LIVE="${SKIP_LIVE:-0}" python3 - <<'PY'
-import hashlib, json, os, urllib.request
+REGISTRY_BASE="$REGISTRY_BASE" python3 - <<'PY'
+import hashlib, json, os
 from pathlib import Path
 
+catalog = Path(os.environ["CATALOG"])
 out = Path(os.environ["OUT"])
 prefix = os.environ["PREFIX"].strip("/")
 base = os.environ["REGISTRY_BASE"].rstrip("/")
-skip_live = os.environ["SKIP_LIVE"] == "1"
 
-snapshots = json.loads(Path(os.environ["CATALOG"]).read_text())["snapshots"]
+snapshots = json.loads(catalog.read_text())["snapshots"]
 
-live_by_id = {}
-missing = [e["id"] for e in snapshots if not (out / f"{e['id']}.snap").exists()]
-
-if missing and not skip_live:
-    # Cloudflare rejects urllib's default UA with a 403.
-    url = f"{base}/{prefix}/snapshots.json"
-    request = urllib.request.Request(url, headers={"User-Agent": "vpod-ci"})
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            live = json.load(response)
-        live_by_id = {entry["id"]: entry for entry in live["snapshots"]}
-        print(f"borrowing entries for {', '.join(missing)} from {url}")
-    except Exception as error:
-        raise SystemExit(f"cannot read {url} to fill in {missing}: {error}")
+def digest_and_size(path):
+    sha256 = hashlib.sha256()
+    size = 0
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            sha256.update(chunk)
+            size += len(chunk)
+    return sha256.hexdigest(), size
 
 for entry in snapshots:
-    entry["url"] = f"{base}/{prefix}/{entry['id']}.snap"
     built = out / f"{entry['id']}.snap"
-
-    if built.exists():
-        data = built.read_bytes()
-        entry["sha256"] = hashlib.sha256(data).hexdigest()
-        entry["size"] = len(data)
-        print(f"  {entry['id']}: sha256={entry['sha256'][:12]}… size={entry['size']:,}")
-        continue
-
-    previous = live_by_id.get(entry["id"])
-    if previous is None:
+    if not built.exists():
         raise SystemExit(
-            f"{entry['id']}: not built this run and not in the live registry "
-            f"— no bytes to publish"
+            f"{entry['id']}: listed in {catalog} but not produced by this build. "
+            f"Add it to SNAPSHOTS or ALIASES."
         )
-    entry["sha256"] = previous["sha256"]
-    entry["size"] = previous["size"]
-    print(f"  {entry['id']}: not rebuilt, keeping live registry entry")
+
+    entry["url"] = f"{base}/{prefix}/{entry['id']}.snap"
+    entry["sha256"], entry["size"] = digest_and_size(built)
+    print(f"  {entry['id']}: sha256={entry['sha256'][:12]}… size={entry['size']:,}")
 
 manifest = {"version": os.environ["VERSION"], "snapshots": snapshots}
 (out / "snapshots.json").write_text(json.dumps(manifest, indent=2) + "\n")
