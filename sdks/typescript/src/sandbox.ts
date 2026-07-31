@@ -6,6 +6,8 @@ import {
 } from "./execution.js";
 import { SandboxRuntime, type SandboxRuntimeOptions } from "./runtime.js";
 import { InstanceStore, type SuspendedInstance } from "./instances.js";
+import type { NetworkOptions } from "./transport/worker.js";
+import type { NetworkCapabilities } from "./net/capabilities.js";
 
 const DEFAULT_SHELL = "/bin/sh";
 const DEFAULT_PROMPT = "# ";
@@ -20,6 +22,8 @@ export interface SandboxOptions extends SandboxRuntimeOptions {
     registryUrl?: string;
     snapshotBytes?: ArrayBuffer | Uint8Array;
     snapshotName?: string;
+    snapshotPath?: string;
+    network?: boolean | NetworkOptions;
 }
 
 export interface RunOptions {
@@ -89,6 +93,11 @@ export class Sandbox {
         options: SandboxOptions,
         snapshotName: string,
     ): Promise<{ snapshotPath: string; snapshotId: string }> {
+        if (options.snapshotPath !== undefined) {
+            const id = options.snapshotPath.split("/").pop()?.replace(/\.snap$/, "");
+            return { snapshotPath: options.snapshotPath, snapshotId: id ?? "local" };
+        }
+
         if (options.snapshotBytes === undefined) {
             const pulled = await runtime.pullSnapshot(snapshotName, {
                 registryUrl: options.registryUrl,
@@ -113,6 +122,10 @@ export class Sandbox {
         const runtime = new SandboxRuntime(options);
         await runtime.ready();
 
+        if (options.network !== undefined && options.network !== false) {
+            await runtime.enableNetwork(options.network === true ? {} : options.network);
+        }
+
         const mounted = await Sandbox.#mount(
             runtime,
             options,
@@ -123,6 +136,10 @@ export class Sandbox {
 
     get snapshotId(): string {
         return this.#snapshotId;
+    }
+
+    get network(): NetworkCapabilities {
+        return this.#runtime.networkCapabilities();
     }
 
     get runtime(): SandboxRuntime {

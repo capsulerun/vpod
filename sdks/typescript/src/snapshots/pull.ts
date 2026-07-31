@@ -1,16 +1,22 @@
 import { fetchCatalogue, resolveSnapshot, type CatalogueOptions } from "./catalogue.js";
 import { sha256Hex } from "./digest.js";
-import { SnapshotStore } from "./store.js";
+import { SnapshotStore, type SnapshotStorage } from "./store.js";
 import type { PulledSnapshot, SnapshotEntry } from "./types.js";
 
 export interface PullOptions extends CatalogueOptions {
     name?: string;
     onProgress?(loaded: number, total: number): void;
+    store?: SnapshotStorage | null;
 }
 
 export async function pullSnapshot(options: PullOptions = {}): Promise<PulledSnapshot> {
     const name = options.name ?? "vsnap-base:latest";
-    const store = SnapshotStore.available() ? await SnapshotStore.open() : null;
+    const store =
+        options.store !== undefined
+            ? options.store
+            : SnapshotStore.available()
+              ? await SnapshotStore.open()
+              : null;
 
     const catalogue = await fetchCatalogue(store, options);
     const entry = resolveSnapshot(catalogue.snapshots, name);
@@ -29,7 +35,7 @@ const snapshotFileName = (entry: SnapshotEntry): string => `${entry.id}.snap`;
 const digestFileName = (entry: SnapshotEntry): string => `${entry.id}.sha256`;
 
 async function readVerifiedFromStore(
-    store: SnapshotStore,
+    store: SnapshotStorage,
     entry: SnapshotEntry,
 ): Promise<PulledSnapshot | null> {
     const recordedDigest = await store.readText(digestFileName(entry));
@@ -56,7 +62,7 @@ async function readVerifiedFromStore(
     return {
         entry,
         bytes,
-        source: "opfs",
+        source: store.kind,
         fetchMilliseconds,
         verifyMilliseconds,
         storeMilliseconds: 0,
@@ -64,7 +70,7 @@ async function readVerifiedFromStore(
 }
 
 async function downloadAndStore(
-    store: SnapshotStore | null,
+    store: SnapshotStorage | null,
     entry: SnapshotEntry,
     onProgress?: (loaded: number, total: number) => void,
 ): Promise<PulledSnapshot> {
@@ -98,7 +104,7 @@ async function downloadAndStore(
         } catch (thrown: unknown) {
             await evict(store, entry);
             console.warn(
-                `vpod: could not cache ${entry.id} in OPFS, continuing uncached. ${String(thrown)}`,
+                `vpod: could not cache ${entry.id} in ${store.kind}, continuing uncached. ${String(thrown)}`,
             );
         }
         storeMilliseconds = performance.now() - storeStartedAt;
@@ -145,7 +151,7 @@ async function readBody(
     return bytes;
 }
 
-export async function evict(store: SnapshotStore, entry: SnapshotEntry): Promise<void> {
+export async function evict(store: SnapshotStorage, entry: SnapshotEntry): Promise<void> {
     await store.remove(snapshotFileName(entry));
     await store.remove(digestFileName(entry));
 }

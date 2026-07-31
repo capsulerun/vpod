@@ -14,7 +14,7 @@ export interface Catalogue {
     snapshots: SnapshotEntry[];
 }
 
-export type SnapshotSource = "opfs" | "network";
+export type SnapshotSource = "opfs" | "disk" | "network";
 
 export interface PulledSnapshot {
     entry: SnapshotEntry;

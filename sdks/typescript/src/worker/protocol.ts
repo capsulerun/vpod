@@ -14,7 +14,7 @@ export interface PullResult {
     snapshotPath: string;
     id: string;
     byteLength: number;
-    source: "opfs" | "network";
+    source: "opfs" | "disk" | "network";
     fetchMilliseconds: number;
     verifyMilliseconds: number;
     storeMilliseconds: number;
@@ -52,7 +52,8 @@ export type WorkerCall =
           prompt: string;
       }
     | { kind: "poll-stats" }
-    | { kind: "component-load-milliseconds" };
+    | { kind: "component-load-milliseconds" }
+    | { kind: "enable-network"; port: MessagePort; allowedPorts?: number[] };
 
 export interface WorkerRequest {
     id: number;

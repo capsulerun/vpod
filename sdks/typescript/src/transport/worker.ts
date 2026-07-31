@@ -1,10 +1,17 @@
 import { assetUrl } from "../asset-base.js";
+import { requireNetwork } from "../net/availability.js";
+import type { DriverOptions } from "../net/driver-protocol.js";
 import type { WorkerCall, WorkerMessage } from "../worker/protocol.js";
 import type { ExecutorTransport } from "./types.js";
 
 export interface WorkerTransportOptions {
     workerUrl?: string | URL;
     componentUrl?: string | URL;
+    networkWorkerUrl?: string | URL;
+}
+
+export interface NetworkOptions extends DriverOptions {
+    allowedPorts?: number[];
 }
 
 interface PendingCall {
@@ -16,7 +23,9 @@ export class WorkerTransport implements ExecutorTransport {
     readonly #worker: Worker;
     readonly #pending = new Map<number, PendingCall>();
     readonly #ready: Promise<number>;
+    readonly #networkWorkerUrl: string | URL;
 
+    #networkWorker: Worker | undefined;
     #nextId = 1;
     #resolveReady!: (componentLoadMilliseconds: number) => void;
     #rejectReady!: (reason: Error) => void;
@@ -26,6 +35,8 @@ export class WorkerTransport implements ExecutorTransport {
             options.workerUrl ?? assetUrl("worker/entry.js");
         const componentUrl =
             options.componentUrl ?? assetUrl("component/vpod.js");
+
+        this.#networkWorkerUrl = options.networkWorkerUrl ?? assetUrl("net/entry.js");
 
         this.#ready = new Promise<number>((resolve, reject) => {
             this.#resolveReady = resolve;
@@ -76,6 +87,38 @@ export class WorkerTransport implements ExecutorTransport {
 
     ready(): Promise<number> {
         return this.#ready;
+    }
+
+    async enableNetwork(options: NetworkOptions = {}): Promise<void> {
+        requireNetwork();
+
+        if (this.#networkWorker !== undefined) {
+            return;
+        }
+
+        const driver = new Worker(this.#networkWorkerUrl, { type: "module" });
+        this.#networkWorker = driver;
+
+        const configured = new Promise<void>((resolve) => {
+            driver.addEventListener("message", () => resolve(), { once: true });
+        });
+        driver.postMessage({
+            kind: "configure",
+            options: {
+                allowedHosts: options.allowedHosts,
+                requestTimeoutMilliseconds: options.requestTimeoutMilliseconds,
+            },
+        });
+        await configured;
+
+        const channel = new MessageChannel();
+        driver.postMessage({ kind: "attach", port: channel.port2 }, [channel.port2]);
+
+        await this.call({
+            kind: "enable-network",
+            port: channel.port1,
+            allowedPorts: options.allowedPorts,
+        }, [channel.port1]);
     }
 
     call<T>(call: WorkerCall, transfer: Transferable[] = []): Promise<T> {

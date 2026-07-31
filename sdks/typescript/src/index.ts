@@ -21,8 +21,15 @@ export type { InstanceRecord, SuspendedInstance } from "./instances.js";
 export * as snapshots from "./snapshots/index.js";
 
 export { WorkerTransport } from "./transport/worker.js";
+export type { NetworkOptions, WorkerTransportOptions } from "./transport/worker.js";
 export { createInlineTransport } from "./transport/inline.js";
 export type { ExecutorTransport } from "./transport/types.js";
+
+export { networkAvailability } from "./net/availability.js";
+export type { NetworkAvailability } from "./net/availability.js";
+
+export { capabilitiesOf, explainUnreachable } from "./net/capabilities.js";
+export type { NetworkBackendName, NetworkCapabilities } from "./net/capabilities.js";
 
 export type {
     ExecutionResult,

@@ -1,4 +1,10 @@
-import { WorkerTransport, type WorkerTransportOptions } from "./transport/worker.js";
+import {
+    WorkerTransport,
+    type NetworkOptions,
+    type WorkerTransportOptions,
+} from "./transport/worker.js";
+import { capabilitiesOf } from "./net/capabilities.js";
+import type { NetworkBackendName, NetworkCapabilities } from "./net/capabilities.js";
 import type { ExecutorTransport } from "./transport/types.js";
 import type {
     ExecutionResult,
@@ -18,6 +24,7 @@ export interface StorageQuota {
 
 export class SandboxRuntime {
     readonly #transport: ExecutorTransport;
+    #networkBackend: NetworkBackendName = "none";
 
     constructor(options: SandboxRuntimeOptions = {}) {
         this.#transport = options.transport ?? new WorkerTransport(options);
@@ -25,6 +32,27 @@ export class SandboxRuntime {
 
     ready(): Promise<number> {
         return this.#transport.ready();
+    }
+
+    async enableNetwork(options: NetworkOptions = {}): Promise<void> {
+        const transport = this.#transport;
+        if (!(transport instanceof WorkerTransport)) {
+            throw new Error(
+                "vpod: networking needs the worker transport, which owns the thread " +
+                    "that runs fetch. A custom transport has to provide its own.",
+            );
+        }
+
+        await transport.enableNetwork(options);
+        this.#networkBackend = "fetch";
+    }
+
+    get networkBackend(): NetworkBackendName {
+        return this.#networkBackend;
+    }
+
+    networkCapabilities(): NetworkCapabilities {
+        return capabilitiesOf(this.#networkBackend);
     }
 
     pullSnapshot(

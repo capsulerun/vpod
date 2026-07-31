@@ -1,4 +1,4 @@
-import type { SnapshotStore } from "./store.js";
+import type { SnapshotStorage } from "./store.js";
 import type { Catalogue, SnapshotEntry } from "./types.js";
 
 export const DEFAULT_REGISTRY_URL = "https://registry.vpod.sh/v1/snapshots.json";
@@ -14,7 +14,7 @@ export interface CatalogueOptions {
 }
 
 export async function fetchCatalogue(
-    store: SnapshotStore | null,
+    store: SnapshotStorage | null,
     options: CatalogueOptions = {},
 ): Promise<Catalogue> {
     const registryUrl = options.registryUrl ?? DEFAULT_REGISTRY_URL;
@@ -61,7 +61,7 @@ export async function fetchCatalogue(
 }
 
 async function readCachedCatalogue(
-    store: SnapshotStore,
+    store: SnapshotStorage,
     ttlSeconds: number,
 ): Promise<Catalogue | null> {
     const text = await store.readText(CATALOGUE_FILE);

@@ -29,7 +29,19 @@ interface DirectoryHandle {
     removeEntry(name: string, options?: { recursive?: boolean }): Promise<void>;
 }
 
-export class SnapshotStore {
+
+export interface SnapshotStorage {
+    readonly kind: "opfs" | "disk";
+    read(name: string): Promise<Uint8Array | null>;
+    write(name: string, bytes: Uint8Array): Promise<void>;
+    readText(name: string): Promise<string | null>;
+    writeText(name: string, text: string): Promise<void>;
+    remove(name: string): Promise<void>;
+}
+
+export class SnapshotStore implements SnapshotStorage {
+    readonly kind = "opfs" as const;
+
     #directory: DirectoryHandle;
 
     private constructor(directory: DirectoryHandle) {

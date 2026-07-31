@@ -6,9 +6,19 @@ import {
     removeGuestFile,
 } from "../shims/filesystem.js";
 import { pollStats } from "../shims/io.js";
+import { FetchSocketBackend } from "../net/fetch-backend.js";
+import { setSocketBackend, socketBackendName } from "../shims/sockets.js";
 import { evictById, pullSnapshot } from "../snapshots/pull.js";
 import { SnapshotStore } from "../snapshots/store.js";
+import type { DriverCommand } from "../net/driver-protocol.js";
 import type { ExecutionResult, WorkerCall } from "./protocol.js";
+
+async function announceHostTerminatedTls(): Promise<void> {
+    const cli = (await import("../shims/cli.js")) as unknown as {
+        _setEnv(env: Record<string, string>): void;
+    };
+    cli._setEnv({ VPOD_HOST_TLS: "1" });
+}
 
 interface Executor {
     sessionStart(
@@ -175,6 +185,22 @@ export class Dispatcher {
                 } finally {
                     removeGuestFile(path);
                 }
+            }
+
+            case "enable-network": {
+                await announceHostTerminatedTls();
+
+                const port = call.port;
+                setSocketBackend(
+                    new FetchSocketBackend(
+                        (command: DriverCommand, transfer: Transferable[] = []) => {
+                            port.postMessage(command, transfer);
+                        },
+                        { allowedPorts: call.allowedPorts },
+                    ),
+                );
+
+                return { backend: socketBackendName() };
             }
 
             case "poll-stats":
