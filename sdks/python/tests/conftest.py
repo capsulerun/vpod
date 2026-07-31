@@ -17,7 +17,9 @@ class FakeVariant:
 
 @pytest.fixture(autouse=True)
 def mock_component(request, monkeypatch):
-    if request.node.get_closest_marker("integration"):
+    if request.node.get_closest_marker("integration") or request.node.get_closest_marker(
+        "performance"
+    ):
         return
 
     store = MagicMock()

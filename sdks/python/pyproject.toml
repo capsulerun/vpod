@@ -42,7 +42,10 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-markers = ["integration: requires a real WASM build and snapshot (run with -m integration)"]
+markers = [
+    "integration: requires a real WASM build and snapshot (run with -m integration)",
+    "performance: measures guest and wall timings (run with -m performance)",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
