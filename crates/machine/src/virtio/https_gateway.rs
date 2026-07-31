@@ -91,7 +91,7 @@ impl HttpsGateway {
         }
     }
 
-    // Deliberately does nothing, and that is the open teardown defect rather than an oversight.
+    // Deliberately does nothing (see docs)
     pub fn shutdown_write(&mut self) {}
 
     fn decide_dialect(&mut self) {

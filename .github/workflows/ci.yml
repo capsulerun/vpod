@@ -185,3 +185,135 @@ jobs:
           VPOD_TEST_SNAPSHOT: /tmp/alpine-3.23.0-256mb.snap
         run: npm run test:integration
 
+      - name: Set up the oldest supported Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run tests on the oldest supported Node
+        working-directory: sdks/typescript
+        env:
+          VPOD_TEST_SNAPSHOT: /tmp/alpine-3.23.0-256mb.snap
+        run: npm test && npm run test:integration
+
+      - name: Set up the newest LTS Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run tests on the newest LTS Node
+        working-directory: sdks/typescript
+        env:
+          VPOD_TEST_SNAPSHOT: /tmp/alpine-3.23.0-256mb.snap
+        run: npm test && npm run test:integration
+
+  typescript-sdk-performance:
+    name: TypeScript SDK Performance
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Generate AOT stub
+        run: ./scripts/aot-stub.sh
+
+      - name: Build WASM library
+        run: cargo build --release --target wasm32-wasip2 -p wasi-component --lib
+
+      - name: Copy WASM to SDK
+        run: |
+          mkdir -p sdks/typescript/wasm
+          cp target/wasm32-wasip2/release/vpod_wasi_lib.wasm sdks/typescript/wasm/
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: sdks/typescript/package-lock.json
+
+      - name: Install dependencies
+        working-directory: sdks/typescript
+        run: npm ci
+
+      - name: Build
+        working-directory: sdks/typescript
+        run: npm run build -- --tier base
+
+      - name: Install lz4
+        run: sudo apt-get update && sudo apt-get install -y lz4
+
+      - name: Fetch the recorded snapshot
+        working-directory: sdks/typescript
+        run: |
+          ./scripts/fetch-test-snapshot.sh \
+            https://registry.vpod.sh/tests/v1/alpine-3.23.0-256mb.snap \
+            /tmp/alpine-3.23.0-256mb.snap
+
+      - name: Measure
+        working-directory: sdks/typescript
+        env:
+          VPOD_TEST_SNAPSHOT: /tmp/alpine-3.23.0-256mb.snap
+          VPOD_PERF_OUTPUT: /tmp/typescript-performance.json
+        run: npm run test:perf
+
+      - name: Archive the numbers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: typescript-performance
+          path: /tmp/typescript-performance.json
+          if-no-files-found: warn
+
+  python-sdk-performance:
+    name: Python SDK Performance
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Generate AOT stub
+        run: ./scripts/aot-stub.sh
+
+      - name: Build WASM library
+        run: cargo build --release --target wasm32-wasip2 -p wasi-component --lib
+
+      - name: Copy WASM to SDK
+        run: cp target/wasm32-wasip2/release/vpod_wasi_lib.wasm sdks/python/vpod/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        working-directory: sdks/python
+        run: pip install -e .[dev]
+
+      - name: Measure
+        working-directory: sdks/python
+        env:
+          VPOD_REGISTRY: https://registry.vpod.sh/tests/v1/snapshots.json
+          VPOD_PERF_OUTPUT: /tmp/python-performance.json
+        run: pytest tests/test_performance.py -m performance -v
+
+      - name: Archive the numbers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-performance
+          path: /tmp/python-performance.json
+          if-no-files-found: warn
+
