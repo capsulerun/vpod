@@ -1,0 +1,34 @@
+{
+  "_comment": [
+    "used for test"
+  ],
+  "recordedSnapshot": "alpine-3.23.0-256mb.snap",
+  "workloads": {
+    "compute": {
+      "body": "s=0\nfor i in range(120000): s=(s+i*i)^(i&0xff)",
+      "guestSeconds": 3.664773,
+      "tolerance": 0.02
+    },
+    "strings": {
+      "body": "p=[]\nfor i in range(8000): p.append(str(i)*3)\nj='.'.join(p)\nq=j[::2][:1000]",
+      "guestSeconds": 0.298844,
+      "tolerance": 0.02
+    },
+    "dicts": {
+      "body": "d={}\nfor i in range(30000): d[i%997]=d.get(i%997,0)+i\ntotal=sum(d.values())",
+      "guestSeconds": 1.059062,
+      "tolerance": 0.02
+    },
+    "regex": {
+      "body": "import re\npat=re.compile(r'(\\w+)@(\\w+)\\.com')\nn=0\nfor i in range(4000):\n    n+=1 if pat.match(f'user{i}@host{i}.com') else 0\nassert n==4000, f'the pattern matched {n} of 4000, so this measures the wrong work'",
+      "guestSeconds": 0.382730,
+      "tolerance": 0.02
+    }
+  },
+  "wallCeilings": {
+    "bootSeconds": 30,
+    "shellPerCallSeconds": 2,
+    "networkRoundTripSeconds": 30,
+    "throughputFloor": 0.2
+  }
+}
