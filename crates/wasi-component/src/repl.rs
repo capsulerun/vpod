@@ -209,7 +209,7 @@ pub fn capture_output(
         }
 
         if !data_channel && stop_on_ctrl && !bus.uart_ctrl.tx_is_empty() {
-            for _ in 0..64 {
+            for _ in 0..1024 {
                 bus.clint.advance_by_instructions(STEP);
                 bus.poll(hart);
 
