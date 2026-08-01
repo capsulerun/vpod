@@ -234,9 +234,10 @@ export function toFetchable(
     request: ParsedRequest,
     host: string,
     port: number,
+    secure: boolean,
 ): FetchableRequest {
-    const scheme = port === 80 ? "http" : "https";
-    const authority = port === 80 || port === 443 ? host : `${host}:${port}`;
+    const scheme = secure ? "https" : "http";
+    const authority = port === (secure ? 443 : 80) ? host : `${host}:${port}`;
 
     const url = /^https?:\/\//i.test(request.target)
         ? request.target

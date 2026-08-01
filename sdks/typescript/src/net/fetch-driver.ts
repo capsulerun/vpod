@@ -19,7 +19,9 @@ interface Connection {
     writer: RingWriter;
     buffered: Uint8Array;
     host: string | undefined;
+    resolvedHostname: string | undefined;
     port: number;
+    secure: boolean;
     queue: Promise<void>;
     guestFinishedWriting: boolean;
     closed: boolean;
@@ -47,7 +49,9 @@ export class FetchDriver {
                     writer: new RingWriter(command.ring),
                     buffered: new Uint8Array(0),
                     host: undefined,
+                    resolvedHostname: command.resolvedHostname,
                     port: command.port,
+                    secure: false,
                     queue: Promise.resolve(),
                     guestFinishedWriting: false,
                     closed: false,
@@ -93,14 +97,18 @@ export class FetchDriver {
                 return;
             }
 
-            if (preamble.kind === "invalid") {
+            if (preamble.kind === "ok") {
+                connection.host = preamble.preamble.host;
+                connection.port = preamble.preamble.port;
+                connection.secure = true;
+                connection.buffered = connection.buffered.slice(preamble.preamble.consumed);
+            } else if (connection.resolvedHostname !== undefined) {
+                connection.host = connection.resolvedHostname;
+                connection.secure = false;
+            } else {
                 this.#failConnection(id, connection, preamble.reason);
                 return;
             }
-
-            connection.host = preamble.preamble.host;
-            connection.port = preamble.preamble.port;
-            connection.buffered = connection.buffered.slice(preamble.preamble.consumed);
         }
 
         for (;;) {
@@ -121,8 +129,10 @@ export class FetchDriver {
             const host = connection.host;
             const port = connection.port;
 
+            const secure = connection.secure;
+
             connection.queue = connection.queue.then(() =>
-                this.#dispatch(connection, request, host, port),
+                this.#dispatch(connection, request, host, port, secure),
             );
 
             if (!request.keepAlive) {
@@ -139,12 +149,13 @@ export class FetchDriver {
         request: ParsedRequest,
         host: string,
         port: number,
+        secure: boolean,
     ): Promise<void> {
         if (connection.closed) {
             return;
         }
 
-        const fetchable = toFetchable(request, host, port);
+        const fetchable = toFetchable(request, host, port, secure);
 
         const abort = new AbortController();
         const timeout = setTimeout(

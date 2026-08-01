@@ -38,6 +38,7 @@ function parseArguments(argv) {
         else if (flag === "--timeout") options.timeoutSeconds = Number(argv[++index]);
         else if (flag === "--attach") options.attach = true;
         else if (flag === "--name") options.name = argv[++index];
+        else if (flag === "--apk") options.apk = argv[++index];
         else if (flag === "--snapshot-dir") options.snapshotDir = argv[++index];
     }
     return options;
@@ -59,7 +60,10 @@ async function main() {
         onResult: (body) => resolveResult(JSON.parse(body)),
     });
 
-    const query = options.name ? `?name=${encodeURIComponent(options.name)}` : "";
+    const parameters = new URLSearchParams();
+    if (options.name) parameters.set("name", options.name);
+    if (options.apk) parameters.set("apk", options.apk);
+    const query = parameters.size > 0 ? `?${parameters}` : "";
     const pageUrl = `${running.url}dev/network.html${query}`;
     console.log(`serving ${pageUrl} (snapshots from ${running.snapshots}, COOP/COEP on)`);
 

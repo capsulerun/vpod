@@ -9,7 +9,7 @@ const { RingReader, createRing } = await import(distPath("net/ring.js"));
 const bytes = (text) => new TextEncoder().encode(text);
 const decode = (buffer) => new TextDecoder().decode(buffer);
 
-function connect(driver, id = 1, capacity = 1 << 16) {
+function connect(driver, id = 1, capacity = 1 << 16, open = {}) {
     const ring = createRing(capacity);
     const reader = new RingReader(ring);
 
@@ -19,6 +19,7 @@ function connect(driver, id = 1, capacity = 1 << 16) {
         ring,
         resolvedHostname: undefined,
         port: 443,
+        ...open,
     });
 
     return {
@@ -97,6 +98,36 @@ describe("fetch driver", () => {
         await connection.drainUntilFinished();
         assert.equal(calls.length, 1);
         assert.equal(calls[0].url, "https://pypi.org/");
+    });
+
+    it("serves a raw plaintext connection off the hostname synthetic DNS resolved", async () => {
+        const calls = stubFetch(() => jsonResponse("ok"));
+        const driver = new FetchDriver();
+        const connection = connect(driver, 1, 1 << 16, {
+            resolvedHostname: "example.com",
+            port: 80,
+        });
+
+        connection.send("GET /x HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n");
+
+        const wire = await connection.drainUntilFinished();
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].url, "http://example.com/x");
+        assert.match(wire, /^HTTP\/1\.1 200/);
+    });
+
+    it("still refuses a connection with neither a preamble nor a resolved hostname", async () => {
+        stubFetch(() => jsonResponse("ok"));
+        const driver = new FetchDriver();
+        const connection = connect(driver, 1, 1 << 16, { port: 80 });
+
+        connection.send("GET /x HTTP/1.1\r\nHost: example.com\r\n\r\n");
+
+        const wire = await connection.drainUntilFinished();
+
+        assert.match(wire, /^HTTP\/1\.1 502/);
+        assert.match(wire, /VPOD-CONNECT/);
     });
 
     it("answers two keep-alive requests in order on one connection", async () => {

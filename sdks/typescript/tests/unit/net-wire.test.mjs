@@ -105,16 +105,19 @@ describe("request parsing", () => {
 describe("turning a request into a fetch", () => {
     it("takes the origin from the connection, not the request line", () => {
         const parsed = parseRequest(bytes("GET /simple/flask/ HTTP/1.1\r\nHost: evil\r\n\r\n"));
-        const fetchable = toFetchable(parsed.request, "pypi.org", 443);
+        const fetchable = toFetchable(parsed.request, "pypi.org", 443, true);
 
         assert.equal(fetchable.url, "https://pypi.org/simple/flask/");
     });
 
-    it("uses http for port 80 and keeps a non-default port in the authority", () => {
+    it("takes the scheme from whether the guest wanted TLS, not from the port", () => {
         const parsed = parseRequest(bytes("GET /x HTTP/1.1\r\n\r\n"));
 
-        assert.equal(toFetchable(parsed.request, "h", 80).url, "http://h/x");
-        assert.equal(toFetchable(parsed.request, "h", 8443).url, "https://h:8443/x");
+        assert.equal(toFetchable(parsed.request, "h", 80, false).url, "http://h/x");
+        assert.equal(toFetchable(parsed.request, "h", 443, true).url, "https://h/x");
+
+        assert.equal(toFetchable(parsed.request, "h", 8080, false).url, "http://h:8080/x");
+        assert.equal(toFetchable(parsed.request, "h", 8443, true).url, "https://h:8443/x");
     });
 
     it("strips the headers the browser insists on generating itself", () => {
@@ -124,7 +127,7 @@ describe("turning a request into a fetch", () => {
                     "User-Agent: pip/24\r\nAccept-Encoding: gzip\r\nSec-Fetch-Mode: cors\r\n\r\n",
             ),
         );
-        const fetchable = toFetchable(parsed.request, "h", 443);
+        const fetchable = toFetchable(parsed.request, "h", 443, true);
 
         assert.deepEqual(fetchable.headers, [["User-Agent", "pip/24"]]);
         assert.deepEqual(fetchable.stripped.sort(), [

@@ -73,6 +73,16 @@ try {
         return result.stdout.trim().slice(0, 80);
     });
 
+    await step("guest fetches over plain http", async () => {
+        const result = await box.commands.run("wget -q -O- http://ip-api.com/json | head -c 60", {
+            timeout: 60,
+        });
+        if (result.exitCode !== 0) {
+            throw new Error(`wget exited ${result.exitCode}: ${result.stderr}`);
+        }
+        return result.stdout.trim().slice(0, 60);
+    });
+
     await step("python reaches a CORS-friendly API", async () => {
         const code =
             "import urllib.request\n" +
@@ -85,6 +95,32 @@ try {
         return `${result.text.trim()} bytes`;
     });
 
+    const apkMirror = parameters.get("apk");
+
+    if (apkMirror) {
+        await step("apk update through a CORS-open mirror", async () => {
+            const result = await box.commands.run(
+                `printf '%s/main\\n%s/community\\n' '${apkMirror}' '${apkMirror}'` +
+                    " > /etc/apk/repositories && apk update 2>&1 | tail -3",
+                { timeout: 300 },
+            );
+            if (result.exitCode !== 0) {
+                throw new Error(`apk update exited ${result.exitCode}: ${result.stdout}`);
+            }
+            return result.stdout.trim().slice(-200);
+        });
+
+        await step("apk add a package", async () => {
+            const result = await box.commands.run(
+                "apk add --no-cache jq 2>&1 | tail -3 && jq --version",
+                { timeout: 300 },
+            );
+            if (result.exitCode !== 0) {
+                throw new Error(`apk add exited ${result.exitCode}: ${result.stdout}`);
+            }
+            return result.stdout.trim().slice(-200);
+        });
+    }
 
     const installer = await step("find an installer", async () => {
         const result = await box.commands.run(
