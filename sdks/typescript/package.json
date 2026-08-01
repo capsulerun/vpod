@@ -44,7 +44,9 @@
     "test:all": "node --test tests/unit/*.test.mjs tests/integration/*.test.mjs",
     "test:perf": "node --test tests/performance/*.test.mjs",
     "dev": "node dev/serve.mjs",
-    "bench": "node dev/run-browser.mjs"
+    "bench": "node dev/run-browser.mjs",
+    "measure": "node dev/run-measure.mjs",
+    "measure:node": "node dev/measure-node.mjs"
   },
   "devDependencies": {
     "@bytecodealliance/jco": "^1.11.1",
