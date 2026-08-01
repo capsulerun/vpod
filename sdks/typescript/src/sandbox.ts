@@ -70,7 +70,7 @@ export class Code {
             );
         }
 
-        return parseCodeOutput(result.stdout, result.stderr ?? "");
+        return parseCodeOutput(result.stdout, result.stderr ?? "", result.exitCode);
     }
 }
 

@@ -126,6 +126,46 @@ describe("package exports", { skip: distMissing ? "dist/ is missing: run npm run
         );
     });
 
+    it("ships the declarations every exports condition promises", () => {
+        const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+        const promised = new Set();
+
+        const collect = (node) => {
+            if (node === null || typeof node !== "object") {
+                return;
+            }
+            for (const [key, value] of Object.entries(node)) {
+                if (key === "types" && typeof value === "string") {
+                    promised.add(value.replace(/^\.\//, ""));
+                } else {
+                    collect(value);
+                }
+            }
+        };
+        collect(manifest.exports);
+
+        assert.ok(promised.size > 0, "no exports condition declares types");
+        for (const path of promised) {
+            assert.ok(files.includes(path), `${path} is promised by exports but not published`);
+        }
+    });
+
+    it("makes the entry declarations usable without a consumer tsconfig change", () => {
+        for (const entry of ["dist/index.d.ts", "dist/node/index.d.ts"]) {
+            const source = readFileSync(join(packageRoot, entry), "utf8");
+            assert.match(
+                source,
+                /reference lib="esnext.disposable"/,
+                `${entry} would not typecheck for a consumer on es2022`,
+            );
+        }
+
+        const browser = readFileSync(join(packageRoot, "dist/index.d.ts"), "utf8");
+        const node = readFileSync(join(packageRoot, "dist/node/index.d.ts"), "utf8");
+        assert.match(node, /createNodeTransport/);
+        assert.doesNotMatch(browser, /createNodeTransport/);
+    });
+
     it("keeps the browser bundle free of Node builtins", () => {
         const ours = files.filter(
             (path) => path.startsWith("dist/") && path.endsWith(".js") && !NOT_OUR_BUNDLE.test(path),

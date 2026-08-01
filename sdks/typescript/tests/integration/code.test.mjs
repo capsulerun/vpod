@@ -66,6 +66,24 @@ describe("code", { skip: skipReason() ?? false }, () => {
         });
     });
 
+    it("does not read a printed word as a failure", async () => {
+        await withSandbox(async (sandbox) => {
+            const result = await sandbox.code.run(
+                "print('Error handling is hard')\nprint('config not found, using defaults')\n",
+            );
+            assert.equal(result.success, true, `reported: ${result.error}`);
+            assert.equal(result.error, null);
+        });
+    });
+
+    it("reports a non-zero exit even when nothing was printed", async () => {
+        await withSandbox(async (sandbox) => {
+            const result = await sandbox.code.run("import sys\nsys.exit(3)\n");
+            assert.equal(result.success, false);
+            assert.match(result.error, /3/);
+        });
+    });
+
     it("evaluates a list comprehension", async () => {
         await withSandbox(async (sandbox) => {
             const result = await sandbox.code.run("print([x**2 for x in range(5)])");

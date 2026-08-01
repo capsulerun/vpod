@@ -57,6 +57,23 @@ def test_session_code_error():
         assert result.error is not None
 
 
+def test_session_code_printed_error_word_is_not_a_failure():
+    with Sandbox.create() as sbx:
+        result = sbx.code.run(
+            "print('Error handling is hard')\n"
+            "print('config not found, using defaults')"
+        )
+        assert result.success, result.error
+        assert result.error is None
+
+
+def test_session_code_silent_nonzero_exit_is_a_failure():
+    with Sandbox.create() as sbx:
+        result = sbx.code.run("import sys\nsys.exit(3)")
+        assert not result.success
+        assert "3" in result.error
+
+
 def test_code_requires_session():
     sbx = Sandbox.create()
     with pytest.raises(RuntimeError, match="requires a session"):

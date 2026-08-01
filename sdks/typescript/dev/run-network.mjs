@@ -39,6 +39,7 @@ function parseArguments(argv) {
         else if (flag === "--attach") options.attach = true;
         else if (flag === "--name") options.name = argv[++index];
         else if (flag === "--apk") options.apk = argv[++index];
+        else if (flag === "--gaps") options.gaps = true;
         else if (flag === "--snapshot-dir") options.snapshotDir = argv[++index];
     }
     return options;
@@ -63,6 +64,8 @@ async function main() {
     const parameters = new URLSearchParams();
     if (options.name) parameters.set("name", options.name);
     if (options.apk) parameters.set("apk", options.apk);
+    if (options.gaps) parameters.set("gaps", "1");
+
     const query = parameters.size > 0 ? `?${parameters}` : "";
     const pageUrl = `${running.url}dev/network.html${query}`;
     console.log(`serving ${pageUrl} (snapshots from ${running.snapshots}, COOP/COEP on)`);

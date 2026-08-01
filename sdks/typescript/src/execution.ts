@@ -30,14 +30,6 @@ export class CodeExecution {
     }
 }
 
-const ERROR_INDICATORS = [
-    "Error",
-    "Traceback",
-    "not found",
-    "error:",
-    "syntax error",
-];
-
 export function normalizeLineEndings(value: string): string {
     return value.replace(/\r\n|\r/g, "\n");
 }
@@ -47,16 +39,18 @@ function splitLines(value: string): string[] {
     return trimmed.length === 0 ? [] : trimmed.split("\n");
 }
 
-export function parseCodeOutput(stdout: string, stderr = ""): CodeExecution {
+export function parseCodeOutput(stdout: string, stderr = "", exitCode = 0): CodeExecution {
     const logs = splitLines(stdout);
     const text = logs.join("\n");
-    const candidates = [...logs, ...splitLines(stderr)];
-    const errors = candidates.filter((line) =>
-        ERROR_INDICATORS.some((indicator) => line.includes(indicator)),
+
+    if (exitCode === 0) {
+        return new CodeExecution(text, null, logs);
+    }
+
+    const fromStderr = splitLines(stderr);
+    const spoken = (fromStderr.length > 0 ? fromStderr : logs).filter(
+        (line) => line.trim() !== "",
     );
 
-    if (errors.length > 0) {
-        return new CodeExecution(text, errors[errors.length - 1]!, logs);
-    }
-    return new CodeExecution(text, null, logs);
+    return new CodeExecution(text, spoken[spoken.length - 1] ?? `exited ${exitCode}`, logs);
 }

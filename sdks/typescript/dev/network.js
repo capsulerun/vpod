@@ -122,6 +122,63 @@ try {
         });
     }
 
+    if (parameters.get("gaps")) {
+        const python = async (name, source, timeout = 90) =>
+            step(name, async () => {
+                const result = await box.commands.run(`python3 -c "${source}"`, { timeout });
+                if (result.exitCode !== 0) {
+                    throw new Error(`exit ${result.exitCode}: ${result.stdout}${result.stderr}`);
+                }
+                return result.stdout.trim().replace(/\n/g, " | ");
+            });
+
+        await python(
+            "gap: raw TCP to a port fetch cannot carry",
+            [
+                "import socket, time",
+                "t = time.time()",
+                "try:",
+                "    socket.create_connection(('example.com', 5432), timeout=10)",
+                "    print('connected, which was not expected')",
+                "except Exception as e:",
+                "    print('refused ->', type(e).__name__, '|', e, f'| {time.time()-t:.2f}s')",
+            ].join("\n"),
+        );
+
+        await python(
+            "gap: header fidelity through fetch",
+            [
+                "import urllib.request, json",
+                "sent = {'X-Vpod-Kept': 'yes', 'User-Agent': 'vpod-probe/1',",
+                "        'Referer': 'https://example.invalid/', 'Te': 'trailers'}",
+                "req = urllib.request.Request('https://echo.free.beeceptor.com/', headers=sent)",
+                "got = json.loads(urllib.request.urlopen(req, timeout=60).read())['headers']",
+                "low = {k.lower(): v for k, v in got.items()}",
+                "kept = [k for k, v in sent.items() if low.get(k.lower()) == v]",
+                "gone = [k for k in sent if k.lower() not in low]",
+                "changed = [k for k in sent if k.lower() in low and low[k.lower()] != sent[k]]",
+                "print('verbatim:', sorted(kept))",
+                "print('dropped:', sorted(gone))",
+                "print('rewritten:', sorted(changed))",
+                "print('referer now:', low.get('referer', '-'))",
+                "print('origin now:', low.get('origin', '-'))",
+            ].join("\n"),
+        );
+
+        await python(
+            "gap: a non-CORS host, as python sees it",
+            [
+                "import urllib.request, time",
+                "t = time.time()",
+                "try:",
+                "    urllib.request.urlopen('https://dl-cdn.alpinelinux.org/alpine/', timeout=30)",
+                "    print('fetched, which was not expected')",
+                "except Exception as e:",
+                "    print('refused ->', type(e).__name__, '|', str(e)[:110], f'| {time.time()-t:.2f}s')",
+            ].join("\n"),
+        );
+    }
+
     const installer = await step("find an installer", async () => {
         const result = await box.commands.run(
             "command -v uv >/dev/null && echo uv; command -v pip >/dev/null && echo pip",

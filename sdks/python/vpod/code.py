@@ -23,27 +23,33 @@ class Code:
         output = result.stdout if hasattr(result, 'stdout') else str(result)
         stderr = result.stderr if hasattr(result, 'stderr') else ""
 
-        if getattr(result, "exit-code", 0) == 124:
+        exit_code = getattr(result, "exit-code", 0)
+
+        if exit_code == 124:
             return CodeExecution(
                 text=output,
                 error=f"Timed out after {timeout}s",
                 logs=output.splitlines(),
             )
 
-        return self._parse_output(output, stderr)
+        return self._parse_output(output, stderr, exit_code)
 
     def close(self):
         pass
 
-    def _parse_output(self, raw: str, stderr: str = "") -> CodeExecution:
+    def _parse_output(self, raw: str, stderr: str = "", exit_code: int = 0) -> CodeExecution:
         text = raw.strip()
         lines = text.splitlines()
-        error_indicators = ("Error", "Traceback", "not found", "error:", "syntax error")
 
-        all_lines = lines + stderr.strip().splitlines()
-        errors = [l for l in all_lines if any(ind in l for ind in error_indicators)]
+        if exit_code == 0:
+            return CodeExecution(text=text, logs=lines)
 
-        if errors:
-            return CodeExecution(text=text, error=errors[-1], logs=lines)
+        # The traceback's last line is the exception, which is the useful message.
+        from_stderr = [l for l in stderr.strip().splitlines() if l.strip()]
+        spoken = from_stderr or [l for l in lines if l.strip()]
 
-        return CodeExecution(text=text, logs=lines)
+        return CodeExecution(
+            text=text,
+            error=spoken[-1] if spoken else f"exited {exit_code}",
+            logs=lines,
+        )

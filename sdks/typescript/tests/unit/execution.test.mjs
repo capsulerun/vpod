@@ -47,27 +47,41 @@ describe("parseCodeOutput", () => {
         assert.deepEqual(execution.logs, []);
     });
 
-    it("detects a traceback as an error", () => {
-        const execution = parseCodeOutput("Traceback (most recent call last):\nValueError: nope");
+    it("reports the exception line when the runner exits non-zero", () => {
+        const execution = parseCodeOutput(
+            "Traceback (most recent call last):\nValueError: nope",
+            "",
+            1,
+        );
         assert.equal(execution.success, false);
         assert.equal(execution.error, "ValueError: nope");
     });
 
-    it("keeps the last error when several lines match", () => {
-        const execution = parseCodeOutput("KeyError: a\nValueError: b");
-        assert.equal(execution.error, "ValueError: b");
-    });
-
-    it("finds errors that only appear on stderr", () => {
-        const execution = parseCodeOutput("fine", "sh: bogus: not found");
+    it("prefers stderr for the message when there is one", () => {
+        const execution = parseCodeOutput("fine", "sh: bogus: not found", 127);
         assert.equal(execution.success, false);
         assert.equal(execution.error, "sh: bogus: not found");
         assert.deepEqual(execution.logs, ["fine"], "logs come from stdout only");
     });
 
-    it("does not treat ordinary output as an error", () => {
-        const execution = parseCodeOutput("errors are handled gracefully here");
-        assert.equal(execution.success, true, "lowercase 'errors' is not a marker");
+    it("still says something when a failing run printed nothing", () => {
+        const execution = parseCodeOutput("", "", 3);
+        assert.equal(execution.success, false);
+        assert.equal(execution.error, "exited 3");
+    });
+
+    it("trusts the exit code over anything the program printed", () => {
+        for (const output of [
+            "Error handling is hard",
+            "Traceback analysis complete",
+            "0 errors, 0 warnings",
+            "sh: bogus: not found",
+            '{"error": null}',
+        ]) {
+            const execution = parseCodeOutput(output, "", 0);
+            assert.equal(execution.success, true, `treated as a failure: ${output}`);
+            assert.equal(execution.error, null);
+        }
     });
 
     it("absorbs the CRLF line endings the guest REPL emits", () => {

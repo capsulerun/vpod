@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+    copyFileSync,
+    mkdirSync,
+    readFileSync,
+    readdirSync,
+    rmSync,
+    statSync,
+    writeFileSync,
+} from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,6 +19,7 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = join(packageRoot, "dist");
 const componentDir = join(distDir, "component");
 const nodeComponentDir = join(distDir, "component-node");
+const nodeDir = join(distDir, "node");
 const localWasmDir = join(packageRoot, "wasm");
 const pythonSdkWasmDir = resolve(packageRoot, "..", "python", "vpod");
 const cratesDir = resolve(packageRoot, "..", "..", "crates");
@@ -216,6 +225,22 @@ function transpile(componentPath) {
     }
 }
 
+function declarations() {
+    const result = spawnSync(
+        join(packageRoot, "node_modules", ".bin", "tsc"),
+        ["-p", "tsconfig.build.json"],
+        { cwd: packageRoot, stdio: "inherit" },
+    );
+
+    if (result.status !== 0) {
+        throw new Error("tsc failed to emit declarations");
+    }
+
+    for (const entry of [join(distDir, "index.d.ts"), join(nodeDir, "index.d.ts")]) {
+        writeFileSync(entry, `/// <reference lib="esnext.disposable" />\n${readFileSync(entry)}`);
+    }
+}
+
 async function main() {
     const { tier } = parseArguments(process.argv.slice(2));
     const componentPath = locateComponent(tier);
@@ -246,6 +271,8 @@ async function main() {
         join(componentDir, "manifest.json"),
         `${JSON.stringify(manifest, null, 2)}\n`,
     );
+
+    declarations();
 
     const megabytes = (bytes) => `${(bytes / 1048576).toFixed(1)} MiB`;
     console.log(`[build] core wasm: ${megabytes(manifest.coreWasmBytes)}`);
