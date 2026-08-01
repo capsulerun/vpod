@@ -3,14 +3,16 @@
 <div align="center">
   <p><strong>A lightweight, portable sandbox that gives an untrusted process an instant Linux environment.</strong></p>
   <a href="https://github.com/capsulerun/vpod"><img src="https://img.shields.io/badge/GitHub-Repository-black?logo=github" alt="GitHub"></a>
+  <a href="https://github.com/capsulerun/vpod/actions/workflows/ci.yml" target="_blank">
+    <img src="https://img.shields.io/github/actions/workflow/status/capsulerun/vpod/ci.yml?branch=main&label=CI&logo=github" alt="CI">
+  </a>
 
 [Documentation](https://docs.vpod.sh/quickstart) • [Issues](https://github.com/capsulerun/vpod/issues/new)
 </div>
 
 <br>
 
-It uses a RISC‑V architecture and runs entirely inside WebAssembly, which means the
-same sandbox runs in a browser tab under the browser's own wasm engine.
+It uses a RISC‑V architecture and runs entirely inside WebAssembly, so the same sandbox runs in a browser tab and in Node.
 
 - **Fast startup** : under a second, and about 0.6s on a repeat visit.
 - **Portable** : a browser tab or Node, no server and no native dependency.
@@ -24,8 +26,7 @@ npm install vpod
 
 ## Usage
 
-Everything is async. Loading the engine and fetching a snapshot are genuinely
-asynchronous, and exposing execution as async is what lets it run in a Worker.
+Everything is async, because loading the engine and fetching a snapshot are.
 
 ### Persistent session (Recommended)
 
@@ -44,22 +45,11 @@ const result = await sandbox.commands.run("echo $FOO");
 console.log(result.stdout); // bar
 ```
 
-If your toolchain does not support `await using`, call `close()` yourself:
-
-```ts
-const sandbox = await Sandbox.create();
-try {
-    const result = await sandbox.commands.run("echo hello");
-    console.log(result.stdout); // hello
-} finally {
-    await sandbox.close();
-}
-```
+If your toolchain does not support `await using`, call `await sandbox.close()` yourself.
 
 ### Python REPL
 
-Run Python with persistent state across calls. Variables and imports live for the
-lifetime of the session.
+Run Python with persistent state across calls. Variables and imports live for the lifetime of the session.
 
 ```ts
 import { Sandbox } from "vpod";
@@ -87,8 +77,7 @@ await sandbox.code.run("print('Pandas is ready!')");
 Pause a sandbox and resume it later. Only dirty memory pages are saved, so a
 delta is a couple of megabytes rather than the size of the snapshot.
 
-**The delta is bytes, not a location.** Put it wherever you keep state, which for
-a hosted app is usually your own backend:
+**The delta is bytes, not a location.** Put it wherever you keep state, which for a hosted app is usually your own backend:
 
 ```ts
 const sandbox = await Sandbox.create();
@@ -121,47 +110,9 @@ const resumed = await Sandbox.resume(instanceId);
 | `Sandbox.listInstances()` | List instances held in browser storage |
 | `Sandbox.destroy(id)` | Delete a stored instance |
 
-### Bringing your own snapshot
-
-Skip the registry and hand over the bytes. Keep the RAM size in the name, because
-the emulator reads it from there:
-
-```ts
-await using sandbox = await Sandbox.create({
-    snapshotBytes: myBytes,
-    snapshotName: "vsnap-base-256mb.snap",
-});
-```
-
-## Results
-
-`commands.run` resolves to a `CommandResult`:
-
-| Field | Description |
-|:---|:---|
-| `stdout` / `stderr` | captured output, with terminal carriage returns removed |
-| `exitCode` | the guest's exit code, `124` on timeout |
-| `success` | `exitCode === 0` |
-
-`code.run` resolves to a `CodeExecution`:
-
-| Field | Description |
-|:---|:---|
-| `text` | the REPL transcript, trimmed |
-| `logs` | one entry per output line |
-| `error` | the failing line, or `null` |
-| `success` | `error === null` |
-
-Both take `{ timeout }` in seconds, defaulting to 120.
-
 ## Snapshots
 
-The first `Sandbox.create()` downloads a snapshot and caches it in origin-private
-storage. Later visits read it from there and skip the network.
-
-Snapshots are cached **compressed**, which costs a quarter of the storage and
-reads back roughly five times faster than the decompressed form, because the
-guest decodes it more cheaply than the browser can move the extra bytes.
+The first `Sandbox.create()` downloads a snapshot and caches it locally, in origin-private storage in a browser and on disk in Node. Later runs use the cache.
 
 ```ts
 import { snapshots } from "vpod";
@@ -182,38 +133,58 @@ for (const entry of await snapshots.catalog()) {
 
 ## Browsers
 
-Chrome, Firefox and Safari on desktop, all verified running the same snapshot.
-Mobile Safari is untested.
+Chrome, Firefox and Safari on desktop. Mobile Safari is untested.
 
-Two hosting requirements:
+Serve the page over https (or localhost), give the `.wasm` a URL that changes when you rebuild, and add these two headers so the guest can have a network:
 
-- **Serve the `.wasm` with immutable cache headers.** Browser wasm code caching
-  only happens through `compileStreaming` from a cacheable URL, and it halves
-  startup on a repeat visit. Give the assets a URL that changes when you rebuild,
-  or a browser will keep the old bundle.
-- **Serve over https, or from localhost.** Snapshot digests use `crypto.subtle`,
-  which needs a secure context.
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
 
-Cross-origin isolation (COOP/COEP) is **not** required.
+Without them the sandbox still works, offline. `networkAvailability()` says
+which you got, and `network: false` turns it off deliberately.
+
+### What the guest can reach
+
+Its requests are **your page's requests**, made with `fetch`, so:
+
+- **Your CORS policy is the boundary.** `pypi.org`, `files.pythonhosted.org`
+  and `registry.npmjs.org` allow it, so `pip`, `uv` and `npm` work. The Alpine
+  mirrors do not, so `apk` cannot. A refused host reaches the guest as
+  `502 Bad Gateway` with the reason in the body.
+- **HTTP and HTTPS only**, on ports 80 and 443. No raw TCP, no other port.
+- **Some request headers are dropped**, because the browser writes them itself:
+  `Host`, `Connection`, `Content-Length`, `Transfer-Encoding`, `Cookie`,
+  `Origin`, `Referer`, `Accept-Encoding` and anything `Sec-*` or `Proxy-*`.
+- **Certificate policy is the browser's**, and responses are buffered rather
+  than streamed.
 
 ## Node
 
-The same package runs under Node with no browser. Node has no `Worker` global, so
-supply the in-process transport:
+Node gets **real sockets**, so none of the above applies. There is no CORS and
+no COOP/COEP: the guest simply has a network.
 
 ```ts
-import { Sandbox } from "vpod";
-import { createInlineTransport } from "vpod/inline";
+import { Sandbox } from "@capsule-run/vpod/node";
 
-const sandbox = await Sandbox.create({ transport: await createInlineTransport() });
+await using sandbox = await Sandbox.create();
+
+await sandbox.commands.run("apk add jq");        // unreachable from a browser
+await sandbox.commands.run("uv pip install six");
 ```
 
-Node has no origin-private storage either, so snapshot caching and
-`suspendToOpfs` are unavailable there; `suspend()` still returns the bytes.
+Snapshots cache in the same directory the Python SDK uses, so both share one
+copy. `VPOD_CACHE_DIR` overrides it.
 
+The guest runs on a worker thread, so your event loop keeps turning while a
+command does. **Node 20 or newer; 24 and up is meaningfully faster**, since the
+guest goes as fast as the V8 your Node ships with.
 
 ## Documentation
 
-Visit the [Vpod documentation](https://docs.vpod.sh/quickstart) for the full guide
-and API reference. To report issues or contribute, head to the
+Visit the [Vpod documentation](https://docs.vpod.sh/quickstart) for the full
+guide and API reference. Implementation notes and measurements live in
+[`docs/browser-phases/`](../../docs/browser-phases/00-overview.md). To report
+issues or contribute, head to the
 [main GitHub repository](https://github.com/capsulerun/vpod).

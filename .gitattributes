@@ -1,0 +1,3 @@
+sdks/python/tests/**
+sdks/typescript/tests/**
+sdks/typescript/dev/**
