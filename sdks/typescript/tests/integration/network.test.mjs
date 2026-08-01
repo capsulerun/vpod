@@ -44,7 +44,11 @@ function cannedUpstream(respond) {
         }
         connection.buffered = connection.buffered.slice(parsed.request.consumed);
 
-        seen.push({ host: connection.host, port: connection.port, request: parsed.request });
+        seen.push({
+            host: connection.host,
+            port: connection.port,
+            request: parsed.request,
+        });
 
         const answer = respond(connection.host, parsed.request);
         const body = encoder.encode(answer.body);
@@ -106,8 +110,10 @@ describe("network transport, end to end through the emulator", { skip: reason ??
         const snapshotPath = locateSnapshot();
         sandbox = await Sandbox.create({
             transport: await createInlineTransport(),
-            snapshotBytes: readFileSync(snapshotPath),
-            snapshotName: basename(snapshotPath),
+            snapshot: {
+                bytes: readFileSync(snapshotPath),
+                name: basename(snapshotPath),
+            },
         });
     });
 
@@ -116,7 +122,9 @@ describe("network transport, end to end through the emulator", { skip: reason ??
     });
 
     it("resolves a hostname to a synthetic address", async () => {
-        const result = await sandbox.commands.run("getent hosts example.test", { timeout: 30 });
+        const result = await sandbox.commands.run("getent hosts example.test", {
+            timeout: 30,
+        });
 
         assert.match(result.stdout, /198\.18\./);
         assert.match(result.stdout, /example\.test/);
@@ -149,7 +157,11 @@ describe("network transport, end to end through the emulator", { skip: reason ??
         );
 
         assert.match(result.stdout, /hello from example\.test/);
-        assert.match(result.stdout, /rc=0/, "the pipeline never finished, so no FIN reached the guest");
+        assert.match(
+            result.stdout,
+            /rc=0/,
+            "the pipeline never finished, so no FIN reached the guest",
+        );
     });
 
     it("refuses a port the transport cannot serve, rather than failing later", () => {
@@ -157,14 +169,19 @@ describe("network transport, end to end through the emulator", { skip: reason ??
         const connection = backend.createTcpConnection("ipv4");
 
         assert.throws(
-            () => connection.startConnect({ tag: "ipv4", val: { port: 6379, address: [1, 2, 3, 4] } }),
+            () =>
+                connection.startConnect({
+                    tag: "ipv4",
+                    val: { port: 6379, address: [1, 2, 3, 4] },
+                }),
             /access-denied/,
         );
 
         assert.doesNotThrow(() =>
-            backend
-                .createTcpConnection("ipv4")
-                .startConnect({ tag: "ipv4", val: { port: 443, address: [1, 2, 3, 4] } }),
+            backend.createTcpConnection("ipv4").startConnect({
+                tag: "ipv4",
+                val: { port: 443, address: [1, 2, 3, 4] },
+            }),
         );
     });
 
@@ -173,7 +190,10 @@ describe("network transport, end to end through the emulator", { skip: reason ??
         // stay buffered on our side. If end-of-stream is gated on the guest
         // having drained them, the connection is never closed and the pipe
         // hangs. This is the browser's non-CORS case, reproduced offline.
-        respond = () => ({ status: 502, body: "vpod: refused by the transport\n" });
+        respond = () => ({
+            status: 502,
+            body: "vpod: refused by the transport\n",
+        });
 
         const result = await sandbox.commands.run(
             "wget -q -O- https://example.test/refused | head -c 200; echo rc=$?",

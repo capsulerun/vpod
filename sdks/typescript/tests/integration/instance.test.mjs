@@ -14,8 +14,7 @@ async function resumeFrom(delta) {
         { id: "test", snapshotId: snapshotName, delta },
         {
             transport: await createInlineTransport(),
-            snapshotBytes: readFileSync(snapshotPath),
-            snapshotName,
+            snapshot: { bytes: readFileSync(snapshotPath), name: snapshotName },
         },
     );
 }

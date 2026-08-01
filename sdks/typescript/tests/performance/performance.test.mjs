@@ -32,8 +32,10 @@ describe("performance", { skip: reason ?? false }, () => {
         const startedAt = performance.now();
         sandbox = await Sandbox.create({
             transport: await createInlineTransport(),
-            snapshotBytes: readFileSync(snapshotPath),
-            snapshotName: basename(snapshotPath),
+            snapshot: {
+                bytes: readFileSync(snapshotPath),
+                name: basename(snapshotPath),
+            },
         });
         report.wall.bootSeconds = (performance.now() - startedAt) / 1000;
 
@@ -150,18 +152,21 @@ describe("performance", { skip: reason ?? false }, () => {
         const snapshotPath = locateSnapshot();
         const networked = await Sandbox.create({
             transport: await createInlineTransport(),
-            snapshotBytes: readFileSync(snapshotPath),
-            snapshotName: basename(snapshotPath),
+            snapshot: {
+                bytes: readFileSync(snapshotPath),
+                name: basename(snapshotPath),
+            },
         });
 
         try {
-            await networked.commands.run("wget -q -O- https://warm.test/ 2>&1", { timeout: 120 });
+            await networked.commands.run("wget -q -O- https://warm.test/ 2>&1", {
+                timeout: 120,
+            });
 
             const startedAt = performance.now();
-            const result = await networked.commands.run(
-                "wget -q -O- https://perf.test/ 2>&1",
-                { timeout: 120 },
-            );
+            const result = await networked.commands.run("wget -q -O- https://perf.test/ 2>&1", {
+                timeout: 120,
+            });
             const seconds = (performance.now() - startedAt) / 1000;
             report.wall.networkRoundTripSeconds = seconds;
 

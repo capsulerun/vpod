@@ -19,6 +19,8 @@ type Reply =
     | { id: number; ok: false; error: string };
 
 class NodeWorkerTransport implements ExecutorTransport {
+    readonly networkBackend = "sockets" as const;
+
     readonly #worker: Worker;
     readonly #pending = new Map<number, PendingCall>();
     readonly #ready: Promise<number>;

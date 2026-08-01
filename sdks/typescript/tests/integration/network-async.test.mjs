@@ -39,7 +39,11 @@ function delayedFetchSource(delayMilliseconds, refusedHosts) {
 
 async function startDriver(script, options = {}) {
     const worker = new Worker(workerPath, {
-        workerData: { driverModule: distPath("net/fetch-driver.js"), script, options },
+        workerData: {
+            driverModule: distPath("net/fetch-driver.js"),
+            script,
+            options,
+        },
     });
 
     await new Promise((settle, fail) => {
@@ -67,8 +71,10 @@ describe("network transport, answered from another thread", { skip: reason ?? fa
 
         sandbox = await Sandbox.create({
             transport: await createInlineTransport(),
-            snapshotBytes: readFileSync(snapshotPath),
-            snapshotName: basename(snapshotPath),
+            snapshot: {
+                bytes: readFileSync(snapshotPath),
+                name: basename(snapshotPath),
+            },
         });
     });
 
@@ -78,20 +84,18 @@ describe("network transport, answered from another thread", { skip: reason ?? fa
     });
 
     it("delivers a reply that lands after the guest has parked", async () => {
-        const result = await sandbox.commands.run(
-            "wget -q -O- https://slow.test/ 2>&1",
-            { timeout: 60 },
-        );
+        const result = await sandbox.commands.run("wget -q -O- https://slow.test/ 2>&1", {
+            timeout: 60,
+        });
 
         assert.equal(result.exitCode, 0, result.stdout + result.stderr);
         assert.match(result.stdout, /hello from slow\.test/);
     });
 
     it("closes a late reply, so a pipe reading it sees end-of-input", async () => {
-        const result = await sandbox.commands.run(
-            "wget -q -O- https://piped.test/ | head -c 200",
-            { timeout: 60 },
-        );
+        const result = await sandbox.commands.run("wget -q -O- https://piped.test/ | head -c 200", {
+            timeout: 60,
+        });
 
         assert.equal(
             result.exitCode,

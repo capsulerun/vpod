@@ -25,14 +25,6 @@ interface Connection {
     closed: boolean;
 }
 
-function hostnameOf(url: string, fallback: string): string {
-    try {
-        return new URL(url).hostname;
-    } catch {
-        return fallback;
-    }
-}
-
 function concat(left: Uint8Array, right: Uint8Array): Uint8Array {
     const joined = new Uint8Array(left.length + right.length);
     joined.set(left, 0);
@@ -153,17 +145,6 @@ export class FetchDriver {
         }
 
         const fetchable = toFetchable(request, host, port);
-
-        const target = hostnameOf(fetchable.url, host);
-        const allowed = this.#options.allowedHosts;
-        if (allowed !== undefined && !allowed.includes(target)) {
-            await this.#writeAll(
-                connection,
-                serializeTransportError(`${target} is not in this sandbox's allowed hosts`),
-            );
-            connection.writer.end();
-            return;
-        }
 
         const abort = new AbortController();
         const timeout = setTimeout(

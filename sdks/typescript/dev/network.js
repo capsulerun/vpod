@@ -51,7 +51,6 @@ try {
         box = await Sandbox.create({
             snapshot: SNAPSHOT_NAME,
             registryUrl: REGISTRY_URL,
-            network: true,
         });
         return box.snapshotId;
     });

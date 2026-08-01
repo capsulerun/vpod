@@ -13,7 +13,13 @@ function connect(driver, id = 1, capacity = 1 << 16) {
     const ring = createRing(capacity);
     const reader = new RingReader(ring);
 
-    driver.handle({ kind: "open", id, ring, resolvedHostname: undefined, port: 443 });
+    driver.handle({
+        kind: "open",
+        id,
+        ring,
+        resolvedHostname: undefined,
+        port: 443,
+    });
 
     return {
         send(text) {
@@ -101,7 +107,9 @@ describe("fetch driver", () => {
         const connection = connect(driver);
 
         connection.send("VPOD-CONNECT pypi.org 443\n");
-        connection.send("GET /a HTTP/1.1\r\nHost: h\r\n\r\nGET /b HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n");
+        connection.send(
+            "GET /a HTTP/1.1\r\nHost: h\r\n\r\nGET /b HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n",
+        );
 
         const wire = await connection.drainUntilFinished();
 
@@ -144,53 +152,18 @@ describe("fetch driver", () => {
         assert.match(wire, /Failed to fetch/);
     });
 
-    it("refuses a host outside the allow list without calling fetch", async () => {
-        const calls = stubFetch(() => jsonResponse("should not happen"));
-        const driver = new FetchDriver({ allowedHosts: ["pypi.org"] });
-        const connection = connect(driver);
-
-        connection.send("VPOD-CONNECT evil.invalid 443\n");
-        connection.send("GET / HTTP/1.1\r\nHost: h\r\n\r\n");
-
-        const wire = await connection.drainUntilFinished();
-
-        assert.equal(calls.length, 0);
-        assert.match(wire, /502 Bad Gateway/);
-        assert.match(wire, /allowed hosts/);
-    });
-
-    /**
-     * The guest writes its own HTTP, so the preamble is a claim rather than a
-     * fact. A request target may carry its own authority (RFC 9112's absolute
-     * form), and checking only the preamble let a guest announce an allowed
-     * host and be fetched somewhere else entirely.
-     */
-    it("refuses an absolute-form target that leaves the allow list", async () => {
-        const calls = stubFetch(() => jsonResponse("should not happen"));
-        const driver = new FetchDriver({ allowedHosts: ["pypi.org"] });
-        const connection = connect(driver);
-
-        connection.send("VPOD-CONNECT pypi.org 443\n");
-        connection.send("GET https://evil.invalid/steal HTTP/1.1\r\nHost: pypi.org\r\n\r\n");
-
-        const wire = await connection.drainUntilFinished();
-
-        assert.equal(calls.length, 0, `fetch dialled ${calls.map((c) => c.url).join(", ")}`);
-        assert.match(wire, /502 Bad Gateway/);
-        assert.match(wire, /evil\.invalid is not in this sandbox's allowed hosts/);
-    });
-
-    it("allows an absolute-form target that stays on the allow list", async () => {
+    it("dials an absolute-form target at its own authority", async () => {
         const calls = stubFetch(() => jsonResponse("ok"));
-        const driver = new FetchDriver({ allowedHosts: ["pypi.org"] });
+        const driver = new FetchDriver();
         const connection = connect(driver);
 
         connection.send("VPOD-CONNECT pypi.org 443\n");
-        connection.send("GET https://pypi.org/simple/ HTTP/1.1\r\nHost: pypi.org\r\n\r\n");
+        connection.send("GET https://files.pythonhosted.org/x HTTP/1.1\r\nHost: pypi.org\r\n\r\n");
 
         const wire = await connection.drainUntilFinished();
 
         assert.equal(calls.length, 1);
+        assert.equal(calls[0].url, "https://files.pythonhosted.org/x");
         assert.match(wire, /^HTTP\/1\.1 200/);
     });
 

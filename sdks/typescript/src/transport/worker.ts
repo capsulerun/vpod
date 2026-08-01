@@ -104,10 +104,7 @@ export class WorkerTransport implements ExecutorTransport {
         });
         driver.postMessage({
             kind: "configure",
-            options: {
-                allowedHosts: options.allowedHosts,
-                requestTimeoutMilliseconds: options.requestTimeoutMilliseconds,
-            },
+            options: { requestTimeoutMilliseconds: options.requestTimeoutMilliseconds },
         });
         await configured;
 

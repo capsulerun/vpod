@@ -33,7 +33,7 @@ describe("node target", { skip: reason ?? false }, () => {
 
         sandbox = await Sandbox.create({
             transport: await createNodeTransport({ cacheDirectory }),
-            snapshotPath,
+            snapshot: { path: snapshotPath },
         });
     });
 
@@ -57,7 +57,9 @@ describe("node target", { skip: reason ?? false }, () => {
             return;
         }
 
-        const result = await sandbox.commands.run("getent hosts pypi.org", { timeout: 30 });
+        const result = await sandbox.commands.run("getent hosts pypi.org", {
+            timeout: 30,
+        });
 
         assert.match(result.stdout, /pypi\.org/);
         assert.doesNotMatch(
@@ -88,7 +90,9 @@ describe("node target", { skip: reason ?? false }, () => {
             return;
         }
 
-        const result = await sandbox.commands.run("apk update 2>&1 | tail -1", { timeout: 180 });
+        const result = await sandbox.commands.run("apk update 2>&1 | tail -1", {
+            timeout: 180,
+        });
 
         assert.match(result.stdout, /packages available/);
     });
@@ -107,7 +111,7 @@ describe("node target", { skip: reason ?? false }, () => {
 
         const threaded = await Sandbox.create({
             transport: await createNodeWorkerTransport({ cacheDirectory }),
-            snapshotPath,
+            snapshot: { path: snapshotPath },
         });
 
         try {
@@ -151,5 +155,36 @@ describe("node target", { skip: reason ?? false }, () => {
         const directory = defaultCacheDirectory();
 
         assert.match(directory, /vpod[/\\]snapshots$/);
+    });
+
+    /**
+     * Importing from `vpod/node` already says which target this is, so a
+     * caller should not have to hand over a transport as well. The portable
+     * `Sandbox` defaults to the browser's Worker, which Node does not have, so
+     * without this the zero-argument form throws.
+     */
+    it("needs no transport, and defaults to one that leaves the event loop turning", async () => {
+        const { Sandbox } = await import(distPath("node/index.js"));
+        const plain = await Sandbox.create({
+            snapshot: { path: locateSnapshot() },
+        });
+
+        try {
+            let ticks = 0;
+            const timer = setInterval(() => ticks++, 10);
+            const result = await plain.commands.run("python3 -c 'print(sum(range(2000000)))'", {
+                timeout: 120,
+            });
+            clearInterval(timer);
+
+            assert.equal(result.exitCode, 0, result.stderr);
+            assert.ok(
+                ticks > 0,
+                "the default transport ran the guest on the calling thread and blocked the event loop",
+            );
+            assert.equal(plain.network.backend, "sockets");
+        } finally {
+            await plain.close();
+        }
     });
 });

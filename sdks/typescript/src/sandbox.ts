@@ -6,8 +6,8 @@ import {
 } from "./execution.js";
 import { SandboxRuntime, type SandboxRuntimeOptions } from "./runtime.js";
 import { InstanceStore, type SuspendedInstance } from "./instances.js";
-import type { NetworkOptions } from "./transport/worker.js";
 import type { NetworkCapabilities } from "./net/capabilities.js";
+import { networkAvailability } from "./net/availability.js";
 
 const DEFAULT_SHELL = "/bin/sh";
 const DEFAULT_PROMPT = "# ";
@@ -17,13 +17,15 @@ const TIMEOUT_EXIT_CODE = 124;
 
 const PYTHON_PREFIX = String.fromCharCode(0);
 
+export type SnapshotSource =
+    | string
+    | { path: string }
+    | { bytes: ArrayBuffer | Uint8Array; name: string };
+
 export interface SandboxOptions extends SandboxRuntimeOptions {
-    snapshot?: string;
+    snapshot?: SnapshotSource;
+    network?: boolean;
     registryUrl?: string;
-    snapshotBytes?: ArrayBuffer | Uint8Array;
-    snapshotName?: string;
-    snapshotPath?: string;
-    network?: boolean | NetworkOptions;
 }
 
 export interface RunOptions {
@@ -90,46 +92,60 @@ export class Sandbox {
 
     static async #mount(
         runtime: SandboxRuntime,
-        options: SandboxOptions,
-        snapshotName: string,
+        snapshot: SnapshotSource,
+        registryUrl: string | undefined,
     ): Promise<{ snapshotPath: string; snapshotId: string }> {
-        if (options.snapshotPath !== undefined) {
-            const id = options.snapshotPath.split("/").pop()?.replace(/\.snap$/, "");
-            return { snapshotPath: options.snapshotPath, snapshotId: id ?? "local" };
-        }
-
-        if (options.snapshotBytes === undefined) {
-            const pulled = await runtime.pullSnapshot(snapshotName, {
-                registryUrl: options.registryUrl,
-            });
+        if (typeof snapshot === "string") {
+            const pulled = await runtime.pullSnapshot(snapshot, { registryUrl });
             return { snapshotPath: pulled.snapshotPath, snapshotId: pulled.id };
         }
 
-        const name = options.snapshotName;
-        if (name === undefined) {
-            throw new Error("vpod: snapshotBytes also needs snapshotName");
+        if ("path" in snapshot) {
+            const id = snapshot.path.split("/").pop()?.replace(/\.snap$/, "");
+            return { snapshotPath: snapshot.path, snapshotId: id ?? "local" };
         }
 
         const bytes =
-            options.snapshotBytes instanceof Uint8Array
-                ? options.snapshotBytes.slice().buffer
-                : options.snapshotBytes;
-        const mounted = await runtime.mountSnapshot(name, bytes);
-        return { snapshotPath: mounted.snapshotPath, snapshotId: name.replace(/\.snap$/, "") };
+            snapshot.bytes instanceof Uint8Array ? snapshot.bytes.slice().buffer : snapshot.bytes;
+        const mounted = await runtime.mountSnapshot(snapshot.name, bytes);
+        return {
+            snapshotPath: mounted.snapshotPath,
+            snapshotId: snapshot.name.replace(/\.snap$/, ""),
+        };
+    }
+
+    static async #connectNetwork(
+        runtime: SandboxRuntime,
+        requested: boolean | undefined,
+    ): Promise<void> {
+        if (runtime.networkBackend !== "none") {
+            return; // Node already has real sockets.
+        }
+
+        if (requested === false) {
+            return;
+        }
+
+        if (requested === undefined) {
+            if (networkAvailability().available) {
+                await runtime.enableNetwork();
+            }
+            return;
+        }
+
+        await runtime.enableNetwork();
     }
 
     static async create(options: SandboxOptions = {}): Promise<Sandbox> {
         const runtime = new SandboxRuntime(options);
         await runtime.ready();
 
-        if (options.network !== undefined && options.network !== false) {
-            await runtime.enableNetwork(options.network === true ? {} : options.network);
-        }
+        await Sandbox.#connectNetwork(runtime, options.network);
 
         const mounted = await Sandbox.#mount(
             runtime,
-            options,
             options.snapshot ?? DEFAULT_SNAPSHOT,
+            options.registryUrl,
         );
         return new Sandbox(runtime, mounted.snapshotPath, mounted.snapshotId);
     }
@@ -186,7 +202,13 @@ export class Sandbox {
         const runtime = new SandboxRuntime(options);
         await runtime.ready();
 
-        const mounted = await Sandbox.#mount(runtime, options, resolved.snapshotId);
+        await Sandbox.#connectNetwork(runtime, options.network);
+
+        const mounted = await Sandbox.#mount(
+            runtime,
+            options.snapshot ?? resolved.snapshotId,
+            options.registryUrl,
+        );
 
         const sandbox = new Sandbox(runtime, mounted.snapshotPath, mounted.snapshotId);
         const delta = resolved.delta.slice();

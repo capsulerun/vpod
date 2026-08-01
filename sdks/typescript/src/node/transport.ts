@@ -196,6 +196,8 @@ export async function loadNodeDispatcher(
 }
 
 class InlineNodeTransport implements ExecutorTransport {
+    readonly networkBackend = "sockets" as const;
+
     readonly #dispatcher: NodeDispatcher;
 
     constructor(dispatcher: NodeDispatcher) {

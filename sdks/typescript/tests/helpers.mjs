@@ -8,11 +8,6 @@ const repositoryRoot = resolve(packageRoot, "..", "..");
 
 export const distPath = (relativePath) => join(packageRoot, "dist", relativePath);
 
-/**
- * A snapshot the guest can actually load. `dist/prod-bundle` and
- * `dist/registry-bundle` are deliberately excluded: those copies are lz4-framed
- * twice and fail with `invalid snapshot magic`.
- */
 export function locateSnapshot() {
     const candidates = [
         process.env.VPOD_TEST_SNAPSHOT,
@@ -41,19 +36,16 @@ export async function loadSdk() {
     return cachedModule;
 }
 
-/**
- * A sandbox running on the calling thread. Node has no `Worker` global and no
- * origin-private storage, so tests supply the transport and the snapshot bytes
- * rather than going through the registry.
- */
 export async function createTestSandbox(overrides = {}) {
     const { Sandbox, createInlineTransport } = await loadSdk();
     const snapshotPath = locateSnapshot();
 
     return Sandbox.create({
         transport: await createInlineTransport(),
-        snapshotBytes: readFileSync(snapshotPath),
-        snapshotName: basename(snapshotPath),
+        snapshot: {
+            bytes: readFileSync(snapshotPath),
+            name: basename(snapshotPath),
+        },
         ...overrides,
     });
 }

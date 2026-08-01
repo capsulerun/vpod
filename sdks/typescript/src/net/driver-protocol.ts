@@ -15,7 +15,5 @@ export type DriverCommand =
     | { kind: "close"; id: number };
 
 export interface DriverOptions {
-    allowedHosts?: string[];
     requestTimeoutMilliseconds?: number;
-    keepAliveIdleMilliseconds?: number;
 }

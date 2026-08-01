@@ -28,6 +28,7 @@ export class SandboxRuntime {
 
     constructor(options: SandboxRuntimeOptions = {}) {
         this.#transport = options.transport ?? new WorkerTransport(options);
+        this.#networkBackend = this.#transport.networkBackend ?? "none";
     }
 
     ready(): Promise<number> {
