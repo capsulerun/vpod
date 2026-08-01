@@ -48,9 +48,11 @@
     "measure": "node dev/run-measure.mjs",
     "measure:node": "node dev/measure-node.mjs"
   },
+  "dependencies": {
+    "@bytecodealliance/preview2-shim": "^0.17.0"
+  },
   "devDependencies": {
     "@bytecodealliance/jco": "^1.11.1",
-    "@bytecodealliance/preview2-shim": "^0.17.0",
     "@types/node": "^26.1.2",
     "esbuild": "^0.28.1",
     "typescript": "^5.6.0"

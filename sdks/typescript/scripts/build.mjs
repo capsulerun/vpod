@@ -225,6 +225,31 @@ function transpile(componentPath) {
     }
 }
 
+
+function shareCoreModule() {
+    const shared = join(componentDir, "vpod.core.wasm");
+    const duplicate = join(nodeComponentDir, "vpod.core.wasm");
+
+    if (!readFileSync(shared).equals(readFileSync(duplicate))) {
+        console.log("[build] node core wasm differs from the browser one, keeping both");
+        return;
+    }
+
+    const loader = join(nodeComponentDir, "vpod.js");
+    const source = readFileSync(loader, "utf8");
+    const reference = "new URL('./vpod.core.wasm', import.meta.url)";
+
+    if (!source.includes(reference)) {
+        throw new Error(`cannot redirect the node core wasm: ${reference} not found in vpod.js`);
+    }
+
+    writeFileSync(
+        loader,
+        source.replace(reference, "new URL('../component/vpod.core.wasm', import.meta.url)"),
+    );
+    rmSync(duplicate);
+}
+
 function declarations() {
     const result = spawnSync(
         join(packageRoot, "node_modules", ".bin", "tsc"),
@@ -259,6 +284,7 @@ async function main() {
     mkdirSync(nodeComponentDir, { recursive: true });
     transpileForNode(componentPath);
     await bundleNode();
+    shareCoreModule();
 
     const manifest = {
         tier,
