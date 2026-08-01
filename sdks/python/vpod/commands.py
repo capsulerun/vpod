@@ -1,5 +1,5 @@
 from ._result import unwrap_result
-from .execution import CommandResult
+from .execution import CommandResult, normalize_line_endings
 
 
 class Commands:
@@ -16,7 +16,7 @@ class Commands:
         result = unwrap_result(exec(session_id, command, timeout))
 
         return CommandResult(
-            stdout=result.stdout,
-            stderr=result.stderr or "",
+            stdout=normalize_line_endings(result.stdout),
+            stderr=normalize_line_endings(result.stderr or ""),
             exit_code=getattr(result, "exit-code"),
         )

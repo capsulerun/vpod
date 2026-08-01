@@ -78,9 +78,17 @@ function headerValue(headers: [string, string][], name: string): string | undefi
     return undefined;
 }
 
+const REQUEST_HEADER_MAX_BYTES = 65536;
+
 export function parseRequest(bytes: Uint8Array): RequestResult {
     const headerEnd = findHeaderEnd(bytes);
     if (headerEnd === -1) {
+        if (bytes.length > REQUEST_HEADER_MAX_BYTES) {
+            return {
+                kind: "invalid",
+                reason: `no end of headers in ${bytes.length} bytes, this transport carries HTTP/1.x only`,
+            };
+        }
         return { kind: "incomplete" };
     }
 

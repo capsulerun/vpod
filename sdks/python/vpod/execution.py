@@ -2,6 +2,15 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+def normalize_line_endings(value: str) -> str:
+    return value.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def split_lines(value: str) -> list[str]:
+    trimmed = normalize_line_endings(value).strip()
+    return trimmed.split("\n") if trimmed else []
+
+
 @dataclass
 class CommandResult:
     stdout: str

@@ -62,6 +62,16 @@ describe("request parsing", () => {
         assert.equal(text(complete.request.body), "abcde");
     });
 
+    it("gives up on bytes that never become HTTP instead of buffering them", () => {
+        const notHttp = new Uint8Array(70000).fill(0x16);
+
+        const result = parseRequest(notHttp);
+        assert.equal(result.kind, "invalid");
+        assert.match(result.reason, /HTTP\/1\.x only/);
+
+        assert.equal(parseRequest(notHttp.subarray(0, 60000)).kind, "incomplete");
+    });
+
     it("reassembles a chunked body", () => {
         const wire = "POST /u HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n3\r\n hi\r\n0\r\n\r\n";
         const result = parseRequest(bytes(wire));

@@ -70,6 +70,28 @@ describe("parseCodeOutput", () => {
         assert.equal(execution.error, "exited 3");
     });
 
+    it("does not quote ordinary output as the reason a run failed", () => {
+        const execution = parseCodeOutput("saving to disk\ndone\n", "", 3);
+        assert.equal(execution.success, false);
+        assert.equal(execution.error, "exited 3");
+        assert.deepEqual(execution.logs, ["saving to disk", "done"]);
+    });
+
+    it("quotes the exception when stdout carries a traceback", () => {
+        const execution = parseCodeOutput(
+            'before\nTraceback (most recent call last):\n  File "<vpod>", line 1\nValueError: boom',
+            "",
+            1,
+        );
+        assert.equal(execution.error, "ValueError: boom");
+    });
+
+    it("normalises the carriage returns the guest sends", () => {
+        const execution = parseCodeOutput("a\r\nb\r\n");
+        assert.equal(execution.text, "a\nb");
+        assert.deepEqual(execution.logs, ["a", "b"]);
+    });
+
     it("trusts the exit code over anything the program printed", () => {
         for (const output of [
             "Error handling is hard",

@@ -47,10 +47,9 @@ export function parseCodeOutput(stdout: string, stderr = "", exitCode = 0): Code
         return new CodeExecution(text, null, logs);
     }
 
-    const fromStderr = splitLines(stderr);
-    const spoken = (fromStderr.length > 0 ? fromStderr : logs).filter(
-        (line) => line.trim() !== "",
-    );
+    const said = (lines: string[]) => lines.filter((line) => line.trim() !== "");
+    const spoken = said(splitLines(stderr));
+    const chosen = spoken.length > 0 ? spoken : text.includes("Traceback (most recent call last):") ? said(logs) : [];
 
-    return new CodeExecution(text, spoken[spoken.length - 1] ?? `exited ${exitCode}`, logs);
+    return new CodeExecution(text, chosen[chosen.length - 1] ?? `exited ${exitCode}`, logs);
 }
