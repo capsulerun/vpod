@@ -8,6 +8,7 @@ import { SandboxRuntime, type SandboxRuntimeOptions } from "./runtime.js";
 import { InstanceStore, type SuspendedInstance } from "./instances.js";
 import type { NetworkCapabilities } from "./net/capabilities.js";
 import { networkAvailability } from "./net/availability.js";
+import { createDefaultTransport } from "./transport/default.js";
 
 const DEFAULT_SHELL = "/bin/sh";
 const DEFAULT_PROMPT = "# ";
@@ -90,6 +91,15 @@ export class Sandbox {
         this.code = new Code(this);
     }
 
+    static async #withTransport(options: SandboxOptions): Promise<SandboxOptions> {
+        if (options.transport !== undefined) {
+            return options;
+        }
+
+        const transport = await createDefaultTransport();
+        return transport === undefined ? options : { ...options, transport };
+    }
+
     static async #mount(
         runtime: SandboxRuntime,
         snapshot: SnapshotSource,
@@ -137,7 +147,7 @@ export class Sandbox {
     }
 
     static async create(options: SandboxOptions = {}): Promise<Sandbox> {
-        const runtime = new SandboxRuntime(options);
+        const runtime = new SandboxRuntime(await Sandbox.#withTransport(options));
         await runtime.ready();
 
         await Sandbox.#connectNetwork(runtime, options.network);
@@ -199,7 +209,7 @@ export class Sandbox {
                 ? await (await InstanceStore.open()).load(instance)
                 : instance;
 
-        const runtime = new SandboxRuntime(options);
+        const runtime = new SandboxRuntime(await Sandbox.#withTransport(options));
         await runtime.ready();
 
         await Sandbox.#connectNetwork(runtime, options.network);

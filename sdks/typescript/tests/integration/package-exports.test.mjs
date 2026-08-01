@@ -40,15 +40,25 @@ describe("package exports", { skip: distMissing ? "dist/ is missing: run npm run
         }
     });
 
-    function probe(source) {
+    function probe(source, nodeArguments = []) {
         const script = join(workspace, `probe-${Math.random().toString(36).slice(2)}.mjs`);
         writeFileSync(script, source);
-        const output = execFileSync(process.execPath, [script], {
+        const output = execFileSync(process.execPath, [...nodeArguments, script], {
             cwd: workspace,
             encoding: "utf8",
         });
         return JSON.parse(output);
     }
+
+    const resolveBare = `
+        const specifier = "@capsule-run/vpod";
+        const module = await import(specifier);
+        console.log(JSON.stringify({
+            url: import.meta.resolve(specifier),
+            exports: Object.keys(module).sort(),
+            sandboxIsConstructor: typeof module.Sandbox === "function",
+        }));
+    `;
 
     it("resolves the node subpath to the Node build", () => {
         const result = probe(`
@@ -72,21 +82,30 @@ describe("package exports", { skip: distMissing ? "dist/ is missing: run npm run
         }
     });
 
-    it("leaves the bare specifier on the browser build", () => {
-        const result = probe(`
-            const specifier = "@capsule-run/vpod";
-            const module = await import(specifier);
-            console.log(JSON.stringify({
-                url: import.meta.resolve(specifier),
-                exports: Object.keys(module).sort(),
-            }));
-        `);
+
+    it("resolves the bare specifier to the Node build under Node", () => {
+        const result = probe(resolveBare);
+
+        assert.match(result.url, /dist\/node\/index\.js$/);
+        assert.ok(result.exports.includes("createNodeTransport"));
+    });
+
+    it("resolves the bare specifier to the browser build under a browser condition", () => {
+        const result = probe(resolveBare, ["--conditions=browser"]);
 
         assert.match(result.url, /dist\/index\.js$/);
-        assert.ok(result.exports.includes("Sandbox"));
         assert.ok(
             !result.exports.includes("createNodeTransport"),
             "the browser entry is leaking the Node transport",
+        );
+    });
+
+    it("exports Sandbox as a constructor on both targets", () => {
+        assert.equal(probe(resolveBare).sandboxIsConstructor, true, "Node");
+        assert.equal(
+            probe(resolveBare, ["--conditions=browser"]).sandboxIsConstructor,
+            true,
+            "browser",
         );
     });
 
