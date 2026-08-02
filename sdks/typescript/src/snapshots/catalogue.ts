@@ -1,11 +1,16 @@
+import { registryCacheKey, resolveRegistryUrl } from "./registry.js";
 import type { SnapshotStorage } from "./store.js";
 import type { Catalogue, SnapshotEntry } from "./types.js";
 
-export const DEFAULT_REGISTRY_URL = "https://registry.vpod.sh/v1/snapshots.json";
+export { DEFAULT_REGISTRY_URL } from "./registry.js";
 
-const CATALOGUE_FILE = "catalogue.json";
-const CATALOGUE_FETCHED_AT_FILE = "catalogue.fetched-at";
 const DEFAULT_TTL_SECONDS = 86_400;
+
+const catalogueFile = (registryUrl: string): string =>
+    `catalogue-${registryCacheKey(registryUrl)}.json`;
+
+const catalogueFetchedAtFile = (registryUrl: string): string =>
+    `catalogue-${registryCacheKey(registryUrl)}.fetched-at`;
 
 export interface CatalogueOptions {
     registryUrl?: string;
@@ -17,11 +22,11 @@ export async function fetchCatalogue(
     store: SnapshotStorage | null,
     options: CatalogueOptions = {},
 ): Promise<Catalogue> {
-    const registryUrl = options.registryUrl ?? DEFAULT_REGISTRY_URL;
+    const registryUrl = resolveRegistryUrl(options.registryUrl);
     const ttlSeconds = options.ttlSeconds ?? DEFAULT_TTL_SECONDS;
 
     if (store !== null && options.force !== true) {
-        const cached = await readCachedCatalogue(store, ttlSeconds);
+        const cached = await readCachedCatalogue(store, registryUrl, ttlSeconds);
         if (cached !== null) {
             return cached;
         }
@@ -31,7 +36,8 @@ export async function fetchCatalogue(
     try {
         response = await fetch(registryUrl);
     } catch (thrown: unknown) {
-        const stale = store === null ? null : await readCachedCatalogue(store, Infinity);
+        const stale =
+            store === null ? null : await readCachedCatalogue(store, registryUrl, Infinity);
 
         if (stale !== null) {
             return stale;
@@ -53,8 +59,8 @@ export async function fetchCatalogue(
     const catalogue = (await response.json()) as Catalogue;
 
     if (store !== null) {
-        await store.writeText(CATALOGUE_FILE, JSON.stringify(catalogue));
-        await store.writeText(CATALOGUE_FETCHED_AT_FILE, String(Date.now()));
+        await store.writeText(catalogueFile(registryUrl), JSON.stringify(catalogue));
+        await store.writeText(catalogueFetchedAtFile(registryUrl), String(Date.now()));
     }
 
     return catalogue;
@@ -62,15 +68,16 @@ export async function fetchCatalogue(
 
 async function readCachedCatalogue(
     store: SnapshotStorage,
+    registryUrl: string,
     ttlSeconds: number,
 ): Promise<Catalogue | null> {
-    const text = await store.readText(CATALOGUE_FILE);
+    const text = await store.readText(catalogueFile(registryUrl));
     if (text === null) {
         return null;
     }
 
     if (ttlSeconds !== Infinity) {
-        const fetchedAt = Number(await store.readText(CATALOGUE_FETCHED_AT_FILE));
+        const fetchedAt = Number(await store.readText(catalogueFetchedAtFile(registryUrl)));
         if (!Number.isFinite(fetchedAt)) {
             return null;
         }
@@ -89,6 +96,7 @@ async function readCachedCatalogue(
 export function resolveSnapshot(
     snapshots: SnapshotEntry[],
     name: string,
+    registryUrl?: string,
 ): SnapshotEntry {
     const separator = name.indexOf(":");
     const wantedName = separator === -1 ? name : name.slice(0, separator);
@@ -102,6 +110,9 @@ export function resolveSnapshot(
         }
     }
 
-    const available = snapshots.map((s) => `${s.name}:${s.tag}`).join(", ");
-    throw new Error(`vpod: snapshot '${name}' not found. Available: ${available}`);
+    const available = snapshots.map((s) => `${s.name}:${s.tag}`).join(", ") || "nothing";
+    const searched = registryUrl === undefined ? "" : ` in ${registryUrl}`;
+    throw new Error(
+        `vpod: snapshot '${name}' not found${searched}. Available: ${available}`,
+    );
 }

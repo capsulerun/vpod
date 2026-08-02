@@ -1,9 +1,11 @@
 import { fetchCatalogue, resolveSnapshot } from "./catalogue.js";
+import { resolveRegistryUrl } from "./registry.js";
 import { SnapshotStore } from "./store.js";
 import type { CatalogueOptions } from "./catalogue.js";
 import type { SnapshotEntry } from "./types.js";
 
 export { DEFAULT_REGISTRY_URL, fetchCatalogue, resolveSnapshot } from "./catalogue.js";
+export { resolveRegistryUrl } from "./registry.js";
 export { pullSnapshot, evictById } from "./pull.js";
 export { SnapshotStore } from "./store.js";
 export type { Catalogue, SnapshotEntry, PulledSnapshot, SnapshotSource } from "./types.js";
@@ -20,5 +22,9 @@ export async function resolve(
     name: string,
     options: CatalogueOptions = {},
 ): Promise<SnapshotEntry> {
-    return resolveSnapshot(await catalog(options), name);
+    return resolveSnapshot(
+        await catalog(options),
+        name,
+        resolveRegistryUrl(options.registryUrl),
+    );
 }

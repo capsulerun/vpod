@@ -1,3 +1,4 @@
+import { resolveRegistryUrl } from "./registry.js";
 import { fetchCatalogue, resolveSnapshot, type CatalogueOptions } from "./catalogue.js";
 import { sha256Hex } from "./digest.js";
 import { SnapshotStore, type SnapshotStorage } from "./store.js";
@@ -19,7 +20,11 @@ export async function pullSnapshot(options: PullOptions = {}): Promise<PulledSna
               : null;
 
     const catalogue = await fetchCatalogue(store, options);
-    const entry = resolveSnapshot(catalogue.snapshots, name);
+    const entry = resolveSnapshot(
+        catalogue.snapshots,
+        name,
+        resolveRegistryUrl(options.registryUrl),
+    );
 
     if (store !== null) {
         const cached = await readVerifiedFromStore(store, entry);
