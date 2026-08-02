@@ -64,6 +64,14 @@ describe("parseCodeOutput", () => {
         assert.deepEqual(execution.logs, ["fine"], "logs come from stdout only");
     });
 
+    it("keeps stderr reachable on a run that succeeded", () => {
+        const execution = parseCodeOutput("out\r\n", "careful\r\n", 0);
+        assert.equal(execution.success, true);
+        assert.equal(execution.text, "out");
+        assert.equal(execution.stderr, "careful");
+        assert.deepEqual(execution.logs, ["out"]);
+    });
+
     it("still says something when a failing run printed nothing", () => {
         const execution = parseCodeOutput("", "", 3);
         assert.equal(execution.success, false);
@@ -92,6 +100,7 @@ describe("parseCodeOutput", () => {
         assert.deepEqual(execution.logs, ["a", "b"]);
     });
 
+
     it("trusts the exit code over anything the program printed", () => {
         for (const output of [
             "Error handling is hard",
@@ -112,7 +121,11 @@ describe("parseCodeOutput", () => {
         assert.equal(execution.text, "one\ntwo");
     });
 
-    it("absorbs a lone carriage return", () => {
-        assert.deepEqual(parseCodeOutput("one\rtwo").logs, ["one", "two"]);
+    // This used to assert the opposite, from the SDK's first commit and never
+    // revisited. A lone \r is a program redrawing its line, not a line ending:
+    // splitting on it reported lines the guest never printed.
+    it("keeps a lone carriage return, which redraws a line rather than ending one", () => {
+        assert.deepEqual(parseCodeOutput("one\rtwo").logs, ["one\rtwo"]);
+        assert.deepEqual(parseCodeOutput("50%\r100%\r\ndone\r\n").logs, ["50%\r100%", "done"]);
     });
 });

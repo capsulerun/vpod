@@ -89,7 +89,7 @@ describe("commands", { skip: skipReason() ?? false }, () => {
         });
     });
 
-    it("prefixes continuation prompts when input spans several lines", async () => {
+    it("returns only the output when input spans several lines", async () => {
         await withSandbox(async (sandbox) => {
             const result = await sandbox.commands.run(
                 ["total=0", "for n in 1 2 3; do", "  total=$((total + n))", "done", "echo $total"].join(
@@ -97,11 +97,8 @@ describe("commands", { skip: skipReason() ?? false }, () => {
                 ),
             );
 
-            // The guest echoes the shell's secondary prompt for each continued
-            // line, so stdout is "> > > > 6" rather than "6". Pinned because it
-            // surprises callers who split multiline input.
-            assert.match(result.stdout, /6\s*$/);
-            assert.match(result.stdout, /^> /);
+            assert.equal(result.stdout.trim(), "6");
+            assert.doesNotMatch(result.stdout, /^>/);
         });
     });
 
@@ -122,8 +119,6 @@ describe("commands", { skip: skipReason() ?? false }, () => {
         });
     });
 
-    // `exit` ends the shell the session is built on. Observing what happens
-    // afterwards costs more than half a minute, so it lives in tests/slow.
     it("reports the exit code of a bare exit", async () => {
         await withSandbox(async (sandbox) => {
             assert.equal((await sandbox.commands.run("exit 3")).exitCode, 3);

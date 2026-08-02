@@ -39,7 +39,7 @@ pub fn shell_init(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     bus.uart.drain_tx();
 
     let init_cmd = format!(
-        "__ec() {{ printf \"\\x$(printf %02x $1)\" >/dev/ttyS2; }}; export PS1='$(__ec $?){}'; trap '__ec $?' EXIT\n",
+        "__ec() {{ printf \"\\x$(printf %02x $1)\" >/dev/ttyS2; }}; export PS2=''; export PS1='$(__ec $?){}'; trap '__ec $?' EXIT\n",
         String::from_utf8_lossy(prompt)
     );
     for byte in init_cmd.bytes() {

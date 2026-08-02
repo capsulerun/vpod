@@ -62,11 +62,12 @@ export class Code {
         const result = await this.#sandbox._exec(PYTHON_PREFIX + code, timeout);
 
         if (result.exitCode === TIMEOUT_EXIT_CODE) {
-            const timedOut = parseCodeOutput(result.stdout);
+            const timedOut = parseCodeOutput(result.stdout, result.stderr ?? "");
             return new CodeExecution(
                 timedOut.text,
                 `Timed out after ${timeout}s`,
                 timedOut.logs,
+                timedOut.stderr,
             );
         }
 

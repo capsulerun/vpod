@@ -27,11 +27,12 @@ class Code:
         exit_code = getattr(result, "exit-code", 0)
 
         if exit_code == 124:
-            timed_out = self._parse_output(output)
+            timed_out = self._parse_output(output, stderr)
             return CodeExecution(
                 text=timed_out.text,
                 error=f"Timed out after {timeout}s",
                 logs=timed_out.logs,
+                stderr=timed_out.stderr,
             )
 
         return self._parse_output(output, stderr, exit_code)
@@ -42,9 +43,10 @@ class Code:
     def _parse_output(self, raw: str, stderr: str = "", exit_code: int = 0) -> CodeExecution:
         logs = split_lines(raw)
         text = "\n".join(logs)
+        diagnostics = normalize_line_endings(stderr).strip()
 
         if exit_code == 0:
-            return CodeExecution(text=text, logs=logs)
+            return CodeExecution(text=text, logs=logs, stderr=diagnostics)
 
         spoken = [l for l in split_lines(stderr) if l.strip()]
         if not spoken and "Traceback (most recent call last):" in text:
@@ -54,4 +56,5 @@ class Code:
             text=text,
             error=spoken[-1] if spoken else f"exited {exit_code}",
             logs=logs,
+            stderr=diagnostics,
         )

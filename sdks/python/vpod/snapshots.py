@@ -3,6 +3,7 @@ import json
 import shutil
 import ssl
 import os
+import sys
 import time
 import urllib.request
 from pathlib import Path
@@ -66,35 +67,52 @@ def pull(name: str = "vsnap-base:latest") -> Path:
 
 def _prune_stale_snapshots(registry: list[dict]) -> None:
     known_ids = {snapshot["id"] for snapshot in registry}
-    referenced_by_instances = _snapshots_referenced_by_instances()
+    referenced_by_instances, references_are_complete = _snapshots_referenced_by_instances()
 
-    for snap_file in list(cache_dir().glob("*.snap")) + list(cache_dir().glob("*.raw")):
-        if snap_file.stem in referenced_by_instances:
-            continue
-        if snap_file.stem not in known_ids:
+    if references_are_complete:
+        for snap_file in list(cache_dir().glob("*.snap")) + list(cache_dir().glob("*.raw")):
+            if snap_file.stem in referenced_by_instances or snap_file.stem in known_ids:
+                continue
+
+            meta_file = snap_file.with_suffix(".meta")
+            if not meta_file.exists():
+                continue
+
+            print(
+                f"vpod: removing {snap_file.name}, which we downloaded and the "
+                f"registry no longer lists",
+                file=sys.stderr,
+            )
             snap_file.unlink(missing_ok=True)
-            snap_file.with_suffix(".meta").unlink(missing_ok=True)
+            meta_file.unlink(missing_ok=True)
 
     for leftover in list(cache_dir().glob("*.tmp")) + list(cache_dir().glob("*.tmp.dl")):
         leftover.unlink(missing_ok=True)
 
 
-def _snapshots_referenced_by_instances() -> set[str]:
-    referenced = set()
+def _snapshots_referenced_by_instances() -> tuple[set[str], bool]:
+    """Snapshots a suspended instance still needs, and whether we read them all."""
+    referenced: set[str] = set()
     instances_dir = Path.home() / ".vpod" / "instances"
     if not instances_dir.exists():
-        return referenced
+        return referenced, True
 
+    complete = True
     for meta_file in instances_dir.glob("*/meta.json"):
         try:
             meta = json.loads(meta_file.read_text())
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as unreadable:
+            print(
+                f"vpod: cannot read {meta_file}, skipping snapshot cleanup: {unreadable}",
+                file=sys.stderr,
+            )
+            complete = False
             continue
         snapshot_name = meta.get("snapshot", "").removeprefix("snap/")
         if snapshot_name.endswith(".snap"):
             referenced.add(snapshot_name.removesuffix(".snap"))
 
-    return referenced
+    return referenced, complete
 
 
 _REGISTRY_TTL = 86400

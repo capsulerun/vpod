@@ -89,6 +89,14 @@ def test_session_code_quotes_the_exception_when_one_was_raised():
         assert result.error == "ValueError: boom"
 
 
+def test_session_code_stderr_is_reachable_on_success():
+    with Sandbox.create() as sbx:
+        result = sbx.code.run("import sys\nprint('out')\nsys.stderr.write('careful\\n')")
+        assert result.success
+        assert "out" in result.logs
+        assert "careful" in result.stderr or "careful" in result.text
+
+
 def test_session_code_text_has_no_carriage_returns():
     with Sandbox.create() as sbx:
         result = sbx.code.run("print('a')\nprint('b')")

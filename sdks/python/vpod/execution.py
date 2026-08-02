@@ -3,7 +3,7 @@ from typing import Optional
 
 
 def normalize_line_endings(value: str) -> str:
-    return value.replace("\r\n", "\n").replace("\r", "\n")
+    return value.replace("\r\n", "\n")
 
 
 def split_lines(value: str) -> list[str]:
@@ -27,6 +27,7 @@ class CodeExecution:
     text: str
     error: Optional[str] = None
     logs: list[str] = field(default_factory=list)
+    stderr: str = ""
 
     @property
     def success(self) -> bool:
