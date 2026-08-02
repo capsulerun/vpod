@@ -160,7 +160,11 @@ async function bundle() {
 
 async function bundleNode() {
     await esbuild.build({
-        entryPoints: ["src/node/index.ts", "src/node/worker-entry.ts"],
+        entryPoints: [
+            "src/node/index.ts",
+            "src/node/worker-entry.ts",
+            "src/node/host-resolver.ts",
+        ],
         absWorkingDir: packageRoot,
         outdir: "dist/node",
         outbase: "src/node",
@@ -185,6 +189,8 @@ function transpileForNode(componentPath) {
             "--name",
             "vpod",
             "--quiet",
+            "--map",
+            "wasi:sockets/ip-name-lookup=../node/host-resolver.js#ipNameLookup",
         ],
         { stdio: "inherit", cwd: packageRoot },
     );
