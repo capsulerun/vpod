@@ -34,12 +34,53 @@ function concat(left: Uint8Array, right: Uint8Array): Uint8Array {
     return joined;
 }
 
+function corsIsEnforced(): boolean {
+    const global = globalThis as { window?: unknown; WorkerGlobalScope?: unknown };
+    return global.window !== undefined || global.WorkerGlobalScope !== undefined;
+}
+
+function describeFetchFailure(
+    thrown: unknown,
+    host: string,
+    timeoutMilliseconds: number,
+): { statusText: string; detail: string } {
+    const reason = thrown instanceof Error ? thrown.message : String(thrown);
+
+    if (thrown instanceof Error && thrown.name === "AbortError") {
+        const seconds = Math.round(timeoutMilliseconds / 1000);
+        return { statusText: "Upstream Timeout", detail: `timed out after ${seconds}s` };
+    }
+
+    if (thrown instanceof TypeError && corsIsEnforced()) {
+        return {
+            statusText: "Blocked by browser CORS policy",
+            detail:
+                `${reason}. The browser blocked this before vpod saw a response, most ` +
+                `likely because ${host} sends no access-control-allow-origin header. In a ` +
+                `browser every request the guest makes goes out as a fetch, so a host that ` +
+                `does not opt in is unreachable. The same request works under Node, which ` +
+                `uses real sockets and does not enforce CORS.`,
+        };
+    }
+
+    return { statusText: "Bad Gateway", detail: reason };
+}
+
 export class FetchDriver {
     readonly #connections = new Map<number, Connection>();
     readonly #options: DriverOptions;
+    readonly #warnedHosts = new Set<string>();
 
     constructor(options: DriverOptions = {}) {
         this.#options = options;
+    }
+
+    #warnOnce(host: string, message: string): void {
+        if (this.#warnedHosts.has(host)) {
+            return;
+        }
+        this.#warnedHosts.add(host);
+        console.warn(message);
     }
 
     handle(command: DriverCommand): void {
@@ -158,10 +199,9 @@ export class FetchDriver {
         const fetchable = toFetchable(request, host, port, secure);
 
         const abort = new AbortController();
-        const timeout = setTimeout(
-            () => abort.abort(),
-            this.#options.requestTimeoutMilliseconds ?? DEFAULT_REQUEST_TIMEOUT_MILLISECONDS,
-        );
+        const timeoutMilliseconds =
+            this.#options.requestTimeoutMilliseconds ?? DEFAULT_REQUEST_TIMEOUT_MILLISECONDS;
+        const timeout = setTimeout(() => abort.abort(), timeoutMilliseconds);
 
         try {
             const response = await fetch(fetchable.url, {
@@ -190,10 +230,12 @@ export class FetchDriver {
                 ),
             );
         } catch (thrown: unknown) {
-            const reason = thrown instanceof Error ? thrown.message : String(thrown);
+            const failure = describeFetchFailure(thrown, host, timeoutMilliseconds);
+            const message = `fetch to ${fetchable.url} failed: ${failure.detail}`;
+            this.#warnOnce(host, `vpod: ${message}`);
             await this.#writeAll(
                 connection,
-                serializeTransportError(`fetch to ${fetchable.url} failed: ${reason}`),
+                serializeTransportError(message, failure.statusText),
             );
             connection.writer.end();
         } finally {

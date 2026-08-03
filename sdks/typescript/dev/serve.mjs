@@ -48,6 +48,7 @@ export function startServer({
     port = 8791,
     isolate = false,
     snapshotDir,
+    home = "/dev/index.html",
     onResult,
 } = {}) {
     const snapshots = findSnapshotDirectory(snapshotDir);
@@ -105,7 +106,7 @@ export function startServer({
         }
 
         const versioned = path.match(/^\/b\/[^/]+(\/.*)$/);
-        const relativePath = versioned ? versioned[1] : path === "/" ? "/dev/index.html" : path;
+        const relativePath = versioned ? versioned[1] : path === "/" ? home : path;
         const filePath = join(packageRoot, normalize(relativePath).replace(/^(\.\.[/\\])+/, ""));
 
         if (!filePath.startsWith(packageRoot) || !existsSync(filePath)) {

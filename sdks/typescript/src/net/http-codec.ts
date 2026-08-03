@@ -322,7 +322,8 @@ function reasonFor(status: number): string {
     return REASONS.get(status) ?? "Unknown";
 }
 
-export function serializeTransportError(reason: string): Uint8Array {
+
+export function serializeTransportError(reason: string, statusText = "Bad Gateway"): Uint8Array {
     const body = encoder.encode(`vpod: ${reason}\n`);
-    return serializeResponse(502, "Bad Gateway", [["Content-Type", "text/plain"]], body, false);
+    return serializeResponse(502, statusText, [["Content-Type", "text/plain"]], body, false);
 }
