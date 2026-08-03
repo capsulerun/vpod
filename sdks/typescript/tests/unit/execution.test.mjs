@@ -121,9 +121,6 @@ describe("parseCodeOutput", () => {
         assert.equal(execution.text, "one\ntwo");
     });
 
-    // This used to assert the opposite, from the SDK's first commit and never
-    // revisited. A lone \r is a program redrawing its line, not a line ending:
-    // splitting on it reported lines the guest never printed.
     it("keeps a lone carriage return, which redraws a line rather than ending one", () => {
         assert.deepEqual(parseCodeOutput("one\rtwo").logs, ["one\rtwo"]);
         assert.deepEqual(parseCodeOutput("50%\r100%\r\ndone\r\n").logs, ["50%\r100%", "done"]);

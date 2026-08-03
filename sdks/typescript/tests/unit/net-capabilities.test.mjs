@@ -40,7 +40,6 @@ describe("network capabilities", () => {
         const fetchBackend = capabilitiesOf("fetch");
         const sockets = capabilitiesOf("sockets");
 
-        // Pinned so a future backend cannot quietly claim parity it lacks.
         assert.notEqual(fetchBackend.rawTcp, sockets.rawTcp);
         assert.notEqual(fetchBackend.corsRestricted, sockets.corsRestricted);
         assert.notEqual(fetchBackend.byteFaithfulHeaders, sockets.byteFaithfulHeaders);

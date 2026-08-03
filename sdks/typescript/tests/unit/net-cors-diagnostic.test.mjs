@@ -79,7 +79,6 @@ describe("browser fetch failures", () => {
                 new TypeError("Failed to fetch"),
             );
 
-            // busybox wget prints the status line and nothing else, so the
             // reason phrase has to carry the point on its own.
             assert.match(wire, /^HTTP\/1\.1 502 Blocked by browser CORS policy/);
             assert.match(wire, /access-control-allow-origin/);

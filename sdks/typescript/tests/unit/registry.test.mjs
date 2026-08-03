@@ -46,8 +46,6 @@ describe("resolveSnapshot error", () => {
     const listed = [{ id: "vsnap-base-256mb", name: "vsnap-base", tag: "1.0.0" }];
     const escaped = DEFAULT_REGISTRY_URL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-    // The failure a partner hits when their registryUrl did not take effect:
-    // a plausible list of the wrong catalogue's contents.
     it("names the registry it searched", () => {
         assert.throws(
             () => resolveSnapshot(listed, "vsnap-nextjs", DEFAULT_REGISTRY_URL),

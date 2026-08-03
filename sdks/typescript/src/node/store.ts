@@ -4,9 +4,9 @@
 
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 
-import type { SnapshotStorage } from "../snapshots/store.js";
+import type { CachedFile, SnapshotStorage } from "../snapshots/store.js";
 
 export function defaultCacheDirectory(): string {
     const override = process.env.VPOD_CACHE_DIR;
@@ -72,5 +72,27 @@ export class FileSnapshotStore implements SnapshotStorage {
 
     async remove(name: string): Promise<void> {
         await rm(this.pathFor(name), { force: true });
+    }
+
+    async list(): Promise<CachedFile[]> {
+        let names: string[];
+        try {
+            names = await readdir(this.directory);
+        } catch {
+            return [];
+        }
+
+        const files: CachedFile[] = [];
+        for (const name of names) {
+            try {
+                const entry = await stat(this.pathFor(name));
+                if (entry.isFile()) {
+                    files.push({ name, byteLength: entry.size });
+                }
+            } catch {
+                // Removed between the listing and the stat.
+            }
+        }
+        return files;
     }
 }

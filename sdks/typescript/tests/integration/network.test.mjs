@@ -98,8 +98,6 @@ describe("network transport, end to end through the emulator", { skip: reason ??
     let respond = (host) => ({ status: 200, body: `hello from ${host}\n` });
 
     before(async () => {
-        // Before the component loads: the emulator reads this once, when it
-        // builds the machine.
         cli._setEnv({ VPOD_HOST_TLS: "1" });
 
         const { Sandbox, createInlineTransport } = await loadSdk();
@@ -148,9 +146,6 @@ describe("network transport, end to end through the emulator", { skip: reason ??
     });
 
     it("closes the connection, so a pipe reading it sees end-of-input", async () => {
-        // The direct form already passes above. This is the same request with a
-        // reader that only finishes on EOF: if the guest is never sent a FIN,
-        // `head` waits forever and the command dies on its deadline.
         const result = await sandbox.commands.run(
             "wget -q -O- https://example.test/piped | head -c 200; echo rc=$?",
             { timeout: 45 },
@@ -186,10 +181,6 @@ describe("network transport, end to end through the emulator", { skip: reason ??
     });
 
     it("closes a refused connection, which the guest never reads the body of", async () => {
-        // wget aborts on a non-2xx status without reading the body, so bytes
-        // stay buffered on our side. If end-of-stream is gated on the guest
-        // having drained them, the connection is never closed and the pipe
-        // hangs. This is the browser's non-CORS case, reproduced offline.
         respond = () => ({
             status: 502,
             body: "vpod: refused by the transport\n",

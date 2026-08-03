@@ -40,8 +40,6 @@ describe("shared ring", () => {
         const writer = new RingWriter(ring);
         const reader = new RingReader(ring);
 
-        // Push far more than the capacity through, a few bytes at a time, so
-        // the cursors wrap many times over.
         let sent = "";
         let received = "";
         for (let round = 0; round < 200; round++) {

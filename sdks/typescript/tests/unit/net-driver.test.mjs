@@ -236,8 +236,6 @@ describe("fetch driver", () => {
         stubFetch(() => new Response(wheel));
 
         const driver = new FetchDriver();
-        // Deliberately smaller than the body, so the writer has to wait for the
-        // reader to drain before it can finish.
         const connection = connect(driver, 1, 1 << 12);
 
         connection.send("VPOD-CONNECT files.pythonhosted.org 443\n");

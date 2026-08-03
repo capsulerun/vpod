@@ -27,8 +27,13 @@ interface DirectoryHandle {
         options?: { create?: boolean },
     ): Promise<DirectoryHandle>;
     removeEntry(name: string, options?: { recursive?: boolean }): Promise<void>;
+    entries?(): AsyncIterableIterator<[string, FileHandle]>;
 }
 
+export interface CachedFile {
+    name: string;
+    byteLength: number;
+}
 
 export interface SnapshotStorage {
     readonly kind: "opfs" | "disk";
@@ -37,6 +42,24 @@ export interface SnapshotStorage {
     readText(name: string): Promise<string | null>;
     writeText(name: string, text: string): Promise<void>;
     remove(name: string): Promise<void>;
+    list(): Promise<CachedFile[]>;
+}
+
+async function sizeOf(handle: FileHandle): Promise<number> {
+    if (handle.getFile !== undefined) {
+        return (await handle.getFile()).size;
+    }
+
+    if (handle.createSyncAccessHandle !== undefined) {
+        const open = await handle.createSyncAccessHandle();
+        try {
+            return open.getSize();
+        } finally {
+            open.close();
+        }
+    }
+
+    return 0;
 }
 
 export class SnapshotStore implements SnapshotStorage {
@@ -130,9 +153,33 @@ export class SnapshotStore implements SnapshotStorage {
         }
     }
 
-    /**
-     * Browser storage quota.
-     */
+    async list(): Promise<CachedFile[]> {
+        const entries = this.#directory.entries;
+        if (entries === undefined) {
+            return [];
+        }
+
+        const files: CachedFile[] = [];
+        for await (const [name, handle] of entries.call(this.#directory)) {
+            files.push({ name, byteLength: await sizeOf(handle) });
+        }
+        return files;
+    }
+
+    static async persist(): Promise<boolean> {
+        if (navigator.storage?.persist === undefined) {
+            return false;
+        }
+        return navigator.storage.persist();
+    }
+
+    static async persisted(): Promise<boolean> {
+        if (navigator.storage?.persisted === undefined) {
+            return false;
+        }
+        return navigator.storage.persisted();
+    }
+
     static async quota(): Promise<{ usage: number; quota: number } | null> {
         if (navigator.storage?.estimate === undefined) {
             return null;
