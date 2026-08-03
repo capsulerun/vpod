@@ -1,9 +1,9 @@
-import { assetUrl, setAssetBaseUrlIfUnset } from "../asset-base.js";
+import { assetUrl, directoryOf, setAssetBaseUrlIfUnset } from "../asset-base.js";
 import type { WorkerCall } from "../worker/protocol.js";
 import type { ExecutorTransport } from "./types.js";
 
 // Set here as well as in index.ts so `vpod/inline` works when imported directly.
-setAssetBaseUrlIfUnset(new URL("../", import.meta.url));
+setAssetBaseUrlIfUnset(directoryOf(import.meta.url, "../"));
 
 export interface InlineTransportOptions {
     componentUrl?: string | URL;

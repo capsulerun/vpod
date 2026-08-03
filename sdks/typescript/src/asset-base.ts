@@ -1,5 +1,10 @@
 let assetBaseUrl: string | null = null;
 
+export function directoryOf(moduleUrl: string, relativePath: string): URL {
+    const base: string = moduleUrl;
+    return new URL(relativePath, base);
+}
+
 export function setAssetBaseUrl(url: string | URL): void {
     assetBaseUrl = String(url);
 }

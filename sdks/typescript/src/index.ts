@@ -1,6 +1,6 @@
-import { setAssetBaseUrl } from "./asset-base.js";
+import { directoryOf, setAssetBaseUrl } from "./asset-base.js";
 
-setAssetBaseUrl(new URL("./", import.meta.url));
+setAssetBaseUrl(directoryOf(import.meta.url, "./"));
 
 export { Sandbox, Commands, Code } from "./sandbox.js";
 export type { SandboxOptions, RunOptions, SnapshotSource } from "./sandbox.js";

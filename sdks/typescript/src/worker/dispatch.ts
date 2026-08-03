@@ -51,7 +51,9 @@ export class Dispatcher {
 
     async load(componentUrl: string): Promise<number> {
         const startedAt = performance.now();
-        const module = (await import(/* @vite-ignore */ componentUrl)) as {
+        const module = (await import(
+            /* @vite-ignore */ /* webpackIgnore: true */ componentUrl
+        )) as {
             executor: Executor;
         };
         this.#executor = module.executor;
