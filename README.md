@@ -58,10 +58,6 @@ import { Sandbox } from "@capsule-run/vpod";
 
 const sandbox = await Sandbox.create();
 
-// Run a command
-const whoami = await sandbox.commands.run("whoami");
-console.log(whoami.stdout); // root
-
 // State is preserved across calls
 await sandbox.commands.run("export API_KEY=secret");
 const key = await sandbox.commands.run("echo $API_KEY");
@@ -76,6 +72,9 @@ await sandbox.close();
 ```
 
 The same package runs in a browser tab, where the snapshot is cached in origin-private storage rather than on disk.
+
+> [!IMPORTANT]
+> The first call to `Sandbox.create()` downloads the default snapshot (`alpine`) and caches it locally if not already present.
 
 ### Python SDK
 
@@ -105,9 +104,6 @@ with Sandbox.create() as sandbox:
     result = sandbox.code.run("print(sum(data))")
     print(result.text)  # 6
 ```
-
-> [!IMPORTANT]
-> The first call to `Sandbox.create()` downloads the default snapshot (`alpine`) and caches it locally if not already present.
 
 ### CLI
 
