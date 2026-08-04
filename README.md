@@ -8,7 +8,7 @@
   <a href="https://riscv.org/specifications/ratified/"><img src="https://img.shields.io/badge/RISCV-RV64GC-orange?logo=RISCV" alt="Risc-V"></a>
   <a href="https://wasi.dev/"><img src="https://img.shields.io/badge/Wasm%2FWASI-0.2.0-654FF0?logo=webassembly&logoColor=white" alt="Wasm/WASI 0.2 Sandbox"></a>
 
-[Getting Started](#getting-started) • [Documentation](https://docs.vpod.sh/quickstart) • [Issues](https://github.com/capsulerun/vpod/issues/new) • [Contributing](#contributing)
+[Live demo](https://browser.vpod.sh) • [Getting Started](#getting-started) • [Documentation](https://docs.vpod.sh/quickstart) • [Issues](https://github.com/capsulerun/vpod/issues/new) • [Contributing](#contributing)
 
 ![demo](assets/demo.gif)
 </div>
@@ -47,6 +47,35 @@ Reduces code size by 30%, improving instruction fetch speed and memory efficienc
 
 ## Getting started
 
+### TypeScript SDK
+
+```bash
+npm install @capsule-run/vpod
+```
+
+```ts
+import { Sandbox } from "@capsule-run/vpod";
+
+const sandbox = await Sandbox.create();
+
+// State is preserved across calls
+await sandbox.commands.run("export API_KEY=secret");
+const key = await sandbox.commands.run("echo $API_KEY");
+console.log(key.stdout); // secret
+
+// Python REPL — variables persist
+await sandbox.code.run("data = [1, 2, 3]");
+const total = await sandbox.code.run("print(sum(data))");
+console.log(total.text); // 6
+
+await sandbox.close();
+```
+
+The same package runs in a browser tab, where the snapshot is cached in origin-private storage rather than on disk.
+
+> [!IMPORTANT]
+> The first call to `Sandbox.create()` downloads the default snapshot (`alpine`) and caches it locally if not already present.
+
 ### Python SDK
 
 ```bash
@@ -75,9 +104,6 @@ with Sandbox.create() as sandbox:
     result = sandbox.code.run("print(sum(data))")
     print(result.text)  # 6
 ```
-
-> [!IMPORTANT]
-> The first call to `Sandbox.create()` downloads the default snapshot (`alpine`) and caches it locally if not already present.
 
 ### CLI
 

@@ -1,8 +1,15 @@
 {
   "name": "@capsule-run/vpod",
-  "version": "0.6.0",
+  "version": "0.0.0",
   "description": "Lightweight, secure sandboxes for untrusted processes. Browser and Node.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/capsulerun/vpod.git",
+    "directory": "sdks/typescript"
+  },
+  "homepage": "https://docs.vpod.sh/quickstart",
+  "bugs": "https://github.com/capsulerun/vpod/issues",
   "type": "module",
   "exports": {
     ".": {
@@ -29,7 +36,8 @@
     "./browser": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist"

@@ -3,6 +3,8 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
+
+#[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
 
 use super::SlirpBackend;

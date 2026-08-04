@@ -27,11 +27,22 @@ export interface CachedSnapshot {
     byteLength: number;
 }
 
+type StoreFactory = () => Promise<SnapshotStorage>;
+
+let hostStore: StoreFactory | null = null;
+
+export function setHostStore(factory: StoreFactory): void {
+    hostStore = factory;
+}
+
 async function defaultStore(explicit: SnapshotStorage | null | undefined) {
     if (explicit !== undefined) {
         return explicit;
     }
-    return SnapshotStore.available() ? await SnapshotStore.open() : null;
+    if (SnapshotStore.available()) {
+        return await SnapshotStore.open();
+    }
+    return hostStore === null ? null : await hostStore();
 }
 
 export async function cached(options: CacheOptions = {}): Promise<CachedSnapshot[]> {
