@@ -21,7 +21,7 @@ It uses a RISC‑V architecture and runs entirely inside WebAssembly, so the sam
 ## Installation
 
 ```bash
-npm install vpod
+npm install @capsule-run/vpod
 ```
 
 ## Usage
@@ -129,6 +129,47 @@ for (const entry of await snapshots.catalog()) {
 | `vsnap-base` | 1.0.0 | Alpine-based general-purpose snapshot with Python. | 256 MB |
 | `vsnap-base-512mb` | 1.0.0 | Same as `vsnap-base` with more memory headroom. | 512 MB |
 | `vsnap-data` | 1.0.0 | Alpine-based snapshot with `numpy`, `pandas`, and `scipy`. | 512 MB |
+
+### Managing the cache
+
+A cached snapshot is a few tens of megabytes, so it is worth being able to show
+people what is stored and let them get it back.
+
+```ts
+for (const entry of await snapshots.cached()) {
+    console.log(entry.id, entry.byteLength);
+}
+
+const reclaimed = await snapshots.clear();
+```
+
+`clear()` returns the number of bytes it freed and keeps suspended sandboxes,
+which are stored alongside the snapshots. Pass `{ instances: true }` to drop
+those as well. The next `Sandbox.create()` downloads again.
+
+On Node the cache directory is shared with the other vpod tools, so `clear()`
+removes only what it downloaded itself and leaves anything it cannot fetch
+again. `cached()` still lists everything that is there.
+
+In a browser this is site data rather than the HTTP cache, so clearing cached
+images and files in the browser's own settings will not touch it. A browser is
+also free to evict it when the disk fills up, which costs a re-download and
+nothing else. `snapshots.SnapshotStore.persist()` asks it not to. Firefox asks
+the user, so call it from something they clicked rather than on startup.
+
+## Examples
+
+[`examples/terminal`](examples/terminal/) is an interactive shell in a browser
+tab, built on xterm.js. It covers `commands.run`, `code.run`, and a suspend that
+survives a page reload.
+
+```bash
+npm run build && npm run example
+```
+
+[`examples/nextjs`](examples/nextjs/) is the same terminal as a Next.js client
+component, and documents the three things a bundler needs from you: static
+worker and wasm assets, the `/browser` entry point, and the isolation headers.
 
 ## Documentation
 
