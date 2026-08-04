@@ -12,9 +12,12 @@ export { Sandbox, Commands, Code } from "../sandbox.js";
 export type { SandboxOptions, RunOptions, SnapshotSource } from "../sandbox.js";
 
 import { setDefaultTransportFactory } from "../transport/default.js";
+import { setHostStore } from "../snapshots/index.js";
 import { createNodeWorkerTransport } from "./worker-transport.js";
+import { FileSnapshotStore } from "./store.js";
 
 setDefaultTransportFactory(() => createNodeWorkerTransport());
+setHostStore(async () => new FileSnapshotStore());
 
 export {
     CommandResult,
