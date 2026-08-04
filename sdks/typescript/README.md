@@ -157,20 +157,6 @@ also free to evict it when the disk fills up, which costs a re-download and
 nothing else. `snapshots.SnapshotStore.persist()` asks it not to. Firefox asks
 the user, so call it from something they clicked rather than on startup.
 
-## Examples
-
-[`examples/terminal`](examples/terminal/) is an interactive shell in a browser
-tab, built on xterm.js. It covers `commands.run`, `code.run`, and a suspend that
-survives a page reload.
-
-```bash
-npm run build && npm run example
-```
-
-[`examples/nextjs`](examples/nextjs/) is the same terminal as a Next.js client
-component, and documents the three things a bundler needs from you: static
-worker and wasm assets, the `/browser` entry point, and the isolation headers.
-
 ## Documentation
 
 Visit the [Vpod documentation](https://docs.vpod.sh/quickstart) for the full
