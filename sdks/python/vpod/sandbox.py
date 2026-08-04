@@ -40,8 +40,13 @@ _DEFAULT_PROMPT = "# "
 
 class Sandbox:
 
-    def __init__(self, snapshot: str = "alpine:latest", mounts: dict[str, str] | None = None):
-        snapshot_path = snapshots.pull(snapshot)
+    def __init__(
+        self,
+        snapshot: str = "alpine:latest",
+        mounts: dict[str, str] | None = None,
+        registry_url: str | None = None,
+    ):
+        snapshot_path = snapshots.pull(snapshot, registry_url=registry_url)
         wasm_path = locate_wasm()
 
         self._snapshot_path = "snap/" + snapshot_path.name
@@ -68,8 +73,13 @@ class Sandbox:
         )
 
     @classmethod
-    def create(cls, snapshot: str = "vsnap-base:latest", mounts: dict[str, str] | None = None) -> "Sandbox":
-        return cls(snapshot, mounts=mounts)
+    def create(
+        cls,
+        snapshot: str = "vsnap-base:latest",
+        mounts: dict[str, str] | None = None,
+        registry_url: str | None = None,
+    ) -> "Sandbox":
+        return cls(snapshot, mounts=mounts, registry_url=registry_url)
 
     def _mount_entries(self) -> list:
         mount_entries = []

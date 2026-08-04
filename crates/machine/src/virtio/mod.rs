@@ -5,6 +5,7 @@ pub mod https_gateway;
 pub mod net;
 pub mod slirp;
 pub mod tls_proxy;
+pub mod upstream;
 
 use crate::RAM_BASE;
 use crate::cow_ram::CowRam;

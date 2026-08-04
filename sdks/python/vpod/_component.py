@@ -94,6 +94,16 @@ def _write_cwasm_atomically(cache_path: Path, serialized: bytes) -> None:
         raise
 
 
+degradations: list[str] = []
+
+
+def _note_degraded(what: str, failure: BaseException) -> None:
+    note = f"{what}: {type(failure).__name__}: {failure}"
+    degradations.append(note)
+    if os.environ.get("VPOD_DEBUG"):
+        print(f"vpod: {note}", file=sys.stderr)
+
+
 def _compile_and_cache(engine: Engine, wasm_path: Path) -> Component:
     component = Component.from_file(engine, str(wasm_path))
 
@@ -101,8 +111,9 @@ def _compile_and_cache(engine: Engine, wasm_path: Path) -> Component:
         cache_path = _cwasm_cache_path(wasm_path)
         _write_cwasm_atomically(cache_path, component.serialize())
         _prune_stale_cwasm(cache_path)
-    except Exception:
-        pass
+    except Exception as failure:
+        # Costs a recompile on every future start, but only that.
+        _note_degraded("could not cache the compiled component", failure)
 
     return component
 
@@ -141,8 +152,8 @@ def _precompile_in_background(wasm_path: Path, parallel: bool = False, fallback:
             start_new_session=True,
             cwd=str(Path(__file__).parents[1]),
         )
-    except Exception:
-        pass
+    except Exception as failure:
+        _note_degraded("could not spawn the background AOT compile", failure)
 
 
 def _promote_to_aot(engine: Engine, component: Component) -> None:
@@ -182,8 +193,12 @@ def _compile_aot_in_thread(wasm_path: Path) -> None:
                 _write_cwasm_atomically(cache_path, component.serialize())
                 _prune_stale_cwasm(cache_path)
             retire_base_cwasm()
-        except Exception:
-            pass
+        except Exception as failure:
+            # Not fatal — the base tier keeps working — but it is several times
+            # slower, forever, and swallowing this made that indistinguishable
+            # from a healthy install.
+            _note_degraded("AOT compilation failed, staying on the slower tier", failure)
+            print(f"vpod: {degradations[-1]}", file=sys.stderr)
 
     threading.Thread(target=work, daemon=True, name="vpod-aot-compile").start()
 

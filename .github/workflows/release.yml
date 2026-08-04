@@ -17,6 +17,11 @@ on:
         required: false
         default: true
         type: boolean
+      publish_npm:
+        description: 'Publish TypeScript SDK to npm (browser + Node)'
+        required: false
+        default: true
+        type: boolean
       publish_crate:
         description: 'Publish vpod CLI to crates.io (interpreter-only, no AOT)'
         required: false
@@ -133,6 +138,89 @@ jobs:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: twine upload dist/*
+
+  publish-npm:
+    name: Publish – npm (TypeScript SDK)
+    if: ${{ !cancelled() && !failure() && inputs.publish_npm }}
+    needs: build-aot
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # npm provenance
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Fetch AOT engine modules
+        uses: actions/download-artifact@v4
+        with:
+          name: aot-wasm
+          path: dist/aot
+
+      - name: Place the component in the SDK
+        run: |
+          mkdir -p sdks/typescript/wasm
+          cp dist/aot/vpod_wasi_lib_aot.wasm sdks/typescript/wasm/
+          ls -lh sdks/typescript/wasm/
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+          cache-dependency-path: sdks/typescript/package-lock.json
+
+      - name: Install dependencies
+        working-directory: sdks/typescript
+        run: npm ci
+
+      - name: Inject version
+        working-directory: sdks/typescript
+        run: npm version "${{ inputs.version }}" --no-git-tag-version --allow-same-version
+
+      - name: Build
+        working-directory: sdks/typescript
+        env:
+          VPOD_ALLOW_STALE_COMPONENT: '1'
+        run: npm run build
+
+      - name: Typecheck and unit tests
+        working-directory: sdks/typescript
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Verify the package ships what its exports promise
+        working-directory: sdks/typescript
+        run: node --test tests/integration/package-exports.test.mjs
+
+      - name: Verify a real install resolves
+        working-directory: sdks/typescript
+        run: |
+          CHECK="$RUNNER_TEMP/install-check"
+          mkdir -p "$CHECK"
+          TARBALL=$(npm pack --pack-destination "$CHECK" --silent)
+          cd "$CHECK"
+          npm init -y >/dev/null
+          npm install "./$TARBALL"
+          node --input-type=module -e '
+            const node = await import("@capsule-run/vpod/node");
+            const browser = await import("@capsule-run/vpod/browser");
+            for (const [name, module] of [["node", node], ["browser", browser]]) {
+              if (typeof module.Sandbox !== "function") {
+                throw new Error(`the ${name} entry point exports no Sandbox`);
+              }
+              console.log(`${name} entry point ok`);
+            }
+          '
+
+      - name: Publish to npm
+        working-directory: sdks/typescript
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
 
   publish-crate:
     name: Publish – crates.io (vpod)

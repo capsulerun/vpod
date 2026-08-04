@@ -3,6 +3,7 @@ import json
 import shutil
 import ssl
 import os
+import sys
 import time
 import urllib.request
 from pathlib import Path
@@ -10,7 +11,15 @@ from pathlib import Path
 import certifi
 import platformdirs
 
-REGISTRY_URL = os.environ.get("VPOD_REGISTRY", "https://registry.vpod.sh/v1/snapshots.json")
+PUBLIC_REGISTRY_URL = "https://registry.vpod.sh/v1/snapshots.json"
+
+REGISTRY_URL = os.environ.get("VPOD_REGISTRY", PUBLIC_REGISTRY_URL)
+
+
+def _resolve_registry_url(registry_url: str | None) -> str:
+    if registry_url:
+        return registry_url
+    return os.environ.get("VPOD_REGISTRY") or PUBLIC_REGISTRY_URL
 
 
 def _create_ssl_context():
@@ -23,7 +32,7 @@ def cache_dir() -> Path:
     return base / "vpod" / "snapshots"
 
 
-def pull(name: str = "vsnap-base:latest") -> Path:
+def pull(name: str = "vsnap-base:latest", registry_url: str | None = None) -> Path:
     """
     Downloads from the registry if not already cached.
     If the cached snapshot is corrupt, force-refreshes the registry and re-downloads.
@@ -34,19 +43,21 @@ def pull(name: str = "vsnap-base:latest") -> Path:
         if custom_path.exists():
             return custom_path
 
-    registry = fetch_registry()
-    snapshot = resolve_snapshot(registry, name)
+    resolved_registry = _resolve_registry_url(registry_url)
+    registry = fetch_registry(resolved_registry)
+    snapshot = resolve_snapshot(registry, name, resolved_registry)
 
     dest = cache_dir() / f"{snapshot['id']}.snap"
     meta = dest.with_suffix(".meta")
 
     if dest.exists() and meta.exists() and meta.read_text().strip() == snapshot["sha256"]:
         if _validate_snapshot_magic(dest):
+            _record_origin(dest, resolved_registry)
             return dest
 
-        _REGISTRY_CACHE.unlink(missing_ok=True)
-        registry = fetch_registry()
-        snapshot = resolve_snapshot(registry, name)
+        _registry_cache_path(resolved_registry).unlink(missing_ok=True)
+        registry = fetch_registry(resolved_registry)
+        snapshot = resolve_snapshot(registry, name, resolved_registry)
         dest = cache_dir() / f"{snapshot['id']}.snap"
         meta = dest.with_suffix(".meta")
         dest.unlink(missing_ok=True)
@@ -59,42 +70,79 @@ def pull(name: str = "vsnap-base:latest") -> Path:
 
     _download_and_decompress(snapshot["url"], dest, snapshot["sha256"])
     meta.write_text(snapshot["sha256"])
-    _prune_stale_snapshots(registry)
+    _record_origin(dest, resolved_registry)
+    _prune_stale_snapshots(registry, resolved_registry)
 
     return dest
 
 
-def _prune_stale_snapshots(registry: list[dict]) -> None:
-    known_ids = {snapshot["id"] for snapshot in registry}
-    referenced_by_instances = _snapshots_referenced_by_instances()
+def _record_origin(dest: Path, registry_url: str) -> None:
+    origin_file = dest.with_suffix(".origin")
+    if origin_file.exists():
+        return
+    try:
+        origin_file.write_text(registry_url)
+    except OSError as unwritable:
+        print(f"vpod: cannot record the origin of {dest.name}: {unwritable}", file=sys.stderr)
 
-    for snap_file in list(cache_dir().glob("*.snap")) + list(cache_dir().glob("*.raw")):
-        if snap_file.stem in referenced_by_instances:
-            continue
-        if snap_file.stem not in known_ids:
+
+def _prune_stale_snapshots(registry: list[dict], registry_url: str) -> None:
+    known_ids = {snapshot["id"] for snapshot in registry}
+    referenced_by_instances, references_are_complete = _snapshots_referenced_by_instances()
+
+    if references_are_complete:
+        for snap_file in list(cache_dir().glob("*.snap")) + list(cache_dir().glob("*.raw")):
+            if snap_file.stem in referenced_by_instances or snap_file.stem in known_ids:
+                continue
+
+            meta_file = snap_file.with_suffix(".meta")
+            if not meta_file.exists():
+                continue
+
+            origin_file = snap_file.with_suffix(".origin")
+            try:
+                origin = origin_file.read_text().strip()
+            except OSError:
+                continue
+            if origin != registry_url:
+                continue
+
+            print(
+                f"vpod: removing {snap_file.name}, which we downloaded and the "
+                f"registry no longer lists",
+                file=sys.stderr,
+            )
             snap_file.unlink(missing_ok=True)
-            snap_file.with_suffix(".meta").unlink(missing_ok=True)
+            meta_file.unlink(missing_ok=True)
+            origin_file.unlink(missing_ok=True)
 
     for leftover in list(cache_dir().glob("*.tmp")) + list(cache_dir().glob("*.tmp.dl")):
         leftover.unlink(missing_ok=True)
 
 
-def _snapshots_referenced_by_instances() -> set[str]:
-    referenced = set()
+def _snapshots_referenced_by_instances() -> tuple[set[str], bool]:
+    """Snapshots a suspended instance still needs, and whether we read them all."""
+    referenced: set[str] = set()
     instances_dir = Path.home() / ".vpod" / "instances"
     if not instances_dir.exists():
-        return referenced
+        return referenced, True
 
+    complete = True
     for meta_file in instances_dir.glob("*/meta.json"):
         try:
             meta = json.loads(meta_file.read_text())
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as unreadable:
+            print(
+                f"vpod: cannot read {meta_file}, skipping snapshot cleanup: {unreadable}",
+                file=sys.stderr,
+            )
+            complete = False
             continue
         snapshot_name = meta.get("snapshot", "").removeprefix("snap/")
         if snapshot_name.endswith(".snap"):
             referenced.add(snapshot_name.removesuffix(".snap"))
 
-    return referenced
+    return referenced, complete
 
 
 _REGISTRY_TTL = 86400
@@ -102,9 +150,17 @@ _REGISTRY_CACHE = cache_dir() / "snapshots.json"
 _REGISTRY_VERSION_MARKER = cache_dir() / "snapshots.json.sdkver"
 
 
-def catalog() -> list[dict]:
+def _registry_cache_path(registry_url: str) -> Path:
+    if registry_url == PUBLIC_REGISTRY_URL:
+        return _REGISTRY_CACHE
+    digest = hashlib.sha256(registry_url.encode()).hexdigest()[:8]
+
+    return cache_dir() / f"snapshots-{digest}.json"
+
+
+def catalog(registry_url: str | None = None) -> list[dict]:
     """Return the list of available snapshots, fetching from the registry if needed."""
-    return fetch_registry()
+    return fetch_registry(_resolve_registry_url(registry_url))
 
 
 def _registry_cache_version_matches() -> bool:
@@ -114,15 +170,18 @@ def _registry_cache_version_matches() -> bool:
         return False
 
 
-def fetch_registry() -> list[dict]:
-    if _REGISTRY_CACHE.exists() and _registry_cache_version_matches():
-        age = time.time() - _REGISTRY_CACHE.stat().st_mtime
+def fetch_registry(registry_url: str | None = None) -> list[dict]:
+    registry_url = registry_url or REGISTRY_URL
+    cache_path = _registry_cache_path(registry_url)
+
+    if cache_path.exists() and _registry_cache_version_matches():
+        age = time.time() - cache_path.stat().st_mtime
         if age < _REGISTRY_TTL:
-            return json.loads(_REGISTRY_CACHE.read_text())["snapshots"]
+            return json.loads(cache_path.read_text())["snapshots"]
 
     try:
         request = urllib.request.Request(
-            REGISTRY_URL,
+            registry_url,
             headers={"User-Agent": f"vpod-py/{_version()}"},
         )
         context = _create_ssl_context()
@@ -130,15 +189,15 @@ def fetch_registry() -> list[dict]:
         with urllib.request.urlopen(request, timeout=10, context=context) as response:
             data = response.read()
 
-        _REGISTRY_CACHE.parent.mkdir(parents=True, exist_ok=True)
-        _REGISTRY_CACHE.write_bytes(data)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_bytes(data)
         _REGISTRY_VERSION_MARKER.write_text(_version())
         return json.loads(data)["snapshots"]
     except Exception as e:
-        if _REGISTRY_CACHE.exists():
-            return json.loads(_REGISTRY_CACHE.read_text())["snapshots"]
+        if cache_path.exists():
+            return json.loads(cache_path.read_text())["snapshots"]
         raise ConnectionError(
-            f"Failed to fetch snapshot registry from {REGISTRY_URL}: {e}"
+            f"Failed to fetch snapshot registry from {registry_url}: {e}"
         ) from e
 
 
@@ -150,7 +209,7 @@ def _version() -> str:
         return "0.0.0"
 
 
-def resolve_snapshot(registry: list[dict], name: str) -> dict:
+def resolve_snapshot(registry: list[dict], name: str, registry_url: str | None = None) -> dict:
     want_name, _, want_tag = name.partition(":")
     want_tag = want_tag or "latest"
 
@@ -161,8 +220,9 @@ def resolve_snapshot(registry: list[dict], name: str) -> dict:
         if snapshot["id"] == name or (name_matches and tag_matches):
             return snapshot
 
-    available = ", ".join(f"{s['name']}:{s['tag']}" for s in registry)
-    raise ValueError(f"Snapshot '{name}' not found. Available: {available}")
+    available = ", ".join(f"{s['name']}:{s['tag']}" for s in registry) or "nothing"
+    searched = f" in {registry_url}" if registry_url else ""
+    raise ValueError(f"Snapshot '{name}' not found{searched}. Available: {available}")
 
 
 def _download_and_decompress(url: str, dest: Path, expected_sha256: str) -> None:

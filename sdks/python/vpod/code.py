@@ -1,5 +1,6 @@
 from ._result import unwrap_result
-from .execution import CodeExecution
+from .execution import CodeExecution, normalize_line_endings, split_lines
+
 
 
 class Code:
@@ -23,27 +24,37 @@ class Code:
         output = result.stdout if hasattr(result, 'stdout') else str(result)
         stderr = result.stderr if hasattr(result, 'stderr') else ""
 
-        if getattr(result, "exit-code", 0) == 124:
+        exit_code = getattr(result, "exit-code", 0)
+
+        if exit_code == 124:
+            timed_out = self._parse_output(output, stderr)
             return CodeExecution(
-                text=output,
+                text=timed_out.text,
                 error=f"Timed out after {timeout}s",
-                logs=output.splitlines(),
+                logs=timed_out.logs,
+                stderr=timed_out.stderr,
             )
 
-        return self._parse_output(output, stderr)
+        return self._parse_output(output, stderr, exit_code)
 
     def close(self):
         pass
 
-    def _parse_output(self, raw: str, stderr: str = "") -> CodeExecution:
-        text = raw.strip()
-        lines = text.splitlines()
-        error_indicators = ("Error", "Traceback", "not found", "error:", "syntax error")
+    def _parse_output(self, raw: str, stderr: str = "", exit_code: int = 0) -> CodeExecution:
+        logs = split_lines(raw)
+        text = "\n".join(logs)
+        diagnostics = normalize_line_endings(stderr).strip()
 
-        all_lines = lines + stderr.strip().splitlines()
-        errors = [l for l in all_lines if any(ind in l for ind in error_indicators)]
+        if exit_code == 0:
+            return CodeExecution(text=text, logs=logs, stderr=diagnostics)
 
-        if errors:
-            return CodeExecution(text=text, error=errors[-1], logs=lines)
+        spoken = [l for l in split_lines(stderr) if l.strip()]
+        if not spoken and "Traceback (most recent call last):" in text:
+            spoken = [l for l in logs if l.strip()]
 
-        return CodeExecution(text=text, logs=lines)
+        return CodeExecution(
+            text=text,
+            error=spoken[-1] if spoken else f"exited {exit_code}",
+            logs=logs,
+            stderr=diagnostics,
+        )

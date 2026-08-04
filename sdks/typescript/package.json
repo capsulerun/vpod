@@ -1,0 +1,63 @@
+{
+  "name": "@capsule-run/vpod",
+  "version": "0.6.0",
+  "description": "Lightweight, secure sandboxes for untrusted processes. Browser and Node.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "browser": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "node": {
+        "types": "./dist/node/index.d.ts",
+        "default": "./dist/node/index.js"
+      },
+      "default": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "./inline": {
+      "default": "./dist/transport/inline.js"
+    },
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "default": "./dist/node/index.js"
+    },
+    "./browser": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "test": "node --test tests/unit/*.test.mjs",
+    "test:integration": "node --test tests/integration/*.test.mjs",
+    "test:slow": "node --test tests/slow/*.test.mjs",
+    "test:all": "node --test tests/unit/*.test.mjs tests/integration/*.test.mjs",
+    "test:perf": "node --test tests/performance/*.test.mjs",
+    "dev": "node dev/serve.mjs",
+    "bench": "node dev/run-browser.mjs",
+    "measure": "node dev/run-measure.mjs",
+    "measure:node": "node dev/measure-node.mjs"
+  },
+  "dependencies": {
+    "@bytecodealliance/preview2-shim": "^0.19.0"
+  },
+  "devDependencies": {
+    "@bytecodealliance/jco": "^1.26.1",
+    "@types/node": "^26.1.2",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

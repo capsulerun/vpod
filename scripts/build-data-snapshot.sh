@@ -263,6 +263,9 @@ _real_stderr = sys.stderr
 _data_out = open("/dev/ttyS3", "w")
 _data_in = open("/dev/ttyS3", "r", buffering=1)
 _exit_code_out = open("/dev/ttyS2", "wb", buffering=0)
+# The host drains this separately and hands it back as `stderr`. Keeping the two
+# streams apart is what lets a caller tell a diagnostic from ordinary output.
+_err_out = open("/dev/ttyS1", "w")
 
 while True:
     _line = _data_in.readline()
@@ -276,9 +279,10 @@ while True:
     except Exception:
         _code = _line
 
-    _buf = io.StringIO()
-    sys.stdout = _buf
-    sys.stderr = _buf
+    _out_buf = io.StringIO()
+    _err_buf = io.StringIO()
+    sys.stdout = _out_buf
+    sys.stderr = _err_buf
     _exit_code = 0
     try:
         exec(compile(_code, "<vpod>", "exec"), _globals)
@@ -286,16 +290,23 @@ while True:
         if isinstance(_e.code, int):
             _exit_code = _e.code & 0xFF
         elif _e.code is not None:
-            _buf.write(str(_e.code) + "\n")
+            # CPython prints a non-integer exit argument to stderr, so do that.
+            _err_buf.write(str(_e.code) + "\n")
             _exit_code = 1
     except Exception:
-        _buf.write(traceback.format_exc())
+        _err_buf.write(traceback.format_exc())
         _exit_code = 1
     finally:
         sys.stdout = _real_stdout
         sys.stderr = _real_stderr
 
-    _val = _buf.getvalue()
+    # Both before the sentinel: the host waits on that, then drains stderr.
+    _err = _err_buf.getvalue()
+    if _err:
+        _err_out.write(_err)
+        _err_out.flush()
+
+    _val = _out_buf.getvalue()
     if _val:
         _data_out.write(_val)
     _exit_code_out.write(bytes([_exit_code]))

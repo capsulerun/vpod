@@ -116,7 +116,8 @@ Contributions are welcome, from bug reports to new device support. Open an [issu
 ### Prerequisites
 
 - **Rust** (latest stable) with the `wasm32-wasip2` target: `rustup target add wasm32-wasip2`
-- **Python 3.10+** for the SDK
+- **Python 3.10+** for the Python SDK
+- **Node 20+** for the TypeScript SDK
 - **Zig** (0.16) and **bsdtar**, only needed if you build snapshots yourself
 
 ### Development setup
@@ -125,7 +126,7 @@ Contributions are welcome, from bug reports to new device support. Open an [issu
 # One-time: generate the AOT stub (a fresh clone has no translated blocks)
 ./scripts/aot-stub.sh
 
-# Build the WASM component (library + CLI)
+# Build the WASM component (library + CLI). Copies both tiers into sdks/python/vpod/
 ./scripts/build-wasm.sh
 
 # Install the host CLI
@@ -133,7 +134,16 @@ cargo install --path crates/vpod
 
 # Install the Python SDK in dev mode
 pip install -e "sdks/python[dev]"
+
+# Build the TypeScript SDK. Picks the component up from the Python SDK directory
+cd sdks/typescript && npm install && npm run build
 ```
+
+`npm run build` defaults to `--tier aot`; CI pins `--tier base`. The build
+refuses a component older than the newest file under `crates/`, so rerun
+`./scripts/build-wasm.sh` after touching the emulator. An emulator change only
+surfaces through the guest, so a stale component compiles and passes almost
+everything.
 
 ### Running tests
 
@@ -147,7 +157,38 @@ cargo test --all                                  # Rust tests
 # Python SDK integration tests (needs the WASM library in place)
 cp target/wasm32-wasip2/release/vpod_wasi_lib.wasm sdks/python/vpod/
 pytest sdks/python/tests/ -v -m integration
+
+# TypeScript SDK (from sdks/typescript)
+npm run typecheck
+npm test                  # unit
+npm run test:all          # unit + integration, needs a local snapshot
+npm run test:perf         # guest-time regressions, exact constants
 ```
+
+The TypeScript tests import the built `dist/`, not `src/`, so build before
+running them. They look for a snapshot in the shared cache directory;
+`VPOD_TEST_SNAPSHOT=/path/to/x.snap` points them somewhere else.
+
+To exercise the browser end to end, `npm run dev` serves the page with COOP/COEP
+on and `node dev/run-network.mjs --browser chrome` drives it headless.
+
+### Using a locally built snapshot
+
+The SDKs pull from `registry.vpod.sh` by default. To run one you built yourself,
+hand it over directly instead of a registry name:
+
+```ts
+// TypeScript: a file on disk (Node), or bytes (anywhere)
+await Sandbox.create({ snapshot: { path: "./dist/alpine-3.23.0-256mb.snap" } });
+await Sandbox.create({ snapshot: { bytes, name: "alpine-3.23.0-256mb.snap" } });
+```
+
+```python
+# Python: VPOD_SNAPSHOT=/path/to/x.snap
+```
+
+Keep the RAM size in the file name either way, because the emulator reads it
+from there.
 
 ### Building snapshots
 

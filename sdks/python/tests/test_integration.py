@@ -57,6 +57,53 @@ def test_session_code_error():
         assert result.error is not None
 
 
+def test_session_code_printed_error_word_is_not_a_failure():
+    with Sandbox.create() as sbx:
+        result = sbx.code.run(
+            "print('Error handling is hard')\n"
+            "print('config not found, using defaults')"
+        )
+        assert result.success, result.error
+        assert result.error is None
+
+
+def test_session_code_silent_nonzero_exit_is_a_failure():
+    with Sandbox.create() as sbx:
+        result = sbx.code.run("import sys\nsys.exit(3)")
+        assert not result.success
+        assert "3" in result.error
+
+
+def test_session_code_output_is_not_quoted_as_the_failure_reason():
+    with Sandbox.create() as sbx:
+        result = sbx.code.run("import sys\nprint('saving to disk')\nsys.exit(3)")
+        assert not result.success
+        assert result.error == "exited 3"
+        assert result.logs == ["saving to disk"]
+
+
+def test_session_code_quotes_the_exception_when_one_was_raised():
+    with Sandbox.create() as sbx:
+        result = sbx.code.run("print('before')\nraise ValueError('boom')")
+        assert not result.success
+        assert result.error == "ValueError: boom"
+
+
+def test_session_code_stderr_is_reachable_on_success():
+    with Sandbox.create() as sbx:
+        result = sbx.code.run("import sys\nprint('out')\nsys.stderr.write('careful\\n')")
+        assert result.success
+        assert "out" in result.logs
+        assert "careful" in result.stderr or "careful" in result.text
+
+
+def test_session_code_text_has_no_carriage_returns():
+    with Sandbox.create() as sbx:
+        result = sbx.code.run("print('a')\nprint('b')")
+        assert result.text == "a\nb"
+        assert sbx.commands.run("printf 'x\\ny\\n'").stdout == "x\ny"
+
+
 def test_code_requires_session():
     sbx = Sandbox.create()
     with pytest.raises(RuntimeError, match="requires a session"):

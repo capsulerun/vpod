@@ -273,6 +273,50 @@ pub(crate) fn spawn_test_upstream_rst(
     (port, up_ca_cert, handle)
 }
 
+pub(crate) fn spawn_plaintext_host(
+    reply: &'static [u8],
+) -> (
+    u16,
+    std::sync::mpsc::Receiver<String>,
+    std::thread::JoinHandle<()>,
+) {
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (announced, receiver) = mpsc::channel();
+
+    let handle = std::thread::spawn(move || {
+        listener.set_nonblocking(false).ok();
+        let (mut sock, _) = listener.accept().unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(10))).ok();
+
+        let mut seen: Vec<u8> = Vec::new();
+        let mut buf = [0u8; 1024];
+        while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+            match sock.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => seen.extend_from_slice(&buf[..n]),
+            }
+        }
+
+        let line_end = seen.iter().position(|&b| b == b'\n').unwrap_or(seen.len());
+        announced
+            .send(
+                String::from_utf8_lossy(&seen[..line_end])
+                    .trim_end()
+                    .to_string(),
+            )
+            .ok();
+
+        sock.write_all(reply).ok();
+        sock.flush().ok();
+    });
+
+    (port, receiver, handle)
+}
+
 pub(crate) fn client_config_trusting(ca_pem: &str) -> Arc<ClientConfig> {
     let mut roots = RootCertStore::empty();
     let ca_der = Certificate::from_pem(ca_pem).unwrap().to_der().unwrap();

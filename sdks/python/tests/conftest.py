@@ -17,7 +17,9 @@ class FakeVariant:
 
 @pytest.fixture(autouse=True)
 def mock_component(request, monkeypatch):
-    if request.node.get_closest_marker("integration"):
+    if request.node.get_closest_marker("integration") or request.node.get_closest_marker(
+        "performance"
+    ):
         return
 
     store = MagicMock()
@@ -76,6 +78,9 @@ def mock_component(request, monkeypatch):
         "session-close": fake_session_close,
     }
 
-    monkeypatch.setattr("vpod.snapshots.pull", lambda name="alpine:latest": Path("/fake/snapshot.snap"))
+    monkeypatch.setattr(
+        "vpod.snapshots.pull",
+        lambda name="alpine:latest", **kwargs: Path("/fake/snapshot.snap"),
+    )
     monkeypatch.setattr("vpod.sandbox.locate_wasm", lambda: Path("/fake/vpod_wasi_lib.wasm"))
     monkeypatch.setattr("vpod.sandbox.load_component", lambda path, snap=None: (store, exports))
