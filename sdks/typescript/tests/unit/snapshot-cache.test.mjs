@@ -8,7 +8,8 @@ import { describe, it } from "node:test";
 import { distPath } from "../helpers.mjs";
 
 const { snapshots } = await import(distPath("index.js"));
-const { FileSnapshotStore } = await import(distPath("node/index.js"));
+const nodeEntry = await import(distPath("node/index.js"));
+const { FileSnapshotStore, snapshots: nodeSnapshots } = nodeEntry;
 const { cached, clear } = snapshots;
 
 function fakeStore(files) {
@@ -189,6 +190,23 @@ describe("the disk store", () => {
                 ["alpine-3.23.0-256mb.meta", "alpine-3.23.0-256mb.snap"],
             );
         } finally {
+            rmSync(directory, { recursive: true, force: true });
+        }
+    });
+
+    it("is what cached() reaches for when nothing is passed", async () => {
+        const { directory } = await populated();
+        const previous = process.env.VPOD_CACHE_DIR;
+        process.env.VPOD_CACHE_DIR = directory;
+        try {
+            const listed = await nodeSnapshots.cached();
+            assert.deepEqual(
+                listed.map((entry) => entry.id).sort(),
+                ["alpine-3.23.0-256mb", "vsnap-base-256mb"],
+            );
+        } finally {
+            if (previous === undefined) delete process.env.VPOD_CACHE_DIR;
+            else process.env.VPOD_CACHE_DIR = previous;
             rmSync(directory, { recursive: true, force: true });
         }
     });
