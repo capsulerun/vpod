@@ -156,4 +156,39 @@ describe("commands timeouts", { skip: skipReason() ?? false }, () => {
             assert.equal(result.stdout.trim(), "still here");
         });
     });
+
+    it("runs a heredoc", async () => {
+        await withSandbox(async (sandbox) => {
+            const result = await sandbox.commands.run("cat <<'EOF'\nalpha\nbeta\nEOF");
+            assert.equal(result.exitCode, 0);
+            assert.equal(result.stdout.trim(), "alpha\nbeta");
+        });
+    });
+
+    it("writes a file with a heredoc and runs it back", async () => {
+        await withSandbox(async (sandbox) => {
+            const written = await sandbox.commands.run(
+                "cat <<'EOF' > /tmp/written.py\nprint('written')\nEOF",
+            );
+            assert.equal(written.exitCode, 0);
+
+            const ran = await sandbox.commands.run("python3 /tmp/written.py");
+            assert.equal(ran.stdout.trim(), "written");
+        });
+    });
+
+    it("expands variables in an unquoted heredoc", async () => {
+        await withSandbox(async (sandbox) => {
+            const result = await sandbox.commands.run("NAME=world\ncat <<EOF\nhello $NAME\nEOF");
+            assert.equal(result.stdout.trim(), "hello world");
+        });
+    });
+
+    it("keeps stderr on its own stream", async () => {
+        await withSandbox(async (sandbox) => {
+            const result = await sandbox.commands.run("echo out; echo err >&2");
+            assert.equal(result.stdout.trim(), "out");
+            assert.equal(result.stderr.trim(), "err");
+        });
+    });
 });

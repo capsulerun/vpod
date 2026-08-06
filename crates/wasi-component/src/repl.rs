@@ -93,7 +93,7 @@ pub fn drain_ctrl_with_grace(bus: &mut MachineBus, hart: &mut Hart) -> Vec<u8> {
     bus.uart_ctrl.drain_tx()
 }
 
-pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
+pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) -> bool {
     let mut buffer = Vec::new();
 
     for _ in 0..500_000u32 {
@@ -106,17 +106,19 @@ pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
 
         match hart.run(bus, STEP) {
             StepResult::Ok => {}
-            StepResult::Trap(_) | StepResult::Halt => return,
+            StepResult::Trap(_) | StepResult::Halt => return false,
         }
 
         let output = bus.uart.drain_tx();
         if !output.is_empty() {
             buffer.extend_from_slice(&output);
             if buffer.ends_with(prompt) {
-                return;
+                return true;
             }
         }
     }
+
+    false
 }
 
 pub fn capture_output(

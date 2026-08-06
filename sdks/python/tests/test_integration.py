@@ -432,3 +432,40 @@ def test_snapshot_list():
    print(snapshotlist)
    assert isinstance(snapshotlist, list)
    assert len(snapshotlist) > 0
+
+
+def test_interactive_python_does_not_kill_the_session():
+    with Sandbox.create() as sbx:
+        sbx.commands.run("export MARKER=kept")
+
+        interrupted = sbx.commands.run("python3", timeout=3)
+        assert interrupted.exit_code == 124
+
+        after = sbx.commands.run("echo $MARKER")
+        assert after.success
+        assert "kept" in after.stdout
+
+
+def test_commands_run_is_not_a_python_repl():
+    with Sandbox.create() as sbx:
+        sbx.commands.run("python3", timeout=3)
+
+        assert sbx.commands.run("print(x)").exit_code != 0
+
+        sbx.code.run("x = 1")
+        assert sbx.code.run("print(x)").text.strip() == "1"
+
+
+def test_heredoc_writes_a_file():
+    with Sandbox.create() as sbx:
+        written = sbx.commands.run("cat <<'EOF' > /tmp/written.py\nprint('written')\nEOF")
+        assert written.success
+
+        assert "written" in sbx.commands.run("python3 /tmp/written.py").stdout
+
+
+def test_stderr_stays_on_its_own_stream():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("echo out; echo err >&2")
+        assert result.stdout.strip() == "out"
+        assert result.stderr.strip() == "err"
