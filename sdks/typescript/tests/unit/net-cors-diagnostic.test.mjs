@@ -9,11 +9,11 @@ const { RingReader, createRing } = await import(distPath("net/ring.js"));
 const bytes = (text) => new TextEncoder().encode(text);
 const decode = (buffer) => new TextDecoder().decode(buffer);
 
-function connect(driver, id = 1, capacity = 1 << 16) {
+function connect(driver, { id = 1, capacity = 1 << 16, resolvedHostname, port = 443 } = {}) {
     const ring = createRing(capacity);
     const reader = new RingReader(ring);
 
-    driver.handle({ kind: "open", id, ring, resolvedHostname: undefined, port: 443 });
+    driver.handle({ kind: "open", id, ring, resolvedHostname, port });
 
     return {
         send(text) {
@@ -41,6 +41,10 @@ function pretendToBeABrowser() {
     globalThis.WorkerGlobalScope = class WorkerGlobalScope {};
 }
 
+function pretendThePageIsSecure() {
+    globalThis.location = { protocol: "https:" };
+}
+
 function collectWarnings() {
     const warnings = [];
     const original = console.warn;
@@ -63,8 +67,18 @@ async function refuse(driver, host, thrown) {
     return connection.drainUntilFinished();
 }
 
+async function refusePlaintext(driver, host, thrown) {
+    stubFetch(() => {
+        throw thrown;
+    });
+    const connection = connect(driver, { resolvedHostname: host, port: 80 });
+    connection.send("GET / HTTP/1.1\r\nHost: h\r\n\r\n");
+    return connection.drainUntilFinished();
+}
+
 afterEach(() => {
     delete globalThis.WorkerGlobalScope;
+    delete globalThis.location;
 });
 
 describe("browser fetch failures", () => {
@@ -87,6 +101,46 @@ describe("browser fetch failures", () => {
             assert.match(wire, /Failed to fetch/);
             // Node is the way out, and saying so saves a support round trip.
             assert.match(wire, /Node/);
+        } finally {
+            captured.restore();
+        }
+    });
+
+    it("calls plaintext from an https page mixed content rather than CORS", async () => {
+        pretendToBeABrowser();
+        pretendThePageIsSecure();
+        const captured = collectWarnings();
+
+        try {
+            const wire = await refusePlaintext(
+                new FetchDriver(),
+                "browser.vpod.sh",
+                new TypeError("Failed to fetch"),
+            );
+
+            assert.match(wire, /^HTTP\/1\.1 502 Blocked as mixed content/);
+            assert.doesNotMatch(wire, /access-control-allow-origin/);
+            assert.match(wire, /https:\/\/browser\.vpod\.sh/);
+            assert.match(wire, /Failed to fetch/);
+        } finally {
+            captured.restore();
+        }
+    });
+
+    it("keeps blaming CORS for plaintext from an http page, where nothing is mixed", async () => {
+        pretendToBeABrowser();
+        globalThis.location = { protocol: "http:" };
+        const captured = collectWarnings();
+
+        try {
+            const wire = await refusePlaintext(
+                new FetchDriver(),
+                "example.com",
+                new TypeError("Failed to fetch"),
+            );
+
+            assert.match(wire, /^HTTP\/1\.1 502 Blocked by browser CORS policy/);
+            assert.match(wire, /access-control-allow-origin/);
         } finally {
             captured.restore();
         }
