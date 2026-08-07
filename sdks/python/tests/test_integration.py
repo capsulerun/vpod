@@ -1,3 +1,5 @@
+import time
+
 from vpod.snapshots import catalog
 import pytest
 from vpod import Sandbox, snapshots
@@ -469,3 +471,35 @@ def test_stderr_stays_on_its_own_stream():
         result = sbx.commands.run("echo out; echo err >&2")
         assert result.stdout.strip() == "out"
         assert result.stderr.strip() == "err"
+
+
+def test_commands_ending_in_a_comment():
+    with Sandbox.create() as sbx:
+        cases = [
+            ("echo #", 0, ""),
+            ("ls -d / #", 0, "/"),
+            ("pwd #", 0, "/"),
+            ("basename /a/b #", 0, "b"),
+            ("echo kept # a note after it", 0, "kept"),
+            ("echo a; echo b #", 0, "a\nb"),
+            ("echo '#' #", 0, "#"),
+            # A real non-zero exit, not the 124 a timeout would report.
+            ("false #", 1, ""),
+        ]
+
+        for command, exit_code, stdout in cases:
+            result = sbx.commands.run(command, timeout=10)
+            assert result.exit_code == exit_code, f"{command!r} exited {result.exit_code}"
+            assert result.stdout.strip() == stdout, f"{command!r} printed {result.stdout!r}"
+
+
+def test_the_command_after_a_timeout_is_not_slow():
+    with Sandbox.create() as sbx:
+        assert sbx.commands.run("cat", timeout=3).exit_code == 124
+
+        started = time.time()
+        after = sbx.commands.run("echo back")
+        elapsed = time.time() - started
+
+        assert after.stdout.strip() == "back"
+        assert elapsed < 3, f"the command after a timeout took {elapsed:.2f}s"

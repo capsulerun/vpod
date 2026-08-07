@@ -50,25 +50,26 @@ pub struct Session {
     pub is_pyrunner: bool,
     pub has_pyrunner: bool,
     pub pyrunner_dirty: bool,
-    pub needs_resync: bool,
     pub shell_lost: bool,
 }
 
 fn recover_shell(session: &mut Session) {
     session.bus.uart.push_rx(0x03);
-    let mut recovered =
-        repl::wait_for_prompt(&mut session.bus, &mut session.hart, &session.prompt);
+    let mut recovered = repl::wait_for_prompt(&mut session.bus, &mut session.hart, &session.prompt);
 
     if !recovered {
         session.bus.uart.push_rx(0x04);
         recovered = repl::wait_for_prompt(&mut session.bus, &mut session.hart, &session.prompt);
     }
 
+    if recovered {
+        repl::absorb_stray_prompt(&mut session.bus, &mut session.hart, &session.prompt);
+    }
+
     session.bus.uart.drain_tx();
     session.bus.uart_stderr.drain_tx();
     session.bus.uart_ctrl.drain_tx();
 
-    session.needs_resync = recovered;
     session.shell_lost = !recovered;
 }
 
@@ -293,7 +294,6 @@ impl SessionManager {
                 is_pyrunner: use_pyrunner,
                 has_pyrunner: python_ready,
                 pyrunner_dirty: false,
-                needs_resync: false,
                 shell_lost: false,
             },
         );
@@ -320,11 +320,6 @@ impl SessionManager {
                  new one; `code.run` is unaffected."
                     .to_string(),
             );
-        }
-
-        if session.needs_resync {
-            repl::wait_for_prompt(&mut session.bus, &mut session.hart, &session.prompt);
-            session.needs_resync = false;
         }
 
         session.bus.uart.drain_tx();
@@ -464,14 +459,6 @@ impl SessionManager {
             session.pyrunner_dirty = false;
         }
 
-        if session.needs_resync {
-            repl::wait_for_prompt(&mut session.bus, &mut session.hart, &session.prompt);
-            session.bus.uart.drain_tx();
-            session.bus.uart_stderr.drain_tx();
-            session.bus.uart_ctrl.drain_tx();
-            session.needs_resync = false;
-        }
-
         let mut buf = Vec::new();
         machine::snapshot::save_delta(&session.bus, &session.hart, &mut buf)
             .map_err(|e| format!("suspend failed: {e}"))?;
@@ -563,7 +550,6 @@ impl SessionManager {
                 is_pyrunner,
                 has_pyrunner,
                 pyrunner_dirty: false,
-                needs_resync: false,
                 shell_lost: false,
             },
         );

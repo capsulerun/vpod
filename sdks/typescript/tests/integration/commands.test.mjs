@@ -191,4 +191,40 @@ describe("commands timeouts", { skip: skipReason() ?? false }, () => {
             assert.equal(result.stderr.trim(), "err");
         });
     });
+
+    it("runs commands that end in a comment", async () => {
+        const cases = [
+            ["echo #", 0, ""],
+            ["ls -d / #", 0, "/"],
+            ["pwd #", 0, "/"],
+            ["basename /a/b #", 0, "b"],
+            ["echo kept # a note after it", 0, "kept"],
+            ["echo a; echo b #", 0, "a\nb"],
+            ["echo '#' #", 0, "#"],
+            // A real non-zero exit
+            ["false #", 1, ""],
+        ];
+
+        await withSandbox(async (sandbox) => {
+            for (const [command, exitCode, stdout] of cases) {
+                const result = await sandbox.commands.run(command, { timeout: 10 });
+                assert.equal(result.exitCode, exitCode, `${command} exited ${result.exitCode}`);
+                assert.equal(result.stdout.trim(), stdout, `${command} printed ${result.stdout}`);
+            }
+        });
+    });
+
+    it("comes back quickly from a command that timed out", async () => {
+        await withSandbox(async (sandbox) => {
+            const hung = await sandbox.commands.run("cat", { timeout: 3 });
+            assert.equal(hung.exitCode, 124);
+
+            const started = Date.now();
+            const after = await sandbox.commands.run("echo back");
+            const elapsed = (Date.now() - started) / 1000;
+
+            assert.equal(after.stdout.trim(), "back");
+            assert.ok(elapsed < 3, `the command after a timeout took ${elapsed.toFixed(2)}s`);
+        });
+    });
 });

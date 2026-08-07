@@ -13,6 +13,8 @@ const NET_YIELD_NS: u64 = 5_000_000; // 5 ms
 // TO TEST : the time UART must be quiet after last output before declare the command
 const QUIET_PERIOD_NS: u64 = 150_000_000; // 150 ms
 
+const GRACE_STEPS: u32 = 2000;
+
 pub fn sync_clock(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     let now = wall_clock::now();
     let date_cmd = format!("date -s @{}\n", now.seconds);
@@ -71,8 +73,9 @@ pub fn settle(bus: &mut MachineBus, hart: &mut Hart, wall_ns: u64) {
     }
 }
 
+
 pub fn drain_ctrl_with_grace(bus: &mut MachineBus, hart: &mut Hart) -> Vec<u8> {
-    for _ in 0..2000u32 {
+    for _ in 0..GRACE_STEPS {
         let bytes = bus.uart_ctrl.drain_tx();
         if !bytes.is_empty() {
             return bytes;
@@ -119,6 +122,31 @@ pub fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) -> 
     }
 
     false
+}
+
+pub fn absorb_stray_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
+    let mut buffer = Vec::new();
+
+    for _ in 0..GRACE_STEPS {
+        if hart.is_waiting {
+            hart.is_waiting = false;
+        }
+
+        bus.clint.advance_by_instructions(STEP);
+        bus.poll(hart);
+
+        if let StepResult::Trap(_) | StepResult::Halt = hart.run(bus, STEP) {
+            return;
+        }
+
+        let output = bus.uart.drain_tx();
+        if !output.is_empty() {
+            buffer.extend_from_slice(&output);
+            if buffer.ends_with(prompt) {
+                return;
+            }
+        }
+    }
 }
 
 pub fn capture_output(
