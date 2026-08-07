@@ -73,7 +73,6 @@ pub fn settle(bus: &mut MachineBus, hart: &mut Hart, wall_ns: u64) {
     }
 }
 
-
 pub fn drain_ctrl_with_grace(bus: &mut MachineBus, hart: &mut Hart) -> Vec<u8> {
     for _ in 0..GRACE_STEPS {
         let bytes = bus.uart_ctrl.drain_tx();
