@@ -157,3 +157,13 @@ describe("commands timeouts", { skip: skipReason() ?? false }, () => {
         });
     });
 });
+
+describe("apk repositories", { skip: skipReason() ?? false }, () => {
+    it("leaves them alone under node, which can read the cdn directly", async () => {
+        await withSandbox(async (sandbox) => {
+            const result = await sandbox.commands.run("cat /etc/apk/repositories");
+            assert.match(result.stdout, /dl-cdn\.alpinelinux\.org/);
+            assert.doesNotMatch(result.stdout, /apk\.vpod\.sh/);
+        });
+    });
+});

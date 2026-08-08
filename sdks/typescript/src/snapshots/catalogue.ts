@@ -59,8 +59,12 @@ export async function fetchCatalogue(
     const catalogue = (await response.json()) as Catalogue;
 
     if (store !== null) {
-        await store.writeText(catalogueFile(registryUrl), JSON.stringify(catalogue));
-        await store.writeText(catalogueFetchedAtFile(registryUrl), String(Date.now()));
+
+        try {
+            await store.writeText(catalogueFile(registryUrl), JSON.stringify(catalogue));
+            await store.writeText(catalogueFetchedAtFile(registryUrl), String(Date.now()));
+        } catch {
+        }
     }
 
     return catalogue;

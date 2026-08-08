@@ -60,3 +60,49 @@ describe("resolveSnapshot", () => {
         );
     });
 });
+
+describe("fetchCatalogue when the cache is busy", () => {
+    function lockedStore() {
+        const attempts = [];
+        return {
+            kind: "opfs",
+            attempts,
+            async list() {
+                return [];
+            },
+            async remove() {},
+            async read() {
+                return null;
+            },
+            async write() {},
+            async readText() {
+                return null;
+            },
+            async writeText(name) {
+                attempts.push(name);
+                throw new DOMException(
+                    "Access Handles cannot be created if there is another open Access Handle",
+                    "NoModificationAllowedError",
+                );
+            },
+        };
+    }
+
+    const CATALOGUE_BODY = { snapshots: [entry("vsnap-base-256mb", "vsnap-base", "1.0.0")] };
+
+    it("returns the catalogue even though it could not be cached", async (t) => {
+        t.mock.method(globalThis, "fetch", async () =>
+            new Response(JSON.stringify(CATALOGUE_BODY), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }));
+
+        const store = lockedStore();
+        const catalogue = await snapshots.fetchCatalogue(store, {
+            registryUrl: "https://example.invalid/snapshots.json",
+        });
+
+        assert.equal(catalogue.snapshots.length, 1);
+        assert.ok(store.attempts.length > 0, "it should have tried to cache the catalogue");
+    });
+});
