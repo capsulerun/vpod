@@ -53,7 +53,7 @@ describe("where apk looks", () => {
 
         const [first] = execs(transport);
         assert.match(first, /\/etc\/apk\/repositories/);
-        assert.match(first, /apk-browser-mirror\.vpod\.sh/);
+        assert.match(first, /apk-mirror\.vpod\.sh/);
         assert.match(first, /dl-cdn/, "only the host should be replaced");
     });
 
@@ -82,7 +82,7 @@ describe("where apk looks", () => {
         await sandbox.commands.run("echo hello");
 
         assert.match(execs(transport)[0], /mirrors\.example\.test/);
-        assert.doesNotMatch(execs(transport)[0], /apk-browser-mirror\.vpod\.sh/);
+        assert.doesNotMatch(execs(transport)[0], /apk-mirror\.vpod\.sh/);
     });
 
     it("runs once, not before every command", async () => {
