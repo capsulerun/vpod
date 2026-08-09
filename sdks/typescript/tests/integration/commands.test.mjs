@@ -156,4 +156,75 @@ describe("commands timeouts", { skip: skipReason() ?? false }, () => {
             assert.equal(result.stdout.trim(), "still here");
         });
     });
+
+    it("runs a heredoc", async () => {
+        await withSandbox(async (sandbox) => {
+            const result = await sandbox.commands.run("cat <<'EOF'\nalpha\nbeta\nEOF");
+            assert.equal(result.exitCode, 0);
+            assert.equal(result.stdout.trim(), "alpha\nbeta");
+        });
+    });
+
+    it("writes a file with a heredoc and runs it back", async () => {
+        await withSandbox(async (sandbox) => {
+            const written = await sandbox.commands.run(
+                "cat <<'EOF' > /tmp/written.py\nprint('written')\nEOF",
+            );
+            assert.equal(written.exitCode, 0);
+
+            const ran = await sandbox.commands.run("python3 /tmp/written.py");
+            assert.equal(ran.stdout.trim(), "written");
+        });
+    });
+
+    it("expands variables in an unquoted heredoc", async () => {
+        await withSandbox(async (sandbox) => {
+            const result = await sandbox.commands.run("NAME=world\ncat <<EOF\nhello $NAME\nEOF");
+            assert.equal(result.stdout.trim(), "hello world");
+        });
+    });
+
+    it("keeps stderr on its own stream", async () => {
+        await withSandbox(async (sandbox) => {
+            const result = await sandbox.commands.run("echo out; echo err >&2");
+            assert.equal(result.stdout.trim(), "out");
+            assert.equal(result.stderr.trim(), "err");
+        });
+    });
+
+    it("runs commands that end in a comment", async () => {
+        const cases = [
+            ["echo #", 0, ""],
+            ["ls -d / #", 0, "/"],
+            ["pwd #", 0, "/"],
+            ["basename /a/b #", 0, "b"],
+            ["echo kept # a note after it", 0, "kept"],
+            ["echo a; echo b #", 0, "a\nb"],
+            ["echo '#' #", 0, "#"],
+            // A real non-zero exit
+            ["false #", 1, ""],
+        ];
+
+        await withSandbox(async (sandbox) => {
+            for (const [command, exitCode, stdout] of cases) {
+                const result = await sandbox.commands.run(command, { timeout: 10 });
+                assert.equal(result.exitCode, exitCode, `${command} exited ${result.exitCode}`);
+                assert.equal(result.stdout.trim(), stdout, `${command} printed ${result.stdout}`);
+            }
+        });
+    });
+
+    it("comes back quickly from a command that timed out", async () => {
+        await withSandbox(async (sandbox) => {
+            const hung = await sandbox.commands.run("cat", { timeout: 3 });
+            assert.equal(hung.exitCode, 124);
+
+            const started = Date.now();
+            const after = await sandbox.commands.run("echo back");
+            const elapsed = (Date.now() - started) / 1000;
+
+            assert.equal(after.stdout.trim(), "back");
+            assert.ok(elapsed < 3, `the command after a timeout took ${elapsed.toFixed(2)}s`);
+        });
+    });
 });

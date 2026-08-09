@@ -50,7 +50,27 @@ pub struct Session {
     pub is_pyrunner: bool,
     pub has_pyrunner: bool,
     pub pyrunner_dirty: bool,
-    pub needs_resync: bool,
+    pub shell_lost: bool,
+}
+
+fn recover_shell(session: &mut Session) {
+    session.bus.uart.push_rx(0x03);
+    let mut recovered = repl::wait_for_prompt(&mut session.bus, &mut session.hart, &session.prompt);
+
+    if !recovered {
+        session.bus.uart.push_rx(0x04);
+        recovered = repl::wait_for_prompt(&mut session.bus, &mut session.hart, &session.prompt);
+    }
+
+    if recovered {
+        repl::absorb_stray_prompt(&mut session.bus, &mut session.hart, &session.prompt);
+    }
+
+    session.bus.uart.drain_tx();
+    session.bus.uart_stderr.drain_tx();
+    session.bus.uart_ctrl.drain_tx();
+
+    session.shell_lost = !recovered;
 }
 
 fn stage_long_command(session: &mut Session, code: &str) -> String {
@@ -274,7 +294,7 @@ impl SessionManager {
                 is_pyrunner: use_pyrunner,
                 has_pyrunner: python_ready,
                 pyrunner_dirty: false,
-                needs_resync: false,
+                shell_lost: false,
             },
         );
 
@@ -292,9 +312,14 @@ impl SessionManager {
             .get_mut(&handle)
             .ok_or_else(|| format!("invalid session handle: {handle}"))?;
 
-        if session.needs_resync {
-            repl::wait_for_prompt(&mut session.bus, &mut session.hart, &session.prompt);
-            session.needs_resync = false;
+        if session.shell_lost {
+            return Err(
+                "vpod: the shell did not come back from a timed-out command. Something that \
+                 ignores Ctrl-C was left in the foreground, an interactive python3 or a \
+                 pager for instance. This sandbox cannot run further commands, so create a \
+                 new one; `code.run` is unaffected."
+                    .to_string(),
+            );
         }
 
         session.bus.uart.drain_tx();
@@ -369,7 +394,7 @@ impl SessionManager {
             };
 
             let cmd = if session.is_shell {
-                format!("{{ {code}; }} 2>/dev/ttyS1\n")
+                format!("{{\n{code}\n}} 2>/dev/ttyS1\n")
             } else {
                 format!("{code}\n")
             };
@@ -408,13 +433,7 @@ impl SessionManager {
             };
 
             if session.is_shell && timed_out {
-                session.bus.uart.push_rx(0x03);
-                repl::wait_for_prompt(&mut session.bus, &mut session.hart, &session.prompt);
-                session.bus.uart.drain_tx();
-                session.bus.uart_stderr.drain_tx();
-                session.bus.uart_ctrl.drain_tx();
-
-                session.needs_resync = true;
+                recover_shell(session);
             }
 
             Ok(ExecutionResult {
@@ -438,14 +457,6 @@ impl SessionManager {
         if session.pyrunner_dirty {
             restart_pyrunner(session);
             session.pyrunner_dirty = false;
-        }
-
-        if session.needs_resync {
-            repl::wait_for_prompt(&mut session.bus, &mut session.hart, &session.prompt);
-            session.bus.uart.drain_tx();
-            session.bus.uart_stderr.drain_tx();
-            session.bus.uart_ctrl.drain_tx();
-            session.needs_resync = false;
         }
 
         let mut buf = Vec::new();
@@ -539,7 +550,7 @@ impl SessionManager {
                 is_pyrunner,
                 has_pyrunner,
                 pyrunner_dirty: false,
-                needs_resync: false,
+                shell_lost: false,
             },
         );
 
