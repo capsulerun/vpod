@@ -39,16 +39,38 @@ function corsIsEnforced(): boolean {
     return global.window !== undefined || global.WorkerGlobalScope !== undefined;
 }
 
+function pageIsServedOverHttps(): boolean {
+    const global = globalThis as { location?: { protocol?: string } };
+    return global.location?.protocol === "https:";
+}
+
 function describeFetchFailure(
     thrown: unknown,
     host: string,
     timeoutMilliseconds: number,
+    url: string,
 ): { statusText: string; detail: string } {
     const reason = thrown instanceof Error ? thrown.message : String(thrown);
 
     if (thrown instanceof Error && thrown.name === "AbortError") {
         const seconds = Math.round(timeoutMilliseconds / 1000);
         return { statusText: "Upstream Timeout", detail: `timed out after ${seconds}s` };
+    }
+
+    if (
+        thrown instanceof TypeError &&
+        corsIsEnforced() &&
+        url.startsWith("http://") &&
+        pageIsServedOverHttps()
+    ) {
+        return {
+            statusText: "Blocked as mixed content",
+            detail:
+                `${reason}. The page hosting vpod is served over https, so the browser ` +
+                `refused this plaintext http request before vpod saw a response. No header ` +
+                `${host} could send would allow it. Ask for https://${host} instead, or use ` +
+                `Node, which uses real sockets and has no such rule.`,
+        };
     }
 
     if (thrown instanceof TypeError && corsIsEnforced()) {
@@ -230,7 +252,12 @@ export class FetchDriver {
                 ),
             );
         } catch (thrown: unknown) {
-            const failure = describeFetchFailure(thrown, host, timeoutMilliseconds);
+            const failure = describeFetchFailure(
+                thrown,
+                host,
+                timeoutMilliseconds,
+                fetchable.url,
+            );
             const message = `fetch to ${fetchable.url} failed: ${failure.detail}`;
             this.#warnOnce(host, `vpod: ${message}`);
             await this.#writeAll(
