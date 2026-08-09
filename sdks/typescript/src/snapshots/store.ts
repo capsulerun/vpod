@@ -91,7 +91,14 @@ export class SnapshotStore implements SnapshotStorage {
 
         const openSync = file.createSyncAccessHandle;
         if (openSync !== undefined) {
-            const handle = await openSync.call(file);
+
+            let handle: SyncAccessHandle;
+            try {
+                handle = await openSync.call(file);
+            } catch {
+                return null;
+            }
+
             try {
                 const bytes = new Uint8Array(handle.getSize());
                 handle.read(bytes, { at: 0 });
