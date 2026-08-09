@@ -1,0 +1,59 @@
+# Image upload broker for `gh image` (ai-aligned-gh).
+#
+# Installed automatically by the as-a-bot GitHub App
+# (https://github.com/ai-ecoverse/as-a-bot). No secrets required: the
+# workflow only proves repository identity to the as-a-bot worker via
+# GitHub OIDC; the worker mints the pre-signed upload URL itself.
+#
+# Only users with write access can dispatch this workflow — that is the
+# entire authorization model: minting an upload URL requires the same
+# permission as pushing code.
+
+name: Image Upload
+run-name: "Request image upload URL ${{ inputs.hash }}.${{ inputs.ext }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      hash:
+        description: "SHA-256 content hash of the file (64 lowercase hex chars)"
+        required: true
+        type: string
+      ext:
+        description: "File extension (png, jpg, jpeg, gif, webp, svg, avif, mp4, mov, webm)"
+        required: true
+        type: string
+
+permissions:
+  id-token: write   # OIDC token authenticates this repo to the as-a-bot worker
+  contents: read
+
+jobs:
+  request-upload-url:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Request pre-signed upload URL from as-a-bot
+        env:
+          AS_A_BOT_URL: ${{ vars.AS_A_BOT_URL || 'https://as-bot-worker.minivelos.workers.dev' }}
+          INPUT_HASH: ${{ inputs.hash }}
+          INPUT_EXT: ${{ inputs.ext }}
+        run: |
+          set -euo pipefail
+
+          echo "$INPUT_HASH" | grep -qE '^[a-f0-9]{64}$' || { echo "Invalid hash input"; exit 1; }
+          echo "$INPUT_EXT" | grep -qE '^(png|jpg|jpeg|gif|webp|svg|avif|mp4|mov|webm)$' || { echo "Invalid ext input"; exit 1; }
+
+          OIDC_TOKEN=$(curl -sSf \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=as-a-bot-images" | jq -r .value)
+
+          # The worker responds with only the serve URL — the pre-signed
+          # upload URL stays out of the (publicly readable) run logs and is
+          # delivered to the gh image client via the worker's status endpoint.
+          RESPONSE=$(curl -sSf -X POST "$AS_A_BOT_URL/image-upload/offer" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"hash\":\"$INPUT_HASH\",\"ext\":\"$INPUT_EXT\"}")
+
+          echo "Upload URL registered. File will be served at:"
+          echo "$RESPONSE" | jq -r .serve_url
