@@ -225,6 +225,20 @@ The project uses pre-built Alpine snapshots from `registry.vpod.sh`, so you norm
 ./scripts/build-data-snapshot.sh      # 512 MB variant with numpy/pandas/scipy
 ```
 
+Custom snapshots can also be built from a **Dockerfile** (macOS, using
+[Apple's `container` CLI](https://github.com/apple/container) as the
+riscv64 image builder):
+
+```bash
+./scripts/build-snapshot-from-dockerfile.sh -f Dockerfile -n my-image   # dist/my-image-256mb.snap
+```
+
+The Dockerfile is built for `linux/riscv64` (BuildKit executes RUN steps
+under emulation), its flattened rootfs replaces the Alpine minirootfs,
+and the rest of the pipeline is identical — vpod overlay, boot,
+`--snapshot-save`. Python warm-start is applied automatically when the
+image contains `python3`.
+
 > [!IMPORTANT]
 > To use a locally built snapshot, uncomment the lines in `resolve_snapshot()` in `crates/vpod/src/main.rs`.
 
