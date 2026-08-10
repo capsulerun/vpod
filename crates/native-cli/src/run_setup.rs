@@ -105,7 +105,18 @@ fn wait_for_prompt(bus: &mut MachineBus, hart: &mut Hart, verbose: bool) -> Vec<
     let mut buffer = Vec::new();
     let mut dsr_answered = false;
 
-    for _ in 0..8_000_000u32 {
+    // VPOD_SETUP_PATIENCE multiplies the per-step instruction budget.
+    // Heavy runtimes (node/V8 startup is ~10^9 guest instructions) blow
+    // the default window under aot-trace instrumentation; the AOT pass
+    // sets this for custom workloads instead of every caller paying for
+    // a bigger default.
+    let patience: u32 = std::env::var("VPOD_SETUP_PATIENCE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&p| p >= 1)
+        .unwrap_or(1);
+
+    for _ in 0..8_000_000u32.saturating_mul(patience) {
         if hart.is_waiting {
             hart.is_waiting = false;
 

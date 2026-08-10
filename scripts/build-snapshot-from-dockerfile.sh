@@ -46,10 +46,26 @@ NAME=""
 OUT=""
 RAM_MB=256
 PLATFORM="linux/riscv64"
+AOT=0
+TRACE_CMDS=""
+
+add_trace_cmd() {
+    if [ -z "$TRACE_CMDS" ]; then
+        TRACE_CMDS="$1"
+    else
+        TRACE_CMDS="$TRACE_CMDS
+$1"
+    fi
+}
 
 usage() {
     echo "usage: $0 -f <Dockerfile> -n <name> [-C <context-dir>] [--ram <MB>]"
     echo "          [--out <file>] [--platform <os/arch>] [--alpine-version <v>]"
+    echo "          [--aot --trace-cmd <sh> [--trace-cmd <sh>]...]"
+    echo ""
+    echo "  --aot runs scripts/aot-snapshot.sh --workload custom afterwards,"
+    echo "  tracing the given --trace-cmd steps (exercise the image's hot"
+    echo "  code: the interpreter/tool your Dockerfile installed)."
     exit "${1:-1}"
 }
 
@@ -66,10 +82,17 @@ while [ $# -gt 0 ]; do
         --out)            need "$@"; OUT="$2";            shift 2 ;;
         --platform)       need "$@"; PLATFORM="$2";       shift 2 ;;
         --alpine-version) need "$@"; ALPINE_VERSION="$2"; shift 2 ;;
+        --aot)            AOT=1;                          shift ;;
+        --trace-cmd)      need "$@"; add_trace_cmd "$2";  shift 2 ;;
         -h|--help)        usage 0 ;;
         *) echo "unknown arg: $1"; usage ;;
     esac
 done
+
+if [ "$AOT" = "1" ] && [ -z "$TRACE_CMDS" ]; then
+    echo "ERROR: --aot needs at least one --trace-cmd (the workload to trace)"
+    usage
+fi
 
 [ -n "$DOCKERFILE" ] || usage
 [ -n "$NAME" ] || usage
@@ -256,6 +279,19 @@ zig cc -target riscv64-linux-musl -Os -static -s \
     -o "$OVERLAY/usr/lib/vpod/vpod-ssl-client" \
     "$ROOT/guest/tls/vpod_ssl_client.c"
 chmod +x "$OVERLAY/usr/lib/vpod/vpod-ssl-client"
+
+echo "── Cross-compiling vpod entropy seeder (riscv64-musl, static)..."
+# Deterministic emulation produces no jitter entropy, so the guest crng
+# never initializes and blocking getrandom() — node/V8 startup — hangs
+# forever. Seed + CREDIT the crng during finalize from host randomness;
+# the seed file is deleted before the snapshot is captured.
+zig cc -target riscv64-linux-musl -Os -static -s \
+    -o "$OVERLAY/usr/lib/vpod/vpod-seed-entropy" \
+    "$ROOT/guest/entropy/vpod_seed_entropy.c"
+chmod +x "$OVERLAY/usr/lib/vpod/vpod-seed-entropy"
+mkdir -p "$OVERLAY/etc/vpod"
+head -c 512 /dev/urandom > "$OVERLAY/etc/vpod/entropy-seed"
+chmod 600 "$OVERLAY/etc/vpod/entropy-seed"
 
 mkdir -p "$OVERLAY/etc/vpod"
 cat > "$OVERLAY/etc/vpod/pydaemon-warm-imports" << 'WARM_EOF'
@@ -444,6 +480,10 @@ NOW="$(date -u '+%Y-%m-%d %H:%M:%S')"
 SETUP_CMD=""
 SETUP_CMD="${SETUP_CMD}date -s '$NOW'; "
 
+# Initialize the crng first — anything started later in this boot (the
+# warm-python daemon included) may issue a blocking getrandom().
+SETUP_CMD="${SETUP_CMD}/usr/lib/vpod/vpod-seed-entropy && rm -f /etc/vpod/entropy-seed && echo VPOD_ENTROPY_SEEDED; "
+
 # Trust the vpod proxy CA. `update-ca-certificates` when the image ships
 # it (Alpine ca-certificates package); plain bundle append otherwise.
 SETUP_CMD="${SETUP_CMD}command -v update-ca-certificates >/dev/null && update-ca-certificates; "
@@ -488,6 +528,13 @@ if grep -q "Kernel panic" "$BUILD_LOG"; then
     echo "       (see $BUILD_LOG for the boot output)" >&2
     exit 1
 fi
+if ! grep -q "^VPOD_ENTROPY_SEEDED" "$BUILD_LOG"; then
+    echo "" >&2
+    echo "error: the guest crng was not seeded — blocking getrandom() users" >&2
+    echo "       (node, jvm) would hang forever in resumed guests. Aborting." >&2
+    echo "       (see $BUILD_LOG for the guest setup output)" >&2
+    exit 1
+fi
 if ! grep -q "^VPOD_CA_INSTALLED" "$BUILD_LOG"; then
     echo "" >&2
     echo "error: the vpod proxy CA is not in the guest trust store." >&2
@@ -526,9 +573,35 @@ echo "=== Done ==="
 echo ""
 echo "Snapshot: $OUT"
 echo ""
-echo ""
-echo "Next (optional), to build and bake AOT-translated blocks:"
-echo "  ./scripts/aot-snapshot.sh \"$OUT\""
+echo "Catalogue entry (registry/catalog.json):"
+cat <<ENTRY_EOF
+    {
+      "id": "${NAME}-${RAM_MB}mb",
+      "name": "${NAME}",
+      "tag": "latest",
+      "memory_label": "${RAM_MB}mb",
+      "description": "Built from ${DOCKERFILE}",
+      "url": "<host this file and put its URL here>",
+      "sha256": "${SNAP_SHA256}",
+      "size": ${SNAP_SIZE}
+    }
+ENTRY_EOF
+if [ "$AOT" = "1" ]; then
+    echo ""
+    echo "── Running AOT translation pass (custom workload)..."
+    set --
+    OLD_IFS="$IFS"; IFS='
+'
+    for CMD in $TRACE_CMDS; do
+        set -- "$@" --trace-cmd "$CMD"
+    done
+    IFS="$OLD_IFS"
+    "$SCRIPT_DIR/aot-snapshot.sh" "$OUT" --workload custom "$@"
+else
+    echo ""
+    echo "Next (optional), to build and bake AOT-translated blocks for this image:"
+    echo "  ./scripts/aot-snapshot.sh \"$OUT\" --workload custom --trace-cmd '<hot command>'"
+fi
 echo ""
 echo "Try it:"
 echo "  ./target/release/vpod-native --snapshot-load \"$OUT\""
