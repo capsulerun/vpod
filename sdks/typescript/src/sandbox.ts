@@ -34,6 +34,7 @@ export interface SandboxOptions extends SandboxRuntimeOptions {
     snapshot?: SnapshotSource;
     network?: boolean;
     registryUrl?: string;
+    corsProxy?: string;
     apkMirror?: string | false;
 }
 
@@ -143,6 +144,7 @@ export class Sandbox {
     static async #connectNetwork(
         runtime: SandboxRuntime,
         requested: boolean | undefined,
+        corsProxy: string | undefined,
     ): Promise<void> {
         if (runtime.networkBackend !== "none") {
             return; // Node already has real sockets.
@@ -154,19 +156,19 @@ export class Sandbox {
 
         if (requested === undefined) {
             if (networkAvailability().available) {
-                await runtime.enableNetwork();
+                await runtime.enableNetwork({ corsProxy });
             }
             return;
         }
 
-        await runtime.enableNetwork();
+        await runtime.enableNetwork({ corsProxy });
     }
 
     static async create(options: SandboxOptions = {}): Promise<Sandbox> {
         const runtime = new SandboxRuntime(await Sandbox.#withTransport(options));
         await runtime.ready();
 
-        await Sandbox.#connectNetwork(runtime, options.network);
+        await Sandbox.#connectNetwork(runtime, options.network, options.corsProxy);
 
         const mounted = await Sandbox.#mount(
             runtime,
@@ -211,12 +213,6 @@ export class Sandbox {
         return this.#sessionHandle;
     }
 
-    /**
-     * Only the host is rewritten, so the guest keeps whichever Alpine release it
-     * was built from, and a repositories file already pointed somewhere else is
-     * left alone. Runs once per session, and only where it is needed: under Node
-     * the guest has real sockets and reads the CDN directly.
-     */
     async #pointApkAtSomethingReadable(handle: bigint): Promise<void> {
         if (this.#apkMirror === false || this.#runtime.networkBackend !== "fetch") {
             return;
@@ -255,7 +251,7 @@ export class Sandbox {
         const runtime = new SandboxRuntime(await Sandbox.#withTransport(options));
         await runtime.ready();
 
-        await Sandbox.#connectNetwork(runtime, options.network);
+        await Sandbox.#connectNetwork(runtime, options.network, options.corsProxy);
 
         const mounted = await Sandbox.#mount(
             runtime,

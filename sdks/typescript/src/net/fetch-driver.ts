@@ -92,9 +92,14 @@ export class FetchDriver {
     readonly #connections = new Map<number, Connection>();
     readonly #options: DriverOptions;
     readonly #warnedHosts = new Set<string>();
+    readonly #hostsNeedingProxy = new Set<string>();
 
     constructor(options: DriverOptions = {}) {
         this.#options = options;
+    }
+
+    #proxied(url: string): string {
+        return `${this.#options.corsProxy!.replace(/\/+$/, "")}/${url}`;
     }
 
     #warnOnce(host: string, message: string): void {
@@ -225,15 +230,34 @@ export class FetchDriver {
             this.#options.requestTimeoutMilliseconds ?? DEFAULT_REQUEST_TIMEOUT_MILLISECONDS;
         const timeout = setTimeout(() => abort.abort(), timeoutMilliseconds);
 
+        const canProxy = this.#options.corsProxy !== undefined;
+        const startProxied = canProxy && this.#hostsNeedingProxy.has(host);
+
         try {
-            const response = await fetch(fetchable.url, {
-                method: fetchable.method,
-                headers: fetchable.headers,
-                body: fetchable.body as BodyInit | undefined,
-                signal: abort.signal,
-                redirect: "manual",
-                credentials: "omit",
-            });
+            const send = (url: string) =>
+                fetch(url, {
+                    method: fetchable.method,
+                    headers: fetchable.headers,
+                    body: fetchable.body as BodyInit | undefined,
+                    signal: abort.signal,
+                    redirect: "manual",
+                    credentials: "omit",
+                });
+
+            let response: Response;
+            try {
+                response = await send(
+                    startProxied ? this.#proxied(fetchable.url) : fetchable.url,
+                );
+            } catch (direct: unknown) {
+                const worthRetrying =
+                    canProxy && !startProxied && direct instanceof TypeError && corsIsEnforced();
+                if (!worthRetrying) {
+                    throw direct;
+                }
+                this.#hostsNeedingProxy.add(host);
+                response = await send(this.#proxied(fetchable.url));
+            }
 
             const body = new Uint8Array(await response.arrayBuffer());
             const headers: [string, string][] = [];
@@ -258,7 +282,13 @@ export class FetchDriver {
                 timeoutMilliseconds,
                 fetchable.url,
             );
-            const message = `fetch to ${fetchable.url} failed: ${failure.detail}`;
+            // Name the original URL, not the proxied one: that is the address the
+            // guest asked for and the one worth acting on. Say the proxy was tried
+            // so a misconfigured allowlist is not mistaken for an unreachable host.
+            const viaProxy = this.#hostsNeedingProxy.has(host)
+                ? ` (also tried via corsProxy at ${this.#options.corsProxy})`
+                : "";
+            const message = `fetch to ${fetchable.url} failed: ${failure.detail}${viaProxy}`;
             this.#warnOnce(host, `vpod: ${message}`);
             await this.#writeAll(
                 connection,
