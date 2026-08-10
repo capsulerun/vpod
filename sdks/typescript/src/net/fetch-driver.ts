@@ -49,6 +49,7 @@ function describeFetchFailure(
     host: string,
     timeoutMilliseconds: number,
     url: string,
+    proxyConfigured: boolean,
 ): { statusText: string; detail: string } {
     const reason = thrown instanceof Error ? thrown.message : String(thrown);
 
@@ -80,8 +81,14 @@ function describeFetchFailure(
                 `${reason}. The browser blocked this before vpod saw a response, most ` +
                 `likely because ${host} sends no access-control-allow-origin header. In a ` +
                 `browser every request the guest makes goes out as a fetch, so a host that ` +
-                `does not opt in is unreachable. The same request works under Node, which ` +
-                `uses real sockets and does not enforce CORS.`,
+                `does not opt in is unreachable. ` +
+                (proxyConfigured
+                    ? `The configured corsProxy did not get through either: check that ` +
+                      `${host} is in its allowlist.`
+                    : `Pass corsProxy to Sandbox.create with a relay you operate and this ` +
+                      `becomes reachable; see infra/cors-proxy/ for one to deploy.`) +
+                ` The same request works under Node, which uses real sockets and does not ` +
+                `enforce CORS.`,
         };
     }
 
@@ -281,6 +288,7 @@ export class FetchDriver {
                 host,
                 timeoutMilliseconds,
                 fetchable.url,
+                canProxy,
             );
             // Name the original URL, not the proxied one: that is the address the
             // guest asked for and the one worth acting on. Say the proxy was tried
