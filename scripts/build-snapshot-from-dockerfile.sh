@@ -25,15 +25,19 @@
 
 set -e
 
-cleanup() {
-    rm -rf "$ROOT/dist/df-rootfs" "$ROOT/dist/df-rootfs.tar" \
-           "$ROOT/dist/df-mini.cpio.gz" "$ROOT/dist/df-overlay.cpio.gz" \
-           "$ROOT/dist/df-overlay"
-}
-trap cleanup EXIT
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+ROOTFS_TAR="$ROOT/dist/df-rootfs.tar"
+ROOTFS="$ROOT/dist/df-rootfs"
+OVERLAY="$ROOT/dist/df-overlay"
+PART_MINI="$ROOT/dist/df-mini.cpio.gz"
+PART_OVL="$ROOT/dist/df-overlay.cpio.gz"
+
+cleanup() {
+    rm -rf "$ROOTFS" "$ROOTFS_TAR" "$OVERLAY" "$PART_MINI" "$PART_OVL"
+}
+trap cleanup EXIT
 
 ALPINE_VERSION="3.23.0"
 DOCKERFILE=""
@@ -46,18 +50,23 @@ PLATFORM="linux/riscv64"
 usage() {
     echo "usage: $0 -f <Dockerfile> -n <name> [-C <context-dir>] [--ram <MB>]"
     echo "          [--out <file>] [--platform <os/arch>] [--alpine-version <v>]"
-    exit 1
+    exit "${1:-1}"
+}
+
+need() {
+    [ -n "$2" ] || { echo "ERROR: $1 requires a value"; usage; }
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        -f|--file)        DOCKERFILE="$2";     shift 2 ;;
-        -C|--context)     CONTEXT="$2";        shift 2 ;;
-        -n|--name)        NAME="$2";           shift 2 ;;
-        --ram)            RAM_MB="$2";         shift 2 ;;
-        --out)            OUT="$2";            shift 2 ;;
-        --platform)       PLATFORM="$2";       shift 2 ;;
-        --alpine-version) ALPINE_VERSION="$2"; shift 2 ;;
+        -f|--file)        need "$@"; DOCKERFILE="$2";     shift 2 ;;
+        -C|--context)     need "$@"; CONTEXT="$2";        shift 2 ;;
+        -n|--name)        need "$@"; NAME="$2";           shift 2 ;;
+        --ram)            need "$@"; RAM_MB="$2";         shift 2 ;;
+        --out)            need "$@"; OUT="$2";            shift 2 ;;
+        --platform)       need "$@"; PLATFORM="$2";       shift 2 ;;
+        --alpine-version) need "$@"; ALPINE_VERSION="$2"; shift 2 ;;
+        -h|--help)        usage 0 ;;
         *) echo "unknown arg: $1"; usage ;;
     esac
 done
@@ -78,9 +87,6 @@ OPENSBI_VERSION="1.6"
 OPENSBI_FW="$ROOT/dist/fw_jump.bin"
 OPENSBI_URL="https://github.com/riscv-software-src/opensbi/releases/download/v${OPENSBI_VERSION}/opensbi-${OPENSBI_VERSION}-rv-bin.tar.xz"
 OPENSBI_TAR="$ROOT/dist/opensbi-${OPENSBI_VERSION}-rv-bin.tar.xz"
-ROOTFS_TAR="$ROOT/dist/df-rootfs.tar"
-ROOTFS="$ROOT/dist/df-rootfs"
-OVERLAY="$ROOT/dist/df-overlay"
 INITRD="$ROOT/dist/${NAME}-rootfs.cpio.gz"
 VPOD="$ROOT/target/release/vpod-native"
 
@@ -170,8 +176,15 @@ mkdir -p "$ROOTFS"
 # directory (e.g. linux_riscv64/) when --platform is given; plain builds
 # export at the archive root. Handle both.
 PLATFORM_PREFIX="$(printf '%s' "$PLATFORM" | tr '/' '_')"
-if bsdtar -tf "$ROOTFS_TAR" | head -1 | grep -q "^${PLATFORM_PREFIX}/"; then
-    bsdtar -xf "$ROOTFS_TAR" -C "$ROOTFS" --strip-components=1 --no-same-owner
+FIRST_ENTRY="$(bsdtar -tf "$ROOTFS_TAR" | head -1)"
+DOT_COMPONENT=0
+case "$FIRST_ENTRY" in
+    ./*) DOT_COMPONENT=1 ;;
+esac
+NORMALIZED="${FIRST_ENTRY#./}"
+if [ "${NORMALIZED%%/*}" = "$PLATFORM_PREFIX" ]; then
+    bsdtar -xf "$ROOTFS_TAR" -C "$ROOTFS" \
+        --strip-components=$((DOT_COMPONENT + 1)) --no-same-owner
     # BuildKit's tar exporter rewrites ABSOLUTE symlink targets to include
     # the platform directory (/bin/sh -> /linux_riscv64/bin/busybox). With
     # the prefix stripped those all dangle — including every busybox
@@ -208,6 +221,12 @@ mkdir -p "$ROOTFS/lib"
 gunzip -c "$INITRAMFS_LTS" | (cd "$ROOTFS" && cpio -idmu --quiet 'usr/lib/modules/*') 2>/dev/null || true
 if [ -d "$ROOTFS/usr/lib/modules" ] && [ ! -e "$ROOTFS/lib/modules" ]; then
     ln -sf /usr/lib/modules "$ROOTFS/lib/modules"
+fi
+
+if [ ! -d "$ROOTFS/usr/lib/modules" ]; then
+    echo "   WARNING: no kernel modules extracted from initramfs-lts."
+    echo "            If the guest has no network or cannot mount virtiofs,"
+    echo "            this is why (is the initramfs still gzip-compressed?)."
 fi
 
 
@@ -408,8 +427,6 @@ ln -sf /sbin/init "$OVERLAY/init"
 
 
 echo "── Packing ${NAME} initrd (image rootfs + modules + overlay)..."
-PART_MINI="$ROOT/dist/df-mini.cpio.gz"
-PART_OVL="$ROOT/dist/df-overlay.cpio.gz"
 (cd "$ROOTFS"  && find . | sort | cpio -H newc -o --quiet) | gzip -9 > "$PART_MINI"
 (cd "$OVERLAY" && find . | sort | cpio -H newc -o --quiet) | gzip -9 > "$PART_OVL"
 cat "$PART_MINI" "$PART_OVL" > "$INITRD"
@@ -509,19 +526,6 @@ echo "=== Done ==="
 echo ""
 echo "Snapshot: $OUT"
 echo ""
-echo "Catalogue entry (registry/catalog.json):"
-cat <<ENTRY_EOF
-    {
-      "id": "${NAME}-${RAM_MB}mb",
-      "name": "${NAME}",
-      "tag": "latest",
-      "memory_label": "${RAM_MB}mb",
-      "description": "Built from ${DOCKERFILE}",
-      "url": "<host this file and put its URL here>",
-      "sha256": "${SNAP_SHA256}",
-      "size": ${SNAP_SIZE}
-    }
-ENTRY_EOF
 echo ""
 echo "Next (optional), to build and bake AOT-translated blocks:"
 echo "  ./scripts/aot-snapshot.sh \"$OUT\""
