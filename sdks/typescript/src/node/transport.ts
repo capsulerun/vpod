@@ -15,6 +15,13 @@ import type { ExecutionResult, WorkerCall } from "../worker/protocol.js";
 interface Executor {
     sessionStart(snapshotPath: string, command: string, prompt: string, mounts: never[]): bigint;
     sessionExec(handle: bigint, code: string, timeout: bigint | undefined): ExecutionResult;
+    sessionExecSlice(
+        handle: bigint,
+        code: string | undefined,
+        timeout: bigint | undefined,
+        sliceNanos: bigint,
+    ): ExecutionResult | undefined;
+    sessionInterrupt(handle: bigint): void;
     sessionClose(handle: bigint): void;
     sessionSuspend(handle: bigint, deltaPath: string): bigint;
     sessionResume(
@@ -120,6 +127,20 @@ export class NodeDispatcher {
                     call.code,
                     call.timeoutSeconds ?? undefined,
                 );
+
+            case "session-exec-slice":
+                return (
+                    this.#executor.sessionExecSlice(
+                        call.handle,
+                        call.code ?? undefined,
+                        call.timeoutSeconds ?? undefined,
+                        call.sliceNanos,
+                    ) ?? null
+                );
+
+            case "session-interrupt":
+                this.#executor.sessionInterrupt(call.handle);
+                return null;
 
             case "session-close":
                 this.#executor.sessionClose(call.handle);

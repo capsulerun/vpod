@@ -32,6 +32,13 @@ interface Executor {
         code: string,
         timeout: bigint | undefined,
     ): ExecutionResult;
+    sessionExecSlice(
+        handle: bigint,
+        code: string | undefined,
+        timeout: bigint | undefined,
+        sliceNanos: bigint,
+    ): ExecutionResult | undefined;
+    sessionInterrupt(handle: bigint): void;
     sessionClose(handle: bigint): void;
     sessionSuspend(handle: bigint, deltaPath: string): bigint;
     sessionResume(
@@ -153,6 +160,20 @@ export class Dispatcher {
                     call.code,
                     call.timeoutSeconds ?? undefined,
                 );
+
+            case "session-exec-slice":
+                return (
+                    this.#requireExecutor().sessionExecSlice(
+                        call.handle,
+                        call.code ?? undefined,
+                        call.timeoutSeconds ?? undefined,
+                        call.sliceNanos,
+                    ) ?? null
+                );
+
+            case "session-interrupt":
+                this.#requireExecutor().sessionInterrupt(call.handle);
+                return null;
 
             case "session-close":
                 this.#requireExecutor().sessionClose(call.handle);

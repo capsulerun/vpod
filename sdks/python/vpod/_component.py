@@ -333,7 +333,18 @@ def _resolve_exports(store, instance):
 
         return call
 
-    return {name: get_export(name) for name in ("session-start", "session-exec", "session-close", "session-suspend", "session-resume")}
+    return {
+        name: get_export(name)
+        for name in (
+            "session-start",
+            "session-exec",
+            "session-exec-slice",
+            "session-interrupt",
+            "session-close",
+            "session-suspend",
+            "session-resume",
+        )
+    }
 
 
 def _instance_key(snap_dir: str, mount_dirs: list[str] | None) -> str:

@@ -145,24 +145,49 @@ pub fn absorb_stray_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8])
     }
 }
 
-pub fn capture_output(
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum SliceOutcome {
+    Finished,
+    TimedOut,
+    Yielded,
+}
+
+pub struct ExecState {
+    output: Vec<u8>,
+    ended_at_prompt: bool,
+    deadline: u64,
+}
+
+impl ExecState {
+    pub fn new(timeout_secs: u64) -> Self {
+        Self {
+            output: Vec::new(),
+            ended_at_prompt: false,
+            deadline: monotonic_clock::now() + timeout_secs * 1_000_000_000,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_slice(
     bus: &mut MachineBus,
     hart: &mut Hart,
     prompt: &[u8],
-    timeout_secs: u64,
     stop_on_ctrl: bool,
     sentinel: Option<&str>,
     data_channel: bool,
-) -> String {
-    let deadline = monotonic_clock::now() + timeout_secs * 1_000_000_000;
-
-    let mut output = Vec::new();
-    let mut ended_at_prompt = false;
+    state: &mut ExecState,
+    slice_nanos: u64,
+) -> SliceOutcome {
+    let slice_deadline = monotonic_clock::now().saturating_add(slice_nanos);
 
     loop {
         let now = monotonic_clock::now();
-        if now >= deadline {
-            break;
+        if now >= state.deadline {
+            return SliceOutcome::TimedOut;
+        }
+        if now >= slice_deadline {
+            return SliceOutcome::Yielded;
         }
 
         if hart.is_waiting {
@@ -193,7 +218,7 @@ pub fn capture_output(
                 if stop_on_ctrl && !bus.uart_ctrl.tx_is_empty() {
                     bus.uart.drain_tx();
                 }
-                break;
+                return SliceOutcome::Finished;
             }
         }
 
@@ -204,19 +229,19 @@ pub fn capture_output(
         };
 
         if !tx.is_empty() {
-            output.extend_from_slice(&tx);
+            state.output.extend_from_slice(&tx);
 
-            if !data_channel && output.ends_with(prompt) {
-                output.truncate(output.len() - prompt.len());
-                ended_at_prompt = true;
-                break;
+            if !data_channel && state.output.ends_with(prompt) {
+                state.output.truncate(state.output.len() - prompt.len());
+                state.ended_at_prompt = true;
+                return SliceOutcome::Finished;
             }
 
             if let Some(s) = sentinel
-                && let Ok(text) = std::str::from_utf8(&output)
+                && let Ok(text) = std::str::from_utf8(&state.output)
                 && text.contains(s)
             {
-                break;
+                return SliceOutcome::Finished;
             }
         }
 
@@ -232,20 +257,29 @@ pub fn capture_output(
 
                 let extra = bus.uart.drain_tx();
                 if !extra.is_empty() {
-                    output.extend_from_slice(&extra);
+                    state.output.extend_from_slice(&extra);
 
-                    if output.ends_with(prompt) {
-                        output.truncate(output.len() - prompt.len());
-                        ended_at_prompt = true;
+                    if state.output.ends_with(prompt) {
+                        state.output.truncate(state.output.len() - prompt.len());
+                        state.ended_at_prompt = true;
                         break;
                     }
                 }
             }
-            break;
+            return SliceOutcome::Finished;
         }
     }
+}
 
-    if !data_channel && !ended_at_prompt && !output.is_empty() && !output.ends_with(b"\n") {
+pub fn finish_output(
+    bus: &MachineBus,
+    sentinel: Option<&str>,
+    data_channel: bool,
+    state: ExecState,
+) -> String {
+    let mut output = state.output;
+
+    if !data_channel && !state.ended_at_prompt && !output.is_empty() && !output.ends_with(b"\n") {
         if let Some(pos) = output.iter().rposition(|&b| b == b'\n') {
             output.truncate(pos + 1);
         } else {
@@ -271,6 +305,32 @@ pub fn capture_output(
     } else {
         cleaned.trim_end().to_string()
     }
+}
+
+pub fn capture_output(
+    bus: &mut MachineBus,
+    hart: &mut Hart,
+    prompt: &[u8],
+    timeout_secs: u64,
+    stop_on_ctrl: bool,
+    sentinel: Option<&str>,
+    data_channel: bool,
+) -> String {
+    let mut state = ExecState::new(timeout_secs);
+
+    while run_slice(
+        bus,
+        hart,
+        prompt,
+        stop_on_ctrl,
+        sentinel,
+        data_channel,
+        &mut state,
+        u64::MAX,
+    ) == SliceOutcome::Yielded
+    {}
+
+    finish_output(bus, sentinel, data_channel, state)
 }
 
 // TODO: evaluate if it's possible to refactor to a solution that filter directly the kernel log on the uart

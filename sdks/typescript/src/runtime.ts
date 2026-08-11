@@ -104,6 +104,29 @@ export class SandboxRuntime {
         });
     }
 
+    /**
+     * One bounded step of a command. `code` starts one, `null` continues the one
+     * already in flight. Resolves to null while it is still running and to the result when it ends.
+     */
+    sessionExecSlice(
+        handle: bigint,
+        code: string | null,
+        timeoutSeconds: bigint | null,
+        sliceNanos: bigint,
+    ): Promise<ExecutionResult | null> {
+        return this.#transport.call<ExecutionResult | null>({
+            kind: "session-exec-slice",
+            handle,
+            code,
+            timeoutSeconds,
+            sliceNanos,
+        });
+    }
+
+    sessionInterrupt(handle: bigint): Promise<void> {
+        return this.#transport.call<void>({ kind: "session-interrupt", handle });
+    }
+
     sessionClose(handle: bigint): Promise<void> {
         return this.#transport.call<void>({ kind: "session-close", handle });
     }

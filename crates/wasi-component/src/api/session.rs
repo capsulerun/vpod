@@ -51,6 +51,7 @@ pub struct Session {
     pub has_pyrunner: bool,
     pub pyrunner_dirty: bool,
     pub shell_lost: bool,
+    pub exec: Option<repl::ExecState>,
 }
 
 fn recover_shell(session: &mut Session) {
@@ -71,6 +72,85 @@ fn recover_shell(session: &mut Session) {
     session.bus.uart_ctrl.drain_tx();
 
     session.shell_lost = !recovered;
+}
+
+const SHELL_LOST_MESSAGE: &str = "vpod: the shell did not come back from a timed-out command. Something that \
+     ignores Ctrl-C was left in the foreground, an interactive python3 or a \
+     pager for instance. This sandbox cannot run further commands, so create a \
+     new one; `code.run` is unaffected.";
+
+fn begin_shell_exec(session: &mut Session, code: String, timeout_secs: u64) {
+    if session.exec.take().is_some() {
+        recover_shell(session);
+    }
+
+    let code = if session.is_shell && code.len() > MAX_INLINE_EXEC {
+        stage_long_command(session, &code)
+    } else {
+        code
+    };
+
+    let cmd = if session.is_shell {
+        format!("{{\n{code}\n}} </dev/null 2>/dev/ttyS1\n")
+    } else {
+        format!("{code}\n")
+    };
+
+    for byte in cmd.bytes() {
+        session.bus.uart.push_rx(byte);
+    }
+
+    session.exec = Some(repl::ExecState::new(timeout_secs));
+}
+
+fn run_shell_slice(
+    session: &mut Session,
+    state: &mut repl::ExecState,
+    slice_nanos: u64,
+) -> repl::SliceOutcome {
+    repl::run_slice(
+        &mut session.bus,
+        &mut session.hart,
+        &session.prompt,
+        session.is_shell,
+        None,
+        false,
+        state,
+        slice_nanos,
+    )
+}
+
+fn finish_shell_exec(session: &mut Session, state: repl::ExecState) -> ExecutionResult {
+    let stdout = repl::finish_output(&session.bus, None, false, state);
+
+    let stderr_bytes = session.bus.uart_stderr.drain_tx();
+    let stderr = String::from_utf8_lossy(&stderr_bytes)
+        .trim_end()
+        .to_string();
+
+    let mut timed_out = false;
+    let exit_code = if session.is_shell {
+        let ctrl_bytes = repl::drain_ctrl_with_grace(&mut session.bus, &mut session.hart);
+        match ctrl_bytes.first() {
+            Some(byte) => *byte as u32,
+            None => {
+                timed_out = true;
+                124
+            }
+        }
+    } else {
+        0
+    };
+
+    if session.is_shell && timed_out {
+        recover_shell(session);
+    }
+
+    ExecutionResult {
+        stdout,
+        stderr,
+        exit_code,
+    }
 }
 
 fn stage_long_command(session: &mut Session, code: &str) -> String {
@@ -295,6 +375,7 @@ impl SessionManager {
                 has_pyrunner: python_ready,
                 pyrunner_dirty: false,
                 shell_lost: false,
+                exec: None,
             },
         );
 
@@ -313,13 +394,7 @@ impl SessionManager {
             .ok_or_else(|| format!("invalid session handle: {handle}"))?;
 
         if session.shell_lost {
-            return Err(
-                "vpod: the shell did not come back from a timed-out command. Something that \
-                 ignores Ctrl-C was left in the foreground, an interactive python3 or a \
-                 pager for instance. This sandbox cannot run further commands, so create a \
-                 new one; `code.run` is unaffected."
-                    .to_string(),
-            );
+            return Err(SHELL_LOST_MESSAGE.to_string());
         }
 
         session.bus.uart.drain_tx();
@@ -387,61 +462,72 @@ impl SessionManager {
                 exit_code,
             })
         } else {
-            let code = if session.is_shell && code.len() > MAX_INLINE_EXEC {
-                stage_long_command(session, &code)
-            } else {
-                code
-            };
+            begin_shell_exec(session, code, timeout.unwrap_or(30));
 
-            let cmd = if session.is_shell {
-                format!("{{\n{code}\n}} 2>/dev/ttyS1\n")
-            } else {
-                format!("{code}\n")
-            };
+            let mut state = session
+                .exec
+                .take()
+                .unwrap_or_else(|| repl::ExecState::new(0));
+            while run_shell_slice(session, &mut state, u64::MAX) == repl::SliceOutcome::Yielded {}
 
-            for byte in cmd.bytes() {
-                session.bus.uart.push_rx(byte);
-            }
-
-            let stdout = repl::capture_output(
-                &mut session.bus,
-                &mut session.hart,
-                &session.prompt,
-                timeout.unwrap_or(30),
-                session.is_shell,
-                None,
-                false,
-            );
-
-            let stderr_bytes = session.bus.uart_stderr.drain_tx();
-            let stderr = String::from_utf8_lossy(&stderr_bytes)
-                .trim_end()
-                .to_string();
-
-            let mut timed_out = false;
-            let exit_code = if session.is_shell {
-                let ctrl_bytes = repl::drain_ctrl_with_grace(&mut session.bus, &mut session.hart);
-                match ctrl_bytes.first() {
-                    Some(byte) => *byte as u32,
-                    None => {
-                        timed_out = true;
-                        124
-                    }
-                }
-            } else {
-                0
-            };
-
-            if session.is_shell && timed_out {
-                recover_shell(session);
-            }
-
-            Ok(ExecutionResult {
-                stdout,
-                stderr,
-                exit_code,
-            })
+            Ok(finish_shell_exec(session, state))
         }
+    }
+
+    pub fn exec_slice(
+        &self,
+        handle: u64,
+        code: Option<String>,
+        timeout: Option<u64>,
+        slice_nanos: u64,
+    ) -> Result<Option<ExecutionResult>, String> {
+        let mut sessions = self.sessions.borrow_mut();
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+        if session.shell_lost {
+            return Err(SHELL_LOST_MESSAGE.to_string());
+        }
+
+        if let Some(code) = code {
+            if session.is_pyrunner || code.starts_with('\0') {
+                return Err("slicing is not supported for code.run()".to_string());
+            }
+
+            session.bus.uart.drain_tx();
+            session.bus.uart_stderr.drain_tx();
+            session.bus.uart_ctrl.drain_tx();
+            session.bus.uart_data.drain_tx();
+
+            begin_shell_exec(session, code, timeout.unwrap_or(30));
+        }
+
+        let mut state = match session.exec.take() {
+            Some(state) => state,
+            None => return Err("no command is running in this session".to_string()),
+        };
+
+        if run_shell_slice(session, &mut state, slice_nanos) == repl::SliceOutcome::Yielded {
+            session.exec = Some(state);
+            return Ok(None);
+        }
+
+        Ok(Some(finish_shell_exec(session, state)))
+    }
+
+    pub fn interrupt_session(&self, handle: u64) -> Result<(), String> {
+        let mut sessions = self.sessions.borrow_mut();
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+        if session.exec.is_none() {
+            return Ok(());
+        }
+
+        session.bus.uart.push_rx(0x03);
+        Ok(())
     }
 
     pub fn close_session(&self, handle: u64) {
@@ -551,6 +637,7 @@ impl SessionManager {
                 has_pyrunner,
                 pyrunner_dirty: false,
                 shell_lost: false,
+                exec: None,
             },
         );
 
