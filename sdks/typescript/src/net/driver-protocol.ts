@@ -16,4 +16,5 @@ export type DriverCommand =
 
 export interface DriverOptions {
     requestTimeoutMilliseconds?: number;
+    corsProxy?: string;
 }

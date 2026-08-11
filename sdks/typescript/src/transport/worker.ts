@@ -104,7 +104,10 @@ export class WorkerTransport implements ExecutorTransport {
         });
         driver.postMessage({
             kind: "configure",
-            options: { requestTimeoutMilliseconds: options.requestTimeoutMilliseconds },
+            options: {
+                requestTimeoutMilliseconds: options.requestTimeoutMilliseconds,
+                corsProxy: options.corsProxy,
+            },
         });
         await configured;
 

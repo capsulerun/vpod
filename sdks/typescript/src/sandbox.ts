@@ -16,13 +16,6 @@ const DEFAULT_SNAPSHOT = "vsnap-base:latest";
 const DEFAULT_TIMEOUT_SECONDS = 120;
 const TIMEOUT_EXIT_CODE = 124;
 
-/**
- * Alpine's own CDN sends no access-control-allow-origin, and in a browser every, so apk cannot read a single byte of it.
- * This mirror serves the same repositories with that header.
- */
-const DEFAULT_APK_MIRROR = "https://apk-mirror.vpod.sh/alpine";
-const ALPINE_CDN = "https://dl-cdn.alpinelinux.org/alpine";
-
 const PYTHON_PREFIX = String.fromCharCode(0);
 
 export type SnapshotSource =
@@ -34,7 +27,7 @@ export interface SandboxOptions extends SandboxRuntimeOptions {
     snapshot?: SnapshotSource;
     network?: boolean;
     registryUrl?: string;
-    apkMirror?: string | false;
+    corsProxy?: string;
 }
 
 export interface RunOptions {
@@ -90,19 +83,12 @@ export class Sandbox {
     readonly #runtime: SandboxRuntime;
     readonly #snapshotPath: string;
     readonly #snapshotId: string;
-    readonly #apkMirror: string | false;
     #sessionHandle: bigint | null = null;
 
-    private constructor(
-        runtime: SandboxRuntime,
-        snapshotPath: string,
-        snapshotId: string,
-        apkMirror: string | false = DEFAULT_APK_MIRROR,
-    ) {
+    private constructor(runtime: SandboxRuntime, snapshotPath: string, snapshotId: string) {
         this.#runtime = runtime;
         this.#snapshotPath = snapshotPath;
         this.#snapshotId = snapshotId;
-        this.#apkMirror = apkMirror;
         this.commands = new Commands(this);
         this.code = new Code(this);
     }
@@ -143,6 +129,7 @@ export class Sandbox {
     static async #connectNetwork(
         runtime: SandboxRuntime,
         requested: boolean | undefined,
+        corsProxy: string | undefined,
     ): Promise<void> {
         if (runtime.networkBackend !== "none") {
             return; // Node already has real sockets.
@@ -154,31 +141,26 @@ export class Sandbox {
 
         if (requested === undefined) {
             if (networkAvailability().available) {
-                await runtime.enableNetwork();
+                await runtime.enableNetwork({ corsProxy });
             }
             return;
         }
 
-        await runtime.enableNetwork();
+        await runtime.enableNetwork({ corsProxy });
     }
 
     static async create(options: SandboxOptions = {}): Promise<Sandbox> {
         const runtime = new SandboxRuntime(await Sandbox.#withTransport(options));
         await runtime.ready();
 
-        await Sandbox.#connectNetwork(runtime, options.network);
+        await Sandbox.#connectNetwork(runtime, options.network, options.corsProxy);
 
         const mounted = await Sandbox.#mount(
             runtime,
             options.snapshot ?? DEFAULT_SNAPSHOT,
             options.registryUrl,
         );
-        return new Sandbox(
-            runtime,
-            mounted.snapshotPath,
-            mounted.snapshotId,
-            options.apkMirror,
-        );
+        return new Sandbox(runtime, mounted.snapshotPath, mounted.snapshotId);
     }
 
     get snapshotId(): string {
@@ -206,28 +188,8 @@ export class Sandbox {
                 DEFAULT_SHELL,
                 DEFAULT_PROMPT,
             );
-            await this.#pointApkAtSomethingReadable(this.#sessionHandle);
         }
         return this.#sessionHandle;
-    }
-
-    /**
-     * Only the host is rewritten, so the guest keeps whichever Alpine release it
-     * was built from, and a repositories file already pointed somewhere else is
-     * left alone. Runs once per session, and only where it is needed: under Node
-     * the guest has real sockets and reads the CDN directly.
-     */
-    async #pointApkAtSomethingReadable(handle: bigint): Promise<void> {
-        if (this.#apkMirror === false || this.#runtime.networkBackend !== "fetch") {
-            return;
-        }
-
-        const escapedCdn = ALPINE_CDN.replace(/\./g, "\\.");
-        await this.#runtime.sessionExec(
-            handle,
-            `sed -i 's|${escapedCdn}|${this.#apkMirror}|g' /etc/apk/repositories 2>/dev/null || true`,
-            BigInt(15),
-        );
     }
 
     async suspend(): Promise<Uint8Array> {
@@ -255,7 +217,7 @@ export class Sandbox {
         const runtime = new SandboxRuntime(await Sandbox.#withTransport(options));
         await runtime.ready();
 
-        await Sandbox.#connectNetwork(runtime, options.network);
+        await Sandbox.#connectNetwork(runtime, options.network, options.corsProxy);
 
         const mounted = await Sandbox.#mount(
             runtime,
@@ -263,12 +225,7 @@ export class Sandbox {
             options.registryUrl,
         );
 
-        const sandbox = new Sandbox(
-            runtime,
-            mounted.snapshotPath,
-            mounted.snapshotId,
-            options.apkMirror,
-        );
+        const sandbox = new Sandbox(runtime, mounted.snapshotPath, mounted.snapshotId);
         const delta = resolved.delta.slice();
         sandbox.#sessionHandle = await runtime.sessionResume(
             mounted.snapshotPath,
