@@ -8,7 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { pullSnapshot } from "../snapshots/pull.js";
+import { componentImports, loadCoreModule } from "./component-imports.js";
 import { FileSnapshotStore } from "./store.js";
+import type { ComponentModule } from "../worker/component-imports.js";
 import type { ExecutorTransport } from "../transport/types.js";
 import type { ExecutionResult, WorkerCall } from "../worker/protocol.js";
 
@@ -206,11 +208,17 @@ export async function loadNodeDispatcher(
         options.componentUrl ?? new URL("../component-node/vpod.js", import.meta.url);
 
     const startedAt = performance.now();
-    const module = (await import(String(componentUrl))) as { executor: Executor };
+    const module = (await import(String(componentUrl))) as ComponentModule<{
+        executor: Executor;
+    }>;
+    const { executor } = await module.instantiate(
+        (name) => loadCoreModule(name, new URL(String(componentUrl))),
+        componentImports,
+    );
     const loadMilliseconds = performance.now() - startedAt;
 
     return new NodeDispatcher(
-        module.executor,
+        executor,
         new FileSnapshotStore(options.cacheDirectory),
         loadMilliseconds,
     );

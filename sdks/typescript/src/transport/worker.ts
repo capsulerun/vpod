@@ -1,5 +1,6 @@
-import { assetUrl } from "../asset-base.js";
+import { assetUrl, assetUrlOrNull } from "../asset-base.js";
 import { requireNetwork } from "../net/availability.js";
+import type { CoreModuleBytes } from "../worker/component-imports.js";
 import type { DriverOptions } from "../net/driver-protocol.js";
 import type { WorkerCall, WorkerMessage } from "../worker/protocol.js";
 import type { ExecutorTransport } from "./types.js";
@@ -8,6 +9,7 @@ export interface WorkerTransportOptions {
     workerUrl?: string | URL;
     componentUrl?: string | URL;
     networkWorkerUrl?: string | URL;
+    coreModules?: CoreModuleBytes;
 }
 
 export interface NetworkOptions extends DriverOptions {
@@ -23,7 +25,7 @@ export class WorkerTransport implements ExecutorTransport {
     readonly #worker: Worker;
     readonly #pending = new Map<number, PendingCall>();
     readonly #ready: Promise<number>;
-    readonly #networkWorkerUrl: string | URL;
+    readonly #networkWorkerUrl: string | URL | null;
 
     #networkWorker: Worker | undefined;
     #nextId = 1;
@@ -33,10 +35,11 @@ export class WorkerTransport implements ExecutorTransport {
     constructor(options: WorkerTransportOptions = {}) {
         const workerUrl =
             options.workerUrl ?? assetUrl("worker/entry.js");
-        const componentUrl =
-            options.componentUrl ?? assetUrl("component/vpod.js");
 
-        this.#networkWorkerUrl = options.networkWorkerUrl ?? assetUrl("net/entry.js");
+        const componentUrl =
+            options.componentUrl ?? assetUrlOrNull("component/vpod.js");
+
+        this.#networkWorkerUrl = options.networkWorkerUrl ?? null;
 
         this.#ready = new Promise<number>((resolve, reject) => {
             this.#resolveReady = resolve;
@@ -53,7 +56,11 @@ export class WorkerTransport implements ExecutorTransport {
 
         this.#worker.postMessage({
             kind: "init",
-            componentUrl: new URL(componentUrl, self.location.href).href,
+            componentUrl:
+                componentUrl === null
+                    ? null
+                    : new URL(componentUrl, self.location.href).href,
+            coreModules: options.coreModules,
         });
     }
 
@@ -96,7 +103,8 @@ export class WorkerTransport implements ExecutorTransport {
             return;
         }
 
-        const driver = new Worker(this.#networkWorkerUrl, { type: "module" });
+        const driverUrl = this.#networkWorkerUrl ?? assetUrl("net/entry.js");
+        const driver = new Worker(driverUrl, { type: "module" });
         this.#networkWorker = driver;
 
         const configured = new Promise<void>((resolve) => {
