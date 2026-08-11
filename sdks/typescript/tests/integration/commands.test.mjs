@@ -227,6 +227,24 @@ describe("commands timeouts", { skip: skipReason() ?? false }, () => {
             assert.ok(elapsed < 3, `the command after a timeout took ${elapsed.toFixed(2)}s`);
         });
     });
+
+    it("keeps running through a pause in its output", async () => {
+        const cases = [
+            ["echo a; sleep 2; echo b", "a\nb"],
+            ["echo a; sleep 6; echo b", "a\nb"],
+            ["for i in 1 2 3; do echo $i; sleep 1; done", "1\n2\n3"],
+            ["echo a; awk 'BEGIN{for(i=0;i<100000;i++)x+=i}'; echo b", "a\nb"],
+            ["sleep 2; echo done", "done"],
+        ];
+
+        await withSandbox(async (sandbox) => {
+            for (const [command, stdout] of cases) {
+                const result = await sandbox.commands.run(command, { timeout: 60 });
+                assert.equal(result.exitCode, 0, `${command} exited ${result.exitCode}`);
+                assert.equal(result.stdout.trim(), stdout, `${command} printed ${result.stdout}`);
+            }
+        });
+    });
 });
 
 describe("apk repositories", { skip: skipReason() ?? false }, () => {
