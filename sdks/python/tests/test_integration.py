@@ -503,3 +503,19 @@ def test_the_command_after_a_timeout_is_not_slow():
 
         assert after.stdout.strip() == "back"
         assert elapsed < 3, f"the command after a timeout took {elapsed:.2f}s"
+
+
+def test_a_command_that_pauses_its_output_keeps_running():
+    with Sandbox.create() as sbx:
+        cases = [
+            ("echo a; sleep 2; echo b", "a\nb"),
+            ("echo a; sleep 6; echo b", "a\nb"),
+            ("for i in 1 2 3; do echo $i; sleep 1; done", "1\n2\n3"),
+            ("echo a; awk 'BEGIN{for(i=0;i<100000;i++)x+=i}'; echo b", "a\nb"),
+            ("sleep 2; echo done", "done"),
+        ]
+
+        for command, stdout in cases:
+            result = sbx.commands.run(command, timeout=60)
+            assert result.exit_code == 0, f"{command!r} exited {result.exit_code}"
+            assert result.stdout.strip() == stdout, f"{command!r} printed {result.stdout!r}"

@@ -10,9 +10,6 @@ const RUN_STEP: u64 = 524_288;
 const MAX_TIMER_WARP_NS: u64 = 100_000_000;
 const NET_YIELD_NS: u64 = 5_000_000; // 5 ms
 
-// TO TEST : the time UART must be quiet after last output before declare the command
-const QUIET_PERIOD_NS: u64 = 150_000_000; // 150 ms
-
 const GRACE_STEPS: u32 = 2000;
 
 pub fn sync_clock(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
@@ -160,8 +157,6 @@ pub fn capture_output(
     let deadline = monotonic_clock::now() + timeout_secs * 1_000_000_000;
 
     let mut output = Vec::new();
-    let mut last_output_ns = monotonic_clock::now();
-    let mut got_output = false;
     let mut ended_at_prompt = false;
 
     loop {
@@ -184,16 +179,6 @@ pub fn capture_output(
 
                     let idle_ns = monotonic_clock::now().saturating_sub(before);
                     bus.clint.advance_by_nanos(idle_ns);
-
-                    if !data_channel
-                        && sentinel.is_none()
-                        && got_output
-                        && !bus.net_rx_pending()
-                        && !bus.net_has_active_connections()
-                        && monotonic_clock::now().saturating_sub(last_output_ns) >= QUIET_PERIOD_NS
-                    {
-                        break;
-                    }
                 }
             }
         }
@@ -220,8 +205,6 @@ pub fn capture_output(
 
         if !tx.is_empty() {
             output.extend_from_slice(&tx);
-            got_output = true;
-            last_output_ns = monotonic_clock::now();
 
             if !data_channel && output.ends_with(prompt) {
                 output.truncate(output.len() - prompt.len());
