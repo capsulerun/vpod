@@ -1,6 +1,9 @@
+import type { CoreModuleBytes } from "./component-imports.js";
+
 export interface WorkerInit {
     kind: "init";
-    componentUrl: string;
+    componentUrl: string | null;
+    coreModules?: CoreModuleBytes;
     channels?: Record<string, SharedArrayBuffer>;
 }
 
