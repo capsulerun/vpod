@@ -37,8 +37,13 @@ export interface SandboxOptions extends SandboxRuntimeOptions {
     apkMirror?: string | false;
 }
 
+const SLICE_NANOS = 100_000_000n;
+
+const yieldToEventLoop = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 export interface RunOptions {
     timeout?: number;
+    signal?: AbortSignal;
 }
 
 export class Commands {
@@ -49,12 +54,20 @@ export class Commands {
     }
 
     async run(command: string, options: RunOptions = {}): Promise<CommandResult> {
-        const result = await this.#sandbox._exec(command, options.timeout);
+        const result = await this.#sandbox._execSliced(
+            command,
+            options.timeout,
+            options.signal,
+        );
         return new CommandResult(
             normalizeLineEndings(result.stdout),
             normalizeLineEndings(result.stderr ?? ""),
             result.exitCode,
         );
+    }
+
+    async interrupt(): Promise<void> {
+        await this.#sandbox._interrupt();
     }
 }
 
@@ -197,6 +210,49 @@ export class Sandbox {
     async _exec(payload: string, timeoutSeconds = DEFAULT_TIMEOUT_SECONDS) {
         const handle = await this.#ensureSession();
         return this.#runtime.sessionExec(handle, payload, BigInt(timeoutSeconds));
+    }
+
+    async _execSliced(
+        payload: string,
+        timeoutSeconds = DEFAULT_TIMEOUT_SECONDS,
+        signal?: AbortSignal,
+    ) {
+        signal?.throwIfAborted();
+        const handle = await this.#ensureSession();
+
+        let code: string | null = payload;
+        let stopped = false;
+
+        for (;;) {
+            const result = await this.#runtime.sessionExecSlice(
+                handle,
+                code,
+                BigInt(timeoutSeconds),
+                SLICE_NANOS,
+            );
+            code = null;
+
+            if (result != null) {
+                if (stopped) {
+                    signal?.throwIfAborted();
+                }
+                return result;
+            }
+
+            await yieldToEventLoop();
+
+            if (!stopped && signal?.aborted) {
+                await this.#runtime.sessionInterrupt(handle);
+                stopped = true;
+            }
+        }
+    }
+
+    async _interrupt(): Promise<void> {
+        if (this.#sessionHandle === null) {
+            return;
+        }
+        await this.#runtime.sessionInterrupt(this.#sessionHandle);
     }
 
     async #ensureSession(): Promise<bigint> {

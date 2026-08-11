@@ -71,10 +71,22 @@ def mock_component(request, monkeypatch):
     def fake_session_close(sid):
         sessions.pop(sid, None)
 
+    def fake_session_exec_slice(sid, command, timeout=None, slice_nanos=0):
+        payload = fake_session_exec(sid, command).payload
+        return FakeVariant(
+            tag="ok",
+            payload=FakeRecord(stdout=payload, stderr="", **{"exit-code": 0}),
+        )
+
+    def fake_session_interrupt(sid):
+        return FakeVariant(tag="ok", payload=None)
+
     exports = {
         "execute": fake_execute,
         "session-start": fake_session_start,
         "session-exec": fake_session_exec,
+        "session-exec-slice": fake_session_exec_slice,
+        "session-interrupt": fake_session_interrupt,
         "session-close": fake_session_close,
     }
 

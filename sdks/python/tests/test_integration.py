@@ -1,3 +1,4 @@
+import threading
 import time
 
 from vpod.snapshots import catalog
@@ -440,8 +441,24 @@ def test_interactive_python_does_not_kill_the_session():
     with Sandbox.create() as sbx:
         sbx.commands.run("export MARKER=kept")
 
-        interrupted = sbx.commands.run("python3", timeout=3)
-        assert interrupted.exit_code == 124
+        started = time.time()
+        interrupted = sbx.commands.run("python3", timeout=10)
+        elapsed = time.time() - started
+
+        assert interrupted.exit_code == 0, "python3 should read EOF and exit"
+        assert elapsed < 5, f"python3 waited {elapsed:.2f}s, so stdin was not closed"
+
+        after = sbx.commands.run("echo $MARKER")
+        assert after.success
+        assert "kept" in after.stdout
+
+
+def test_a_command_that_outlives_its_timeout_does_not_kill_the_session():
+    """The recovery path itself, with a command that still cannot finish."""
+    with Sandbox.create() as sbx:
+        sbx.commands.run("export MARKER=kept")
+
+        assert sbx.commands.run("sleep 300", timeout=3).exit_code == 124
 
         after = sbx.commands.run("echo $MARKER")
         assert after.success
@@ -495,7 +512,7 @@ def test_commands_ending_in_a_comment():
 
 def test_the_command_after_a_timeout_is_not_slow():
     with Sandbox.create() as sbx:
-        assert sbx.commands.run("cat", timeout=3).exit_code == 124
+        assert sbx.commands.run("sleep 300", timeout=3).exit_code == 124
 
         started = time.time()
         after = sbx.commands.run("echo back")
@@ -519,3 +536,161 @@ def test_a_command_that_pauses_its_output_keeps_running():
             result = sbx.commands.run(command, timeout=60)
             assert result.exit_code == 0, f"{command!r} exited {result.exit_code}"
             assert result.stdout.strip() == stdout, f"{command!r} printed {result.stdout!r}"
+
+
+# --- interrupt ---
+FOREVER = "sleep 300"
+INTERRUPT_TIMEOUT = 60
+
+
+def _interrupt_after(sbx, seconds):
+    """Ask the command to stop from another thread, the way a terminal would."""
+    timer = threading.Timer(seconds, sbx.commands.interrupt)
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
+def test_interrupt_stops_a_running_command_with_130():
+    """130 rather than 124 is the point: the command ends through the ordinary completion path, so the shell is left at a prompt with nothing to recover.
+    """
+    with Sandbox.create() as sbx:
+        _interrupt_after(sbx, 0.5)
+
+        started = time.time()
+        result = sbx.commands.run(FOREVER, timeout=INTERRUPT_TIMEOUT)
+        elapsed = time.time() - started
+
+        assert result.exit_code == 130
+        assert elapsed < 30, f"took {elapsed:.2f}s, so it was not interrupted"
+
+
+def test_interrupt_keeps_the_output_produced_before_it():
+    with Sandbox.create() as sbx:
+        _interrupt_after(sbx, 0.5)
+
+        result = sbx.commands.run(f"echo working; {FOREVER}", timeout=INTERRUPT_TIMEOUT)
+
+        assert result.exit_code == 130
+        assert result.stdout.strip() == "working"
+
+
+def test_interrupt_leaves_the_session_usable():
+    with Sandbox.create() as sbx:
+        sbx.commands.run("export MARKER=kept")
+
+        _interrupt_after(sbx, 0.5)
+        sbx.commands.run(FOREVER, timeout=INTERRUPT_TIMEOUT)
+
+        after = sbx.commands.run("echo $MARKER")
+        assert after.exit_code == 0
+        assert after.stdout.strip() == "kept"
+
+
+def test_interrupt_with_nothing_running_is_a_no_op():
+    """A stray Ctrl-C at an idle prompt must not reach the guest: the byte would sit in the receive queue and be processed at the head of the next command, whose output would then carry a ^C echo and a stray prompt.
+    """
+    with Sandbox.create() as sbx:
+        sbx.commands.run("true")
+        sbx.commands.interrupt()
+        sbx.commands.interrupt()
+
+        after = sbx.commands.run("echo clean")
+        assert after.exit_code == 0
+        assert after.stdout.strip() == "clean"
+
+
+def test_cancel_event_stops_a_running_command():
+    with Sandbox.create() as sbx:
+        cancel = threading.Event()
+        timer = threading.Timer(0.5, cancel.set)
+        timer.daemon = True
+        timer.start()
+
+        started = time.time()
+        result = sbx.commands.run(FOREVER, timeout=INTERRUPT_TIMEOUT, cancel=cancel)
+        elapsed = time.time() - started
+
+        assert result.exit_code == 130
+        assert elapsed < 30, f"took {elapsed:.2f}s, so the cancel was not noticed"
+
+
+def test_an_abandoned_sliced_command_does_not_brick_the_session():
+    from vpod.commands import SLICE_NANOS
+    from vpod._result import unwrap_result
+
+    with Sandbox.create() as sbx:
+        sbx.commands.run("true")
+
+        session_id = sbx._get_shell_session_id()
+        started = unwrap_result(
+            sbx._exports["session-exec-slice"](session_id, "sleep 30", 30, SLICE_NANOS)
+        )
+        assert started is None, "sleep 30 cannot have finished in one slice"
+
+        recovered = sbx.commands.run("echo recovered", timeout=10)
+        assert recovered.exit_code == 0
+        assert recovered.stdout.strip() == "recovered"
+
+        again = sbx.commands.run("echo second", timeout=10)
+        assert again.stdout.strip() == "second"
+
+
+def test_a_failed_call_reports_what_went_wrong():
+    with Sandbox.create() as sbx:
+        sbx.commands.run("true")
+
+        with pytest.raises(RuntimeError, match="invalid session handle"):
+            from vpod._result import unwrap_result
+            unwrap_result(sbx._exports["session-exec"](9999, "echo x", 10))
+
+
+def test_stdin_is_closed_so_a_reader_gets_eof_instead_of_hanging():
+    with Sandbox.create() as sbx:
+        sbx.commands.run("true")
+
+        cases = [
+            ("echo a; read x", 1, "a"),
+            ("echo a; cat", 0, "a"),
+            ("read x", 1, ""),
+            ("python3", 0, ""),
+        ]
+        for command, exit_code, stdout in cases:
+            started = time.time()
+            result = sbx.commands.run(command, timeout=10)
+            elapsed = time.time() - started
+
+            assert result.exit_code == exit_code, f"{command!r} exited {result.exit_code}"
+            assert result.stdout.strip() == stdout, f"{command!r} printed {result.stdout!r}"
+            assert elapsed < 5, f"{command!r} waited {elapsed:.2f}s, so stdin was not closed"
+
+
+def test_a_command_that_cannot_finish_can_be_interrupted():
+    with Sandbox.create() as sbx:
+        sbx.commands.run("true")
+
+        for command in (FOREVER, "awk 'BEGIN{for(i=0;i<100000000;i++)x+=i}'"):
+            _interrupt_after(sbx, 0.5)
+
+            started = time.time()
+            result = sbx.commands.run(command, timeout=INTERRUPT_TIMEOUT)
+            elapsed = time.time() - started
+
+            assert result.exit_code == 130, f"{command!r} exited {result.exit_code}"
+            assert elapsed < 30, f"{command!r} took {elapsed:.2f}s, so it was not interrupted"
+
+        assert sbx.commands.run("echo alive").stdout.strip() == "alive"
+
+
+def test_an_unfinishable_command_waits_for_its_timeout_rather_than_guessing():
+    with Sandbox.create() as sbx:
+        started = time.time()
+        result = sbx.commands.run("echo a; sleep 300", timeout=3)
+        elapsed = time.time() - started
+
+        assert result.exit_code == 124
+        assert result.stdout.strip() == "a", "output before the wait is still reported"
+        assert elapsed >= 2.5, f"returned after {elapsed:.2f}s, so something guessed again"
+        assert elapsed < 15, f"took {elapsed:.2f}s, far past the timeout asked for"
+
+        assert sbx.commands.run("echo alive").stdout.strip() == "alive"

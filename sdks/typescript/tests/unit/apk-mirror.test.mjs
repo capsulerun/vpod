@@ -35,6 +35,8 @@ function fakeTransport(networkBackend) {
                     return 1n;
                 case "session-exec":
                     return { stdout: "", stderr: "", exitCode: 0 };
+                case "session-exec-slice":
+                    return { stdout: "", stderr: "", exitCode: 0 };
                 default:
                     return undefined;
             }
@@ -43,7 +45,10 @@ function fakeTransport(networkBackend) {
 }
 
 const execs = (transport) =>
-    transport.calls.filter((call) => call.kind === "session-exec").map((call) => call.code);
+    transport.calls
+        .filter((call) => call.kind === "session-exec" || call.kind === "session-exec-slice")
+        .map((call) => call.code)
+        .filter((code) => code !== null && code !== undefined);
 
 describe("where apk looks", () => {
     it("is rewritten when the guest reaches the network through the browser", async () => {

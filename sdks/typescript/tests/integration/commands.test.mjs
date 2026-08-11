@@ -216,7 +216,7 @@ describe("commands timeouts", { skip: skipReason() ?? false }, () => {
 
     it("comes back quickly from a command that timed out", async () => {
         await withSandbox(async (sandbox) => {
-            const hung = await sandbox.commands.run("cat", { timeout: 3 });
+            const hung = await sandbox.commands.run("sleep 300", { timeout: 3 });
             assert.equal(hung.exitCode, 124);
 
             const started = Date.now();

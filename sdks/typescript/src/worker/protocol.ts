@@ -42,6 +42,14 @@ export type WorkerCall =
           code: string;
           timeoutSeconds: bigint | null;
       }
+    | {
+          kind: "session-exec-slice";
+          handle: bigint;
+          code: string | null;
+          timeoutSeconds: bigint | null;
+          sliceNanos: bigint;
+      }
+    | { kind: "session-interrupt"; handle: bigint }
     | { kind: "session-close"; handle: bigint }
     | { kind: "session-suspend"; handle: bigint }
     | {
