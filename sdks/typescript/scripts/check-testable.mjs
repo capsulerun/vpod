@@ -36,9 +36,6 @@ if (size < 1024 * 1024) {
     fail(`${chosen} is only ${size} bytes, which is far too small to be a snapshot`);
 }
 
-// Catches an error page or a truncated download. It cannot tell a snapshot
-// framed twice from one framed once, because that needs an actual lz4 decode;
-// the workflow does that check with the lz4 CLI instead.
 const header = Buffer.alloc(4);
 const file = openSync(chosen, "r");
 try {

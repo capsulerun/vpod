@@ -201,7 +201,6 @@ describe("commands timeouts", { skip: skipReason() ?? false }, () => {
             ["echo kept # a note after it", 0, "kept"],
             ["echo a; echo b #", 0, "a\nb"],
             ["echo '#' #", 0, "#"],
-            // A real non-zero exit
             ["false #", 1, ""],
         ];
 

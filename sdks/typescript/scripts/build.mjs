@@ -33,6 +33,8 @@ const TIERS = {
 
 const INSTANTIATION_ARGUMENTS = ["-I", "async"];
 
+const MINIFY_ARGUMENTS = ["--minify"];
+
 const SHIM_ENTRY_POINTS = [
     "src/shims/cli.ts",
     "src/shims/clocks.ts",
@@ -162,24 +164,9 @@ async function bundle() {
     });
 }
 
-/**
- * The embed artifact: two files with no imports between them, each loadable straight from
- * `URL.createObjectURL(new Blob([source]))`. A blob: URL has no path, so a relative
- * specifier cannot resolve against it, which is why splitting is off and why the worker
- * has the component glue bundled in rather than importing it at runtime.
- *
- * The core wasm is not bundled. The embedder passes it as bytes through `coreModules`,
- * which is the whole point: 25 MiB of base64 would inflate by a third and defeat caching.
- */
 async function bundleEmbed(componentPath) {
     mkdirSync(embedDir, { recursive: true });
 
-    // The shipped glue keeps a `node:fs` fallback for reading core wasm off disk under
-    // Node, which the default build needs and the embed build must not have: esbuild
-    // refuses to resolve it for the browser, and leaving it external would put a Node
-    // builtin in a browser bundle. The embed worker always gets its bytes through
-    // `coreModules`, so transpile a second glue without it. Only the JS is used; the
-    // core wasm it emits alongside is identical to the shipped one and thrown away.
     transpile(componentPath, embedComponentDir, ["--no-nodejs-compat"]);
     const gluePath = join(embedComponentDir, "vpod.js");
 
@@ -190,14 +177,14 @@ async function bundleEmbed(componentPath) {
         format: "esm",
         platform: "browser",
         target: ["es2022"],
+        // The one artifact a consumer cannot re-minify: it is used verbatim as a blob.
+        minify: true,
         logLevel: "warning",
     };
 
-    await esbuild.build({
-        ...shared,
-        entryPoints: ["src/index.ts"],
-        outfile: join(embedDir, "vpod.js"),
-    });
+    const bundledCoreModules = partitionCoreModules(embedComponentDir);
+
+    const workerPath = join(embedComponentDir, "vpod.worker.js");
 
     await esbuild.build({
         ...shared,
@@ -205,25 +192,61 @@ async function bundleEmbed(componentPath) {
             contents:
                 `import * as component from ${JSON.stringify(gluePath)};\n` +
                 `import { serveWorker } from "./src/worker/serve.ts";\n` +
-                `serveWorker(component);\n`,
+                `serveWorker(component, ${JSON.stringify(bundledCoreModules)});\n`,
             resolveDir: packageRoot,
             loader: "ts",
         },
-        outfile: join(embedDir, "vpod.worker.js"),
+        outfile: workerPath,
+    });
+
+    await esbuild.build({
+        ...shared,
+        stdin: {
+            contents:
+                `export * from "./src/index.ts";\n` +
+                `import { setBundledWorkerSource } from "./src/transport/worker.ts";\n` +
+                `setBundledWorkerSource(${JSON.stringify(readFileSync(workerPath, "utf8"))});\n`,
+            resolveDir: packageRoot,
+            loader: "ts",
+        },
+        outfile: join(embedDir, "vpod.js"),
     });
 
     rmSync(embedComponentDir, { recursive: true, force: true });
 
-    for (const name of ["vpod.js", "vpod.worker.js"]) {
-        assertLoadableFromBlob(join(embedDir, name));
-    }
+    assertLoadableFromBlob(join(embedDir, "vpod.js"));
 }
 
-/**
- * Anchored on the quoted specifier rather than on the `import` keyword, because esbuild
- * writes multi-line import statements and a line-anchored pattern silently matches none
- * of them, which is a guard that always passes.
- */
+const INLINE_CORE_MODULE_LIMIT = 64 * 1024;
+
+function partitionCoreModules(directory) {
+    const inlined = {};
+    const required = [];
+
+    for (const name of coreModulesIn(directory)) {
+        const bytes = readFileSync(join(directory, name));
+        if (bytes.byteLength <= INLINE_CORE_MODULE_LIMIT) {
+            inlined[name] = bytes.toString("base64");
+        } else {
+            required.push(name);
+        }
+    }
+
+    if (required.length !== 1) {
+        throw new Error(
+            `the embed worker expects exactly one core module left for the caller, got ` +
+                `${required.length} (${required.join(", ") || "none"}). Revisit ` +
+                `INLINE_CORE_MODULE_LIMIT, or the single-buffer coreModules form breaks.`,
+        );
+    }
+
+    console.log(
+        `[build] embed inlines ${Object.keys(inlined).length} core module(s), ` +
+            `caller supplies ${required[0]}`,
+    );
+    return { inlined, required };
+}
+
 const RELATIVE_SPECIFIER_PATTERNS = [
     /\bfrom\s*["']([^"']+)["']/g,
     /\bimport\s+["']([^"']+)["']/g,
@@ -242,10 +265,6 @@ export function relativeImportsIn(source) {
     return [...found];
 }
 
-/**
- * The failure this guards against is silent: a relative specifier in a blob-loaded module
- * fails with an opaque module resolution error and no clue which import caused it.
- */
 function assertLoadableFromBlob(filePath) {
     const specifiers = relativeImportsIn(readFileSync(filePath, "utf8"));
 
@@ -289,6 +308,7 @@ function transpileForNode(componentPath) {
             "vpod",
             "--quiet",
             ...INSTANTIATION_ARGUMENTS,
+            ...MINIFY_ARGUMENTS,
             "--map",
             "wasi:sockets/ip-name-lookup=../node/host-resolver.js#ipNameLookup",
         ],
@@ -322,6 +342,7 @@ function transpile(componentPath, outputDir = componentDir, extraArguments = [])
             "vpod",
             "--quiet",
             ...INSTANTIATION_ARGUMENTS,
+            ...MINIFY_ARGUMENTS,
             ...extraArguments,
             ...BROWSER_MAPPINGS.flatMap((mapping) => ["--map", mapping]),
         ],
@@ -339,13 +360,6 @@ const coreModulesIn = (directory) =>
         .filter((name) => name.endsWith(".wasm"))
         .sort();
 
-/**
- * Both components are transpiled from the same wasm, so their core modules come out
- * byte-identical and only one copy needs shipping. This used to rewrite a URL inside the
- * generated loader; under custom instantiation there is no URL to rewrite, because
- * `loadCoreModule` in src/node/component-imports.ts looks beside the component and then
- * in the browser component's directory.
- */
 function shareCoreModules() {
     const browserModules = coreModulesIn(componentDir);
     const nodeModules = coreModulesIn(nodeComponentDir);
@@ -427,14 +441,13 @@ async function main() {
     const megabytes = (bytes) => `${(bytes / 1048576).toFixed(1)} MiB`;
     console.log(`[build] core wasm: ${megabytes(manifest.coreWasmBytes)}`);
     console.log(
-        `[build] embed: ${["vpod.js", "vpod.worker.js"]
+        `[build] embed: ${["vpod.js"]
             .map((name) => `${name} ${megabytes(statSync(join(embedDir, name)).size)}`)
             .join(", ")}`,
     );
     console.log(`[build] done -> ${relative(packageRoot, distDir)}`);
 }
 
-// Importable for its checks without running a build, the way dev/serve.mjs is.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
     await main();
 }

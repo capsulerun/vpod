@@ -1,7 +1,7 @@
 import { coreModuleLoaderFor } from "./component-imports.js";
 import { Dispatcher } from "./dispatch.js";
 import { describeThrown } from "./protocol.js";
-import type { ComponentModule } from "./component-imports.js";
+import type { BundledCoreModules, ComponentModule } from "./component-imports.js";
 import type { Executor } from "./dispatch.js";
 import type { WorkerInit, WorkerMessage, WorkerRequest } from "./protocol.js";
 
@@ -37,6 +37,7 @@ function loadComponent(
 
 export function serveWorker(
     bundledComponent?: ComponentModule<{ executor: Executor }>,
+    bundledCoreModules?: BundledCoreModules,
 ): void {
     const dispatcher = new Dispatcher();
 
@@ -44,7 +45,10 @@ export function serveWorker(
         const message = event.data;
 
         if ("kind" in message && message.kind === "init") {
-            const getCoreModule = coreModuleLoaderFor(message.coreModules);
+            const getCoreModule = coreModuleLoaderFor(
+                message.coreModules,
+                bundledCoreModules,
+            );
             const loaded = loadComponent(dispatcher, bundledComponent, message, getCoreModule);
 
             loaded

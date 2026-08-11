@@ -33,7 +33,12 @@ export async function pullSnapshot(options: PullOptions = {}): Promise<PulledSna
         }
     }
 
-    return downloadAndStore(store, entry, options.onProgress);
+    return downloadAndStore(
+        store,
+        entry,
+        resolveRegistryUrl(options.registryUrl),
+        options.onProgress,
+    );
 }
 
 const snapshotFileName = (entry: SnapshotEntry): string => `${entry.id}.snap`;
@@ -77,13 +82,16 @@ async function readVerifiedFromStore(
 async function downloadAndStore(
     store: SnapshotStorage | null,
     entry: SnapshotEntry,
+    registryUrl: string,
     onProgress?: (loaded: number, total: number) => void,
 ): Promise<PulledSnapshot> {
+    const url = new URL(entry.url, registryUrl).href;
+
     const startedAt = performance.now();
-    const response = await fetch(entry.url);
+    const response = await fetch(url);
     if (!response.ok) {
         throw new Error(
-            `vpod: snapshot ${entry.id} returned ${response.status} from ${entry.url}`,
+            `vpod: snapshot ${entry.id} returned ${response.status} from ${url}`,
         );
     }
 

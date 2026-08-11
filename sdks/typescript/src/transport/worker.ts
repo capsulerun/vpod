@@ -7,9 +7,16 @@ import type { ExecutorTransport } from "./types.js";
 
 export interface WorkerTransportOptions {
     workerUrl?: string | URL;
+    workerSource?: string;
     componentUrl?: string | URL;
     networkWorkerUrl?: string | URL;
     coreModules?: CoreModuleBytes;
+}
+
+let bundledWorkerSource: string | null = null;
+
+export function setBundledWorkerSource(source: string): void {
+    bundledWorkerSource = source;
 }
 
 export interface NetworkOptions extends DriverOptions {
@@ -33,8 +40,22 @@ export class WorkerTransport implements ExecutorTransport {
     #rejectReady!: (reason: Error) => void;
 
     constructor(options: WorkerTransportOptions = {}) {
+        if (options.workerUrl !== undefined && options.workerSource !== undefined) {
+            throw new Error("vpod: pass workerUrl or workerSource, not both.");
+        }
+
+        const source =
+            options.workerUrl !== undefined
+                ? null
+                : (options.workerSource ?? bundledWorkerSource);
+
+        const ownedBlobUrl =
+            source === null
+                ? null
+                : URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+
         const workerUrl =
-            options.workerUrl ?? assetUrl("worker/entry.js");
+            ownedBlobUrl ?? options.workerUrl ?? assetUrl("worker/entry.js");
 
         const componentUrl =
             options.componentUrl ?? assetUrlOrNull("component/vpod.js");
@@ -47,6 +68,10 @@ export class WorkerTransport implements ExecutorTransport {
         });
 
         this.#worker = new Worker(workerUrl, { type: "module" });
+
+        if (ownedBlobUrl !== null) {
+            URL.revokeObjectURL(ownedBlobUrl);
+        }
         this.#worker.addEventListener("message", (event: MessageEvent) => {
             this.#receive(event.data as WorkerMessage);
         });

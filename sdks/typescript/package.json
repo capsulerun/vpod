@@ -29,6 +29,10 @@
     "./inline": {
       "default": "./dist/transport/inline.js"
     },
+    "./embed": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/embed/vpod.js"
+    },
     "./node": {
       "types": "./dist/node/index.d.ts",
       "default": "./dist/node/index.js"
