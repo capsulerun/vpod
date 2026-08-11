@@ -15,12 +15,7 @@ class Commands:
         self._get_session_id = get_session_id
         self._interrupt_requested = threading.Event()
 
-    def run(
-        self,
-        command: str,
-        timeout: int = 120,
-        cancel: "threading.Event | None" = None,
-    ) -> CommandResult:
+    def run(self, command: str, timeout: int = 120) -> CommandResult:
         session_id = self._get_session_id()
         exec_slice = self._get_exports()["session-exec-slice"]
         self._interrupt_requested.clear()
@@ -50,9 +45,7 @@ class Commands:
             if stopped:
                 continue
 
-            if self._interrupt_requested.is_set() or (
-                cancel is not None and cancel.is_set()
-            ):
+            if self._interrupt_requested.is_set():
                 self._send_interrupt(session_id)
                 stopped = True
 

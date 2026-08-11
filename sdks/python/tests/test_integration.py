@@ -600,21 +600,6 @@ def test_interrupt_with_nothing_running_is_a_no_op():
         assert after.stdout.strip() == "clean"
 
 
-def test_cancel_event_stops_a_running_command():
-    with Sandbox.create() as sbx:
-        cancel = threading.Event()
-        timer = threading.Timer(0.5, cancel.set)
-        timer.daemon = True
-        timer.start()
-
-        started = time.time()
-        result = sbx.commands.run(FOREVER, timeout=INTERRUPT_TIMEOUT, cancel=cancel)
-        elapsed = time.time() - started
-
-        assert result.exit_code == 130
-        assert elapsed < 30, f"took {elapsed:.2f}s, so the cancel was not noticed"
-
-
 def test_an_abandoned_sliced_command_does_not_brick_the_session():
     from vpod.commands import SLICE_NANOS
     from vpod._result import unwrap_result
