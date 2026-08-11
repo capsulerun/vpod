@@ -31,6 +31,19 @@ impl Guest for Executor {
         SESSION_MANAGER.exec_code(handle, code, timeout)
     }
 
+    fn session_exec_slice(
+        handle: u64,
+        code: Option<String>,
+        timeout: Option<u64>,
+        slice_nanos: u64,
+    ) -> Result<Option<ExecutionResult>, String> {
+        SESSION_MANAGER.exec_slice(handle, code, timeout, slice_nanos)
+    }
+
+    fn session_interrupt(handle: u64) -> Result<(), String> {
+        SESSION_MANAGER.interrupt_session(handle)
+    }
+
     fn session_close(handle: u64) {
         SESSION_MANAGER.close_session(handle);
     }
