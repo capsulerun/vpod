@@ -207,6 +207,143 @@ jobs:
           VPOD_TEST_SNAPSHOT: /tmp/alpine-3.23.0-256mb.snap
         run: npm test && npm run test:integration
 
+  browser-integration:
+    name: Browser Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Generate AOT stub
+        run: ./scripts/aot-stub.sh
+
+      - name: Build WASM library
+        run: cargo build --release --target wasm32-wasip2 -p wasi-component --lib
+
+      - name: Copy WASM to SDK
+        run: |
+          mkdir -p sdks/typescript/wasm
+          cp target/wasm32-wasip2/release/vpod_wasi_lib.wasm sdks/typescript/wasm/
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: sdks/typescript/package-lock.json
+
+      - name: Install dependencies
+        working-directory: sdks/typescript
+        run: npm ci
+
+      - name: Build
+        working-directory: sdks/typescript
+        run: npm run build -- --tier base
+
+      - name: Install lz4
+        run: sudo apt-get update && sudo apt-get install -y lz4
+
+      - name: Fetch a snapshot
+        working-directory: sdks/typescript
+        run: |
+          mkdir -p /tmp/snapshots
+          ./scripts/fetch-test-snapshot.sh \
+            https://registry.vpod.sh/tests/v1/alpine-3.23.0-256mb.snap \
+            /tmp/snapshots/alpine-3.23.0-256mb.snap
+
+      - name: Sandbox in a browser, Chrome
+        working-directory: sdks/typescript
+        run: |
+          node dev/run-browser.mjs --browser chrome \
+            --snapshot-dir /tmp/snapshots \
+            --name alpine:3.23.0
+
+      - name: Sandbox in a browser, Firefox
+        working-directory: sdks/typescript
+        run: |
+          node dev/run-browser.mjs --browser firefox \
+            --snapshot-dir /tmp/snapshots \
+            --name alpine:3.23.0
+
+      - name: Interrupt, Chrome
+        working-directory: sdks/typescript
+        run: |
+          node dev/run-interrupt.mjs --browser chrome \
+            --snapshot-dir /tmp/snapshots \
+            --name alpine:3.23.0
+
+  embed-browser-integration:
+    name: Embed Browser Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Generate AOT stub
+        run: ./scripts/aot-stub.sh
+
+      - name: Build WASM library
+        run: cargo build --release --target wasm32-wasip2 -p wasi-component --lib
+
+      - name: Copy WASM to SDK
+        run: |
+          mkdir -p sdks/typescript/wasm
+          cp target/wasm32-wasip2/release/vpod_wasi_lib.wasm sdks/typescript/wasm/
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: sdks/typescript/package-lock.json
+
+      - name: Install dependencies
+        working-directory: sdks/typescript
+        run: npm ci
+
+      - name: Build
+        working-directory: sdks/typescript
+        run: npm run build -- --tier base
+
+      - name: Install lz4
+        run: sudo apt-get update && sudo apt-get install -y lz4
+
+      - name: Fetch a snapshot
+        working-directory: sdks/typescript
+        run: |
+          mkdir -p /tmp/snapshots
+          ./scripts/fetch-test-snapshot.sh \
+            https://registry.vpod.sh/tests/v1/alpine-3.23.0-256mb.snap \
+            /tmp/snapshots/alpine-3.23.0-256mb.snap
+
+      # The embed artifact is loaded from a blob: URL with the engine handed over as
+      # bytes, which no other job covers.
+      - name: Embed packaging, Chrome
+        working-directory: sdks/typescript
+        run: |
+          node dev/run-embed.mjs --browser chrome \
+            --snapshot-dir /tmp/snapshots \
+            --name alpine-3.23.0-256mb.snap
+
+      - name: Embed packaging, Firefox
+        working-directory: sdks/typescript
+        run: |
+          node dev/run-embed.mjs --browser firefox \
+            --snapshot-dir /tmp/snapshots \
+            --name alpine-3.23.0-256mb.snap
+
   typescript-sdk-performance:
     name: TypeScript SDK Performance
     runs-on: ubuntu-latest

@@ -79,13 +79,21 @@ async function readVerifiedFromStore(
     };
 }
 
+function resolvedAgainstCatalogue(url: string, registryUrl: string): string {
+    try {
+        return new URL(url, registryUrl).href;
+    } catch {
+        return url;
+    }
+}
+
 async function downloadAndStore(
     store: SnapshotStorage | null,
     entry: SnapshotEntry,
     registryUrl: string,
     onProgress?: (loaded: number, total: number) => void,
 ): Promise<PulledSnapshot> {
-    const url = new URL(entry.url, registryUrl).href;
+    const url = resolvedAgainstCatalogue(entry.url, registryUrl);
 
     const startedAt = performance.now();
     const response = await fetch(url);

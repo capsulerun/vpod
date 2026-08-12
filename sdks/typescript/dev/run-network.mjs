@@ -6,28 +6,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { browserArguments, locateBrowser } from "./browsers.mjs";
 import { startServer } from "./serve.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const resultsDir = join(packageRoot, "dev", "results");
 
-const BROWSERS = {
-    chrome: {
-        binary: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        args: (url, profile) => [
-            "--headless=new",
-            "--disable-gpu",
-            "--no-first-run",
-            "--no-default-browser-check",
-            `--user-data-dir=${profile}`,
-            url,
-        ],
-    },
-    firefox: {
-        binary: "/Applications/Firefox.app/Contents/MacOS/firefox",
-        args: (url, profile) => ["--headless", "--profile", profile, url],
-    },
-};
 
 function parseArguments(argv) {
     const options = { browser: "chrome", port: 8793, timeoutSeconds: 420, attach: false };
@@ -74,12 +58,14 @@ async function main() {
     if (options.attach) {
         console.log("open the URL above; waiting for its result");
     } else {
-        const browser = BROWSERS[options.browser];
-        if (browser === undefined) {
-            throw new Error(`unknown browser '${options.browser}'`);
+        const binary = locateBrowser(options.browser);
+        if (binary === null) {
+            throw new Error(`no ${options.browser} on this machine`);
         }
         const profile = mkdtempSync(join(tmpdir(), "vpod-net-"));
-        child = spawn(browser.binary, browser.args(pageUrl, profile), { stdio: "ignore" });
+        child = spawn(binary, browserArguments(options.browser, pageUrl, profile), {
+            stdio: "ignore",
+        });
     }
 
     const timeout = setTimeout(() => {

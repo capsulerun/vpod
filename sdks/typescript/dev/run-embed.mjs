@@ -5,25 +5,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { browserArguments, locateBrowser } from "./browsers.mjs";
 import { startServer } from "./serve.mjs";
 
-const BROWSERS = {
-    chrome: {
-        binary: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        args: (url, profile) => [
-            "--headless=new",
-            "--disable-gpu",
-            "--no-first-run",
-            "--no-default-browser-check",
-            `--user-data-dir=${profile}`,
-            url,
-        ],
-    },
-    firefox: {
-        binary: "/Applications/Firefox.app/Contents/MacOS/firefox",
-        args: (url, profile) => ["--headless", "--profile", profile, url],
-    },
-};
 
 const options = { browser: "chrome", isolate: false, port: 8794, timeoutSeconds: 300 };
 for (let index = 2; index < process.argv.length; index++) {
@@ -32,12 +16,13 @@ for (let index = 2; index < process.argv.length; index++) {
     else if (flag === "--isolate") options.isolate = true;
     else if (flag === "--port") options.port = Number(process.argv[++index]);
     else if (flag === "--name") options.name = process.argv[++index];
+    else if (flag === "--snapshot-dir") options.snapshotDir = process.argv[++index];
     else if (flag === "--timeout") options.timeoutSeconds = Number(process.argv[++index]);
 }
 
-const browser = BROWSERS[options.browser];
-if (browser === undefined) {
-    console.error(`unknown browser: ${options.browser}`);
+const binary = locateBrowser(options.browser);
+if (binary === null) {
+    console.error(`no ${options.browser} on this machine`);
     process.exit(1);
 }
 
@@ -49,6 +34,7 @@ const reported = new Promise((resolve) => {
 const server = await startServer({
     port: options.port,
     isolate: options.isolate,
+    snapshotDir: options.snapshotDir,
     home: "/dev/embed.html",
     onResult: (body) => resolveReport(JSON.parse(body)),
 });
@@ -56,7 +42,9 @@ const server = await startServer({
 const profile = mkdtempSync(join(tmpdir(), "vpod-embed-"));
 const query = options.name ? `?name=${encodeURIComponent(options.name)}` : "";
 const url = `http://127.0.0.1:${options.port}/dev/embed.html${query}`;
-const child = spawn(browser.binary, browser.args(url, profile), { stdio: "ignore" });
+const child = spawn(binary, browserArguments(options.browser, url, profile), {
+    stdio: "ignore",
+});
 
 const timeout = setTimeout(() => {
     resolveReport({ failed: true, error: `no result within ${options.timeoutSeconds}s` });
