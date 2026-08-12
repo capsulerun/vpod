@@ -1,5 +1,6 @@
 """Performance regression tests."""
 
+import hashlib
 import json
 import os
 import time
@@ -18,6 +19,17 @@ SHARED = json.loads(
 WORKLOADS = SHARED["workloads"]
 CEILINGS = SHARED["wallCeilings"]
 RECORDED_SNAPSHOT = SHARED["recordedSnapshot"]
+RECORDED_SNAPSHOT_SHA256 = SHARED["recordedSnapshotSha256"]
+
+
+def _throughput_floor() -> tuple[str, float]:
+    """ One floor per tier. The interpreter's floor is far below what a translated engine manages, so reusing it would pass even if AOT stopped dispatching entirely and every block fell back to the interpreter, which is the regression it exists to catch. """
+    from vpod import _component
+
+    tier = _component._active_tier or "unknown"
+    if tier == "aot":
+        return tier, CEILINGS["throughputFloorAot"]
+    return tier, CEILINGS["throughputFloor"]
 
 REPORT: dict = {"guest": {}, "wall": {}}
 
@@ -46,10 +58,24 @@ def box():
 
 @pytest.fixture(scope="module")
 def strict() -> bool:
+    """ Guest time is deterministic, so the recorded constants only mean anything against the bytes they were recorded from. A name does not establish that: an image built locally can share a file name and be entirely different, and comparing against it reports a regression in the emulator when the only thing that changed was the guest. """
     try:
-        return pull("alpine:latest").name == RECORDED_SNAPSHOT
+        pulled = pull("alpine:latest")
     except Exception:
         return False
+
+    digest = hashlib.sha256(pulled.read_bytes()).hexdigest()
+    REPORT["snapshotSha256"] = digest
+    matches = digest in RECORDED_SNAPSHOT_SHA256
+
+    if not matches and os.environ.get("VPOD_PERF_REQUIRE_STRICT") == "1":
+        pytest.fail(
+            f"the snapshot is {digest[:16]}, recorded "
+            f"{[h[:16] for h in RECORDED_SNAPSHOT_SHA256]}. "
+            f"The guest-time comparison is skipped for a different image, so this run "
+            f"proves much less than it looks like it does."
+        )
+    return matches
 
 
 def test_boot_within_ceiling(box):
@@ -101,9 +127,13 @@ def test_throughput_above_floor(box):
     best = max(entry["throughput"] for entry in measured.values())
     REPORT["wall"]["throughput"] = best
 
-    assert best > CEILINGS["throughputFloor"], (
+    tier, floor = _throughput_floor()
+    REPORT["wall"]["tier"] = tier
+    REPORT["wall"]["throughputFloor"] = floor
+
+    assert best > floor, (
         f"throughput is {best:.2f}x guest-seconds per wall-second, floor "
-        f"{CEILINGS['throughputFloor']}x. Either the emulator regressed badly or "
+        f"{floor}x for the {tier} tier. Either the emulator regressed badly or "
         f"this runner is far slower than any seen before."
     )
 

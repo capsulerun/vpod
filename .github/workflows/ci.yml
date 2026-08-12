@@ -334,9 +334,6 @@ jobs:
             --snapshot-dir /tmp/snapshots \
             --name alpine-3.23.0-256mb.snap
 
-  # One engine, built once and shared. The cache key is the emulator sources, so an SDK
-  # or docs PR restores main's artifact in about a minute; only a change that could alter
-  # a translation pays the trace-and-translate cost, which is the change that needs it.
   typescript-base-build:
     name: TypeScript Base Tier Build
     runs-on: ubuntu-latest
@@ -433,6 +430,7 @@ jobs:
         env:
           VPOD_TEST_SNAPSHOT: /tmp/alpine-3.23.0-256mb.snap
           VPOD_PERF_OUTPUT: /tmp/typescript-performance.json
+          VPOD_PERF_REQUIRE_STRICT: '1'
         run: npm run test:perf
 
       - name: Archive the numbers
@@ -475,6 +473,7 @@ jobs:
         env:
           VPOD_REGISTRY: https://registry.vpod.sh/tests/v1/snapshots.json
           VPOD_PERF_OUTPUT: /tmp/python-performance.json
+          VPOD_PERF_REQUIRE_STRICT: '1'
         run: pytest tests/test_performance.py -m performance -v
 
       - name: Archive the numbers
