@@ -1,13 +1,22 @@
-import { assetUrl } from "../asset-base.js";
+import { assetUrl, assetUrlOrNull } from "../asset-base.js";
 import { requireNetwork } from "../net/availability.js";
+import type { CoreModuleBytes } from "../worker/component-imports.js";
 import type { DriverOptions } from "../net/driver-protocol.js";
 import type { WorkerCall, WorkerMessage } from "../worker/protocol.js";
 import type { ExecutorTransport } from "./types.js";
 
 export interface WorkerTransportOptions {
     workerUrl?: string | URL;
+    workerSource?: string;
     componentUrl?: string | URL;
     networkWorkerUrl?: string | URL;
+    coreModules?: CoreModuleBytes;
+}
+
+let bundledWorkerSource: string | null = null;
+
+export function setBundledWorkerSource(source: string): void {
+    bundledWorkerSource = source;
 }
 
 export interface NetworkOptions extends DriverOptions {
@@ -23,7 +32,7 @@ export class WorkerTransport implements ExecutorTransport {
     readonly #worker: Worker;
     readonly #pending = new Map<number, PendingCall>();
     readonly #ready: Promise<number>;
-    readonly #networkWorkerUrl: string | URL;
+    readonly #networkWorkerUrl: string | URL | null;
 
     #networkWorker: Worker | undefined;
     #nextId = 1;
@@ -31,12 +40,27 @@ export class WorkerTransport implements ExecutorTransport {
     #rejectReady!: (reason: Error) => void;
 
     constructor(options: WorkerTransportOptions = {}) {
-        const workerUrl =
-            options.workerUrl ?? assetUrl("worker/entry.js");
-        const componentUrl =
-            options.componentUrl ?? assetUrl("component/vpod.js");
+        if (options.workerUrl !== undefined && options.workerSource !== undefined) {
+            throw new Error("vpod: pass workerUrl or workerSource, not both.");
+        }
 
-        this.#networkWorkerUrl = options.networkWorkerUrl ?? assetUrl("net/entry.js");
+        const source =
+            options.workerUrl !== undefined
+                ? null
+                : (options.workerSource ?? bundledWorkerSource);
+
+        const ownedBlobUrl =
+            source === null
+                ? null
+                : URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+
+        const workerUrl =
+            ownedBlobUrl ?? options.workerUrl ?? assetUrl("worker/entry.js");
+
+        const componentUrl =
+            options.componentUrl ?? assetUrlOrNull("component/vpod.js");
+
+        this.#networkWorkerUrl = options.networkWorkerUrl ?? null;
 
         this.#ready = new Promise<number>((resolve, reject) => {
             this.#resolveReady = resolve;
@@ -44,6 +68,10 @@ export class WorkerTransport implements ExecutorTransport {
         });
 
         this.#worker = new Worker(workerUrl, { type: "module" });
+
+        if (ownedBlobUrl !== null) {
+            URL.revokeObjectURL(ownedBlobUrl);
+        }
         this.#worker.addEventListener("message", (event: MessageEvent) => {
             this.#receive(event.data as WorkerMessage);
         });
@@ -53,7 +81,11 @@ export class WorkerTransport implements ExecutorTransport {
 
         this.#worker.postMessage({
             kind: "init",
-            componentUrl: new URL(componentUrl, self.location.href).href,
+            componentUrl:
+                componentUrl === null
+                    ? null
+                    : new URL(componentUrl, self.location.href).href,
+            coreModules: options.coreModules,
         });
     }
 
@@ -96,7 +128,8 @@ export class WorkerTransport implements ExecutorTransport {
             return;
         }
 
-        const driver = new Worker(this.#networkWorkerUrl, { type: "module" });
+        const driverUrl = this.#networkWorkerUrl ?? assetUrl("net/entry.js");
+        const driver = new Worker(driverUrl, { type: "module" });
         this.#networkWorker = driver;
 
         const configured = new Promise<void>((resolve) => {

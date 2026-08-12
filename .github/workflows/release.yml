@@ -208,12 +208,24 @@ jobs:
           node --input-type=module -e '
             const node = await import("@capsule-run/vpod/node");
             const browser = await import("@capsule-run/vpod/browser");
-            for (const [name, module] of [["node", node], ["browser", browser]]) {
+            const embed = await import("@capsule-run/vpod/embed");
+            for (const [name, module] of [["node", node], ["browser", browser], ["embed", embed]]) {
               if (typeof module.Sandbox !== "function") {
                 throw new Error(`the ${name} entry point exports no Sandbox`);
               }
               console.log(`${name} entry point ok`);
             }
+
+            // The embed entry carries the worker and is loaded from a blob, so a
+            // surviving relative import would break it with an opaque resolution error.
+            const { readFileSync } = await import("node:fs");
+            const { fileURLToPath } = await import("node:url");
+            const embedPath = fileURLToPath(import.meta.resolve("@capsule-run/vpod/embed"));
+            const source = readFileSync(embedPath, "utf8");
+            if (/\bfrom\s*["\x27]\.[^"\x27]*["\x27]/.test(source)) {
+              throw new Error("the embed entry kept a relative import and cannot load from a blob: URL");
+            }
+            console.log("embed entry ok, self-contained");
           '
 
       - name: Publish to npm

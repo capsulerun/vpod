@@ -135,7 +135,6 @@ describe("interrupt", { skip: skipReason() ?? false }, () => {
         });
     });
 
-    // Nothing may conclude a command has ended without the command saying so.
     it("lets an unfinishable command have the timeout its caller asked for", async () => {
         await withSandbox(async (sandbox) => {
             const started = Date.now();

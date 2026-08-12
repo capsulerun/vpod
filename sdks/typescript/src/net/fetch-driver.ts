@@ -290,9 +290,7 @@ export class FetchDriver {
                 fetchable.url,
                 canProxy,
             );
-            // Name the original URL, not the proxied one: that is the address the
-            // guest asked for and the one worth acting on. Say the proxy was tried
-            // so a misconfigured allowlist is not mistaken for an unreachable host.
+
             const viaProxy = this.#hostsNeedingProxy.has(host)
                 ? ` (also tried via corsProxy at ${this.#options.corsProxy})`
                 : "";

@@ -7,28 +7,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { browserArguments, locateBrowser } from "./browsers.mjs";
 import { startServer } from "./serve.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const resultsDir = join(packageRoot, "dev", "results");
 
-const BROWSERS = {
-    chrome: {
-        binary: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        args: (url, profile) => [
-            "--headless=new",
-            "--disable-gpu",
-            "--no-first-run",
-            "--no-default-browser-check",
-            `--user-data-dir=${profile}`,
-            url,
-        ],
-    },
-    firefox: {
-        binary: "/Applications/Firefox.app/Contents/MacOS/firefox",
-        args: (url, profile) => ["--headless", "--profile", profile, url],
-    },
-};
 
 function processTree(rootPid) {
     let listing;
@@ -111,6 +95,7 @@ function parseArguments(argv) {
         else if (flag === "--attach") options.attach = true;
         else if (flag === "--port") options.port = Number(argv[++index]);
         else if (flag === "--name") options.name = argv[++index];
+        else if (flag === "--runs") options.runs = Number(argv[++index]);
         else if (flag === "--match") options.match = argv[++index];
         else if (flag === "--snapshot-dir") options.snapshotDir = argv[++index];
         else if (flag === "--timeout") options.timeoutSeconds = Number(argv[++index]);
@@ -154,9 +139,11 @@ async function main() {
         onResult: (body) => resolveResult(JSON.parse(body)),
     });
 
-    const pageUrl = options.name
-        ? `${running.url}?name=${encodeURIComponent(options.name)}`
-        : running.url;
+    const parameters = new URLSearchParams();
+    if (options.name) parameters.set("name", options.name);
+    if (options.runs) parameters.set("runs", String(options.runs));
+    const pageUrl =
+        parameters.size > 0 ? `${running.url}?${parameters}` : running.url;
 
     console.log(`serving ${pageUrl} (snapshots from ${running.snapshots})`);
 
@@ -195,9 +182,9 @@ async function main() {
         return;
     }
 
-    const browser = BROWSERS[options.browser];
-    if (browser === undefined) {
-        throw new Error(`unknown browser '${options.browser}'`);
+    const binary = locateBrowser(options.browser);
+    if (binary === null) {
+        throw new Error(`no ${options.browser} on this machine`);
     }
 
     const profile = mkdtempSync(join(tmpdir(), `vpod-${options.browser}-`));
@@ -208,7 +195,7 @@ async function main() {
             resolveResult = done;
         });
 
-        const child = spawn(browser.binary, browser.args(pageUrl, profile), {
+        const child = spawn(binary, browserArguments(options.browser, pageUrl, profile), {
             stdio: "ignore",
         });
 
@@ -252,6 +239,17 @@ async function main() {
     console.log(`\nwrote ${outputPath}`);
 
     await running.close();
+
+    const broken = reports.filter(
+        (report) => report.failed || report.outputCorrect === false,
+    );
+    if (broken.length > 0) {
+        console.error(
+            `\n${broken.length} of ${reports.length} visit(s) failed: ` +
+                broken.map((report) => report.error ?? "output incorrect").join("; "),
+        );
+        process.exitCode = 1;
+    }
 }
 
 await main();

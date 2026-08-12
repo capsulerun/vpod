@@ -10,6 +10,8 @@ import { FetchSocketBackend } from "../net/fetch-backend.js";
 import { setSocketBackend, socketBackendName } from "../shims/sockets.js";
 import { evictById, pullSnapshot } from "../snapshots/pull.js";
 import { SnapshotStore } from "../snapshots/store.js";
+import { componentImports } from "./component-imports.js";
+import type { ComponentModule, CoreModuleLoader } from "./component-imports.js";
 import type { DriverCommand } from "../net/driver-protocol.js";
 import type { ExecutionResult, WorkerCall } from "./protocol.js";
 
@@ -20,7 +22,7 @@ async function announceHostTerminatedTls(): Promise<void> {
     cli._setEnv({ VPOD_HOST_TLS: "1" });
 }
 
-interface Executor {
+export interface Executor {
     sessionStart(
         snapshotPath: string,
         command: string,
@@ -50,20 +52,54 @@ interface Executor {
     ): bigint;
 }
 
+const sharedComponents = new Map<string, Promise<{ executor: Executor }>>();
+
 export class Dispatcher {
     #executor: Executor | null = null;
     #componentLoadMilliseconds = 0;
     #mountedSnapshotIds = new Map<string, string>();
     #nextDeltaId = 1;
 
-    async load(componentUrl: string): Promise<number> {
+    async load(componentUrl: string, getCoreModule?: CoreModuleLoader): Promise<number> {
+        const shareKey = getCoreModule === undefined ? componentUrl : null;
+
+        return this.#instantiate(
+            async () =>
+                (await import(
+                    /* @vite-ignore */ /* webpackIgnore: true */ componentUrl
+                )) as ComponentModule<{ executor: Executor }>,
+            getCoreModule,
+            shareKey,
+        );
+    }
+
+    async loadModule(
+        module: ComponentModule<{ executor: Executor }>,
+        getCoreModule?: CoreModuleLoader,
+    ): Promise<number> {
+        return this.#instantiate(async () => module, getCoreModule, null);
+    }
+
+    async #instantiate(
+        open: () => Promise<ComponentModule<{ executor: Executor }>>,
+        getCoreModule: CoreModuleLoader | undefined,
+        shareKey: string | null,
+    ): Promise<number> {
         const startedAt = performance.now();
-        const module = (await import(
-            /* @vite-ignore */ /* webpackIgnore: true */ componentUrl
-        )) as {
-            executor: Executor;
-        };
-        this.#executor = module.executor;
+        let component = shareKey === null ? undefined : sharedComponents.get(shareKey);
+
+        if (component === undefined) {
+            component = open().then((module) =>
+                module.instantiate(getCoreModule, componentImports),
+            );
+
+            if (shareKey !== null) {
+                sharedComponents.set(shareKey, component);
+                component.catch(() => sharedComponents.delete(shareKey));
+            }
+        }
+
+        this.#executor = (await component).executor;
         this.#componentLoadMilliseconds = performance.now() - startedAt;
         return this.#componentLoadMilliseconds;
     }

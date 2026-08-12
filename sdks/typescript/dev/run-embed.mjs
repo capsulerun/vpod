@@ -9,15 +9,15 @@ import { browserArguments, locateBrowser } from "./browsers.mjs";
 import { startServer } from "./serve.mjs";
 
 
-const options = { browser: "chrome", isolate: false, port: 8793, timeoutSeconds: 300 };
+const options = { browser: "chrome", isolate: false, port: 8794, timeoutSeconds: 300 };
 for (let index = 2; index < process.argv.length; index++) {
     const flag = process.argv[index];
     if (flag === "--browser") options.browser = process.argv[++index];
     else if (flag === "--isolate") options.isolate = true;
     else if (flag === "--port") options.port = Number(process.argv[++index]);
-    else if (flag === "--timeout") options.timeoutSeconds = Number(process.argv[++index]);
     else if (flag === "--name") options.name = process.argv[++index];
     else if (flag === "--snapshot-dir") options.snapshotDir = process.argv[++index];
+    else if (flag === "--timeout") options.timeoutSeconds = Number(process.argv[++index]);
 }
 
 const binary = locateBrowser(options.browser);
@@ -35,13 +35,13 @@ const server = await startServer({
     port: options.port,
     isolate: options.isolate,
     snapshotDir: options.snapshotDir,
-    home: "/dev/interrupt.html",
+    home: "/dev/embed.html",
     onResult: (body) => resolveReport(JSON.parse(body)),
 });
 
-const profile = mkdtempSync(join(tmpdir(), "vpod-interrupt-"));
+const profile = mkdtempSync(join(tmpdir(), "vpod-embed-"));
 const query = options.name ? `?name=${encodeURIComponent(options.name)}` : "";
-const url = `http://127.0.0.1:${options.port}/dev/interrupt.html${query}`;
+const url = `http://127.0.0.1:${options.port}/dev/embed.html${query}`;
 const child = spawn(binary, browserArguments(options.browser, url, profile), {
     stdio: "ignore",
 });
@@ -65,10 +65,5 @@ console.log(`crossOriginIsolated  ${report.crossOriginIsolated}`);
 for (const entry of report.checks) {
     console.log(`${entry.passed ? "ok  " : "FAIL"} ${entry.name}  ${entry.detail ?? ""}`);
 }
-console.log(`round trip           ${report.perCallMilliseconds?.toFixed(2)} ms per short command`);
-console.log(`long command         ${report.longCommandSeconds?.toFixed(2)}s`);
-console.log(
-    `main thread          ${report.frames} frames, worst gap ${report.worstGapMilliseconds?.toFixed(0)}ms`,
-);
 
 process.exit(report.passed ? 0 : 1);

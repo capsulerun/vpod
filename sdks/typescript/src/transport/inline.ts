@@ -1,12 +1,13 @@
 import { assetUrl, directoryOf, setAssetBaseUrlIfUnset } from "../asset-base.js";
+import type { CoreModuleBytes } from "../worker/component-imports.js";
 import type { WorkerCall } from "../worker/protocol.js";
 import type { ExecutorTransport } from "./types.js";
 
-// Set here as well as in index.ts so `vpod/inline` works when imported directly.
 setAssetBaseUrlIfUnset(directoryOf(import.meta.url, "../"));
 
 export interface InlineTransportOptions {
     componentUrl?: string | URL;
+    coreModules?: CoreModuleBytes;
 }
 
 class InlineTransport implements ExecutorTransport {
@@ -36,11 +37,15 @@ export async function createInlineTransport(
     options: InlineTransportOptions = {},
 ): Promise<ExecutorTransport> {
     const { Dispatcher } = await import("../worker/dispatch.js");
+    const { coreModuleLoaderFor } = await import("../worker/component-imports.js");
     const dispatcher = new Dispatcher();
 
     const componentUrl =
         options.componentUrl ?? assetUrl("component/vpod.js");
-    const componentLoadMilliseconds = await dispatcher.load(String(componentUrl));
+    const componentLoadMilliseconds = await dispatcher.load(
+        String(componentUrl),
+        coreModuleLoaderFor(options.coreModules),
+    );
 
     return new InlineTransport(dispatcher, componentLoadMilliseconds);
 }

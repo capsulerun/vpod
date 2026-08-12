@@ -10,6 +10,7 @@ const shared = JSON.parse(
 );
 
 export const RECORDED_SNAPSHOT = shared.recordedSnapshot;
+export const RECORDED_SNAPSHOT_SHA256 = shared.recordedSnapshotSha256;
 export const GUEST_WORKLOADS = shared.workloads;
 export const WALL_CEILINGS = shared.wallCeilings;
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -6,21 +7,49 @@ import { after, before, describe, it } from "node:test";
 import { distPath, loadSdk, locateSnapshot, skipReason } from "../helpers.mjs";
 import {
     GUEST_WORKLOADS,
-    RECORDED_SNAPSHOT,
+    RECORDED_SNAPSHOT_SHA256,
     WALL_CEILINGS,
     guestProgram,
     withinTolerance,
 } from "./workloads.mjs";
 
 const reason = skipReason();
-const snapshotName = locateSnapshot() === null ? null : basename(locateSnapshot());
 
-const strict = snapshotName === RECORDED_SNAPSHOT;
+function builtTier() {
+    try {
+        return JSON.parse(readFileSync(distPath("component/manifest.json"), "utf8")).tier;
+    } catch {
+        return "unknown";
+    }
+}
+
+
+function snapshotIdentity() {
+    const path = locateSnapshot();
+    if (path === null) {
+        return { name: null, sha256: null, matches: false };
+    }
+    const sha256 = createHash("sha256").update(readFileSync(path)).digest("hex");
+    return {
+        name: basename(path),
+        sha256,
+        matches: RECORDED_SNAPSHOT_SHA256.includes(sha256),
+    };
+}
+
+const snapshot = snapshotIdentity();
+const strict = snapshot.matches;
 
 describe("performance", { skip: reason ?? false }, () => {
     let sandbox;
     let worker;
-    const report = { snapshot: snapshotName, strict, guest: {}, wall: {} };
+    const report = {
+        snapshot: snapshot.name,
+        snapshotSha256: snapshot.sha256,
+        strict,
+        guest: {},
+        wall: {},
+    };
 
     before(async () => {
         const cli = await import(distPath("shims/cli.js"));
@@ -51,6 +80,22 @@ describe("performance", { skip: reason ?? false }, () => {
             writeFileSync(process.env.VPOD_PERF_OUTPUT, json);
         }
         console.log(json);
+    });
+
+    it("compares against the snapshot the constants were recorded from", () => {
+        // Without strict mode only the wall-clock ceilings remain, and those are loose
+        // enough to pass on almost anything. Somewhere that expects real coverage should
+        // hear about that rather than quietly get less.
+        if (!strict && process.env.VPOD_PERF_REQUIRE_STRICT === "1") {
+            assert.fail(
+                `the snapshot is ${snapshot.sha256?.slice(0, 16) ?? "missing"}, recorded ` +
+                    `none of ${RECORDED_SNAPSHOT_SHA256.map((h) => h.slice(0, 16)).join(", ")}. ` +
+                    `The guest-time comparison is ` +
+                    `skipped for a different image, so this run proves much less than it ` +
+                    `looks like it does.`,
+            );
+        }
+        assert.ok(true);
     });
 
     it("boots within its ceiling", () => {
@@ -101,10 +146,16 @@ describe("performance", { skip: reason ?? false }, () => {
         const best = Math.max(...measured.map((entry) => entry.throughput));
         report.wall.throughput = best;
 
+        const tier = builtTier();
+        const floor =
+            tier === "aot" ? WALL_CEILINGS.throughputFloorAot : WALL_CEILINGS.throughputFloor;
+        report.wall.tier = tier;
+        report.wall.throughputFloor = floor;
+
         assert.ok(
-            best > WALL_CEILINGS.throughputFloor,
+            best > floor,
             `throughput is ${best.toFixed(2)}x guest-seconds per wall-second, floor ` +
-                `${WALL_CEILINGS.throughputFloor}x. Either the emulator regressed badly ` +
+                `${floor}x for the ${tier} tier. Either the emulator regressed badly ` +
                 `or this runner is far slower than any seen before.`,
         );
     });
