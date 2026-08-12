@@ -21,7 +21,7 @@
     },
     "regex": {
       "body": "import re\npat=re.compile(r'(\\w+)@(\\w+)\\.com')\nn=0\nfor i in range(4000):\n    n+=1 if pat.match(f'user{i}@host{i}.com') else 0\nassert n==4000, f'the pattern matched {n} of 4000, so this measures the wrong work'",
-      "guestSeconds": 0.382730,
+      "guestSeconds": 0.38273,
       "tolerance": 0.02
     }
   },
@@ -29,6 +29,7 @@
     "bootSeconds": 30,
     "shellPerCallSeconds": 2,
     "networkRoundTripSeconds": 30,
-    "throughputFloor": 0.2
+    "throughputFloor": 0.2,
+    "throughputFloorAot": 0.6
   }
 }

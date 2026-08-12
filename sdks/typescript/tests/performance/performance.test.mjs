@@ -15,6 +15,14 @@ import {
 const reason = skipReason();
 const snapshotName = locateSnapshot() === null ? null : basename(locateSnapshot());
 
+function builtTier() {
+    try {
+        return JSON.parse(readFileSync(distPath("component/manifest.json"), "utf8")).tier;
+    } catch {
+        return "unknown";
+    }
+}
+
 const strict = snapshotName === RECORDED_SNAPSHOT;
 
 describe("performance", { skip: reason ?? false }, () => {
@@ -101,10 +109,16 @@ describe("performance", { skip: reason ?? false }, () => {
         const best = Math.max(...measured.map((entry) => entry.throughput));
         report.wall.throughput = best;
 
+        const tier = builtTier();
+        const floor =
+            tier === "aot" ? WALL_CEILINGS.throughputFloorAot : WALL_CEILINGS.throughputFloor;
+        report.wall.tier = tier;
+        report.wall.throughputFloor = floor;
+
         assert.ok(
-            best > WALL_CEILINGS.throughputFloor,
+            best > floor,
             `throughput is ${best.toFixed(2)}x guest-seconds per wall-second, floor ` +
-                `${WALL_CEILINGS.throughputFloor}x. Either the emulator regressed badly ` +
+                `${floor}x for the ${tier} tier. Either the emulator regressed badly ` +
                 `or this runner is far slower than any seen before.`,
         );
     });
