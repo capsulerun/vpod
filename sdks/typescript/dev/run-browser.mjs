@@ -95,6 +95,7 @@ function parseArguments(argv) {
         else if (flag === "--attach") options.attach = true;
         else if (flag === "--port") options.port = Number(argv[++index]);
         else if (flag === "--name") options.name = argv[++index];
+        else if (flag === "--runs") options.runs = Number(argv[++index]);
         else if (flag === "--match") options.match = argv[++index];
         else if (flag === "--snapshot-dir") options.snapshotDir = argv[++index];
         else if (flag === "--timeout") options.timeoutSeconds = Number(argv[++index]);
@@ -138,9 +139,11 @@ async function main() {
         onResult: (body) => resolveResult(JSON.parse(body)),
     });
 
-    const pageUrl = options.name
-        ? `${running.url}?name=${encodeURIComponent(options.name)}`
-        : running.url;
+    const parameters = new URLSearchParams();
+    if (options.name) parameters.set("name", options.name);
+    if (options.runs) parameters.set("runs", String(options.runs));
+    const pageUrl =
+        parameters.size > 0 ? `${running.url}?${parameters}` : running.url;
 
     console.log(`serving ${pageUrl} (snapshots from ${running.snapshots})`);
 

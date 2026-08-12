@@ -262,14 +262,16 @@ jobs:
         run: |
           node dev/run-browser.mjs --browser chrome \
             --snapshot-dir /tmp/snapshots \
-            --name alpine:3.23.0
+            --name alpine:3.23.0 \
+            --runs 1
 
       - name: Sandbox in a browser, Firefox
         working-directory: sdks/typescript
         run: |
           node dev/run-browser.mjs --browser firefox \
             --snapshot-dir /tmp/snapshots \
-            --name alpine:3.23.0
+            --name alpine:3.23.0 \
+            --runs 1
 
       - name: Interrupt, Chrome
         working-directory: sdks/typescript
