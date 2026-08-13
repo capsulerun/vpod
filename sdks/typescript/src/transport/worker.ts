@@ -10,6 +10,7 @@ export interface WorkerTransportOptions {
     workerSource?: string;
     componentUrl?: string | URL;
     networkWorkerUrl?: string | URL;
+    networkWorkerSource?: string;
     coreModules?: CoreModuleBytes;
 }
 
@@ -17,6 +18,12 @@ let bundledWorkerSource: string | null = null;
 
 export function setBundledWorkerSource(source: string): void {
     bundledWorkerSource = source;
+}
+
+let bundledNetworkWorkerSource: string | null = null;
+
+export function setBundledNetworkWorkerSource(source: string): void {
+    bundledNetworkWorkerSource = source;
 }
 
 export interface NetworkOptions extends DriverOptions {
@@ -33,6 +40,7 @@ export class WorkerTransport implements ExecutorTransport {
     readonly #pending = new Map<number, PendingCall>();
     readonly #ready: Promise<number>;
     readonly #networkWorkerUrl: string | URL | null;
+    readonly #networkWorkerSource: string | null;
 
     #networkWorker: Worker | undefined;
     #nextId = 1;
@@ -61,6 +69,7 @@ export class WorkerTransport implements ExecutorTransport {
             options.componentUrl ?? assetUrlOrNull("component/vpod.js");
 
         this.#networkWorkerUrl = options.networkWorkerUrl ?? null;
+        this.#networkWorkerSource = options.networkWorkerSource ?? null;
 
         this.#ready = new Promise<number>((resolve, reject) => {
             this.#resolveReady = resolve;
@@ -128,9 +137,25 @@ export class WorkerTransport implements ExecutorTransport {
             return;
         }
 
-        const driverUrl = this.#networkWorkerUrl ?? assetUrl("net/entry.js");
+        const driverSource =
+            this.#networkWorkerUrl !== null
+                ? null
+                : (this.#networkWorkerSource ?? bundledNetworkWorkerSource);
+
+        const ownedBlobUrl =
+            driverSource === null
+                ? null
+                : URL.createObjectURL(
+                      new Blob([driverSource], { type: "text/javascript" }),
+                  );
+
+        const driverUrl = ownedBlobUrl ?? this.#networkWorkerUrl ?? assetUrl("net/entry.js");
         const driver = new Worker(driverUrl, { type: "module" });
         this.#networkWorker = driver;
+
+        if (ownedBlobUrl !== null) {
+            URL.revokeObjectURL(ownedBlobUrl);
+        }
 
         const configured = new Promise<void>((resolve) => {
             driver.addEventListener("message", () => resolve(), { once: true });
