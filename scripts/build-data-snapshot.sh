@@ -185,6 +185,9 @@ mount -t sysfs    sysfs    /sys
 mount -t devtmpfs devtmpfs /dev
 mount -t tmpfs    tmpfs    /tmp
 
+# devtmpfs brings no /dev/fd for bash
+ln -sf /proc/self/fd /dev/fd
+
 # Container runtime primitives (docker/podman/buildah): a mounted cgroup2
 mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
 echo '+cpu +memory +pids +io' > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
@@ -351,7 +354,7 @@ SETUP_CMD="${SETUP_CMD}date -s '$NOW'; "
 SETUP_CMD="${SETUP_CMD}sed -i 's|https://|http://|g' /etc/apk/repositories; "
 SETUP_CMD="${SETUP_CMD}apk update --allow-untrusted; "
 
-SETUP_CMD="${SETUP_CMD}apk add --allow-untrusted ca-certificates python3 py3-pip uv py3-numpy py3-pandas py3-scipy; "
+SETUP_CMD="${SETUP_CMD}apk add --allow-untrusted ca-certificates python3 py3-pip uv py3-numpy py3-pandas py3-scipy bash; "
 SETUP_CMD="${SETUP_CMD}rm -f /usr/lib/python3.*/EXTERNALLY-MANAGED; mkdir -p /root/.cache; "
 
 SETUP_CMD="${SETUP_CMD}update-ca-certificates; "
