@@ -6,10 +6,24 @@ cd "$(dirname "$0")/.."
 
 CATALOG="${CATALOG:-registry/catalog.json}"
 OUT="${OUT:-dist/registry-bundle}"
-PREFIX="${PREFIX:-v1}"
 BASELINE="perf.json"
 VERSION="${VERSION:-0.0.0-local}"
 REGISTRY_BASE="${REGISTRY_BASE:-https://registry.vpod.sh}"
+
+if [ -z "${PREFIX:-}" ]; then
+    echo "error: set PREFIX to the channel this bundle is for." >&2
+    echo "       PREFIX=tests/v1   a CI fixture channel" >&2
+    echo "       PREFIX=v1         production, what every installed SDK pulls" >&2
+    exit 1
+fi
+PREFIX="${PREFIX#/}"
+PREFIX="${PREFIX%/}"
+
+if [ "$PREFIX" = "v1" ] && [ "${CONFIRM_PRODUCTION:-0}" != "1" ]; then
+    echo "error: PREFIX=v1 publishes to production, which every installed SDK pulls." >&2
+    echo "       Re-run with CONFIRM_PRODUCTION=1 if that is what you mean." >&2
+    exit 1
+fi
 
 # source snapshot in dist/ : id published to the registry
 SNAPSHOTS=(
@@ -32,7 +46,7 @@ fi
 for pair in "${SNAPSHOTS[@]}"; do
     source_snapshot="${pair%%:*}"
     [ -f "$source_snapshot" ] || {
-        echo "error: $source_snapshot missing (build it or drop SKIP_BUILD)" >&2
+        echo "error: $source_snapshot missing (build it, or drop SKIP_BUILD)" >&2
         exit 1
     }
 done
@@ -68,7 +82,14 @@ for snapshot in "$OUT"/*.snap; do
 done
 echo "framing verified: one lz4 layer over VPOD"
 
+
+BASELINE_PORT=""
+if [ "${SKIP_BASELINE:-0}" != "1" ]; then
+    BASELINE_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+fi
+
 CATALOG="$CATALOG" OUT="$OUT" PREFIX="$PREFIX" VERSION="$VERSION" \
+BASELINE_PORT="$BASELINE_PORT" \
 REGISTRY_BASE="$REGISTRY_BASE" python3 - <<'PY'
 import hashlib, json, os
 from pathlib import Path
@@ -103,21 +124,46 @@ for entry in snapshots:
 
 manifest = {"version": os.environ["VERSION"], "snapshots": snapshots}
 (out / "snapshots.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+port = os.environ.get("BASELINE_PORT")
+if port:
+    local = json.loads(json.dumps(manifest))
+    for entry in local["snapshots"]:
+        entry["url"] = f"http://127.0.0.1:{port}/{entry['id']}.snap"
+    (out / "snapshots.local.json").write_text(json.dumps(local, indent=2) + "\n")
 PY
+
+if [ -n "$BASELINE_PORT" ]; then
+    echo
+    echo "── Recording the perf baseline against these bytes..."
+
+    python3 -m http.server "$BASELINE_PORT" --bind 127.0.0.1 --directory "$OUT" \
+        >/dev/null 2>&1 &
+    server=$!
+    disown "$server" 2>/dev/null || true
+    trap 'kill "$server" 2>/dev/null || true; rm -f "$OUT/snapshots.local.json"' EXIT
+
+    for _ in $(seq 1 50); do
+        curl -sf "http://127.0.0.1:$BASELINE_PORT/snapshots.local.json" >/dev/null && break
+        sleep 0.1
+    done
+
+    if (cd sdks/python && VPOD_PERF_RECORD=1 \
+            VPOD_REGISTRY="http://127.0.0.1:$BASELINE_PORT/snapshots.local.json" \
+            VPOD_PERF_RECORD_TO="../../$OUT/$BASELINE" \
+            python3 -m pytest tests/test_performance.py -m performance -q -s); then
+        echo "   baseline written to $OUT/$BASELINE"
+    else
+        echo "   WARNING: the baseline was not recorded, so this bundle is incomplete." >&2
+        echo "   Strict perf runs will fail until $BASELINE describes these bytes." >&2
+        echo "   Needs the python SDK installed: cd sdks/python && pip install -e .[dev]" >&2
+    fi
+
+    kill "$server" 2>/dev/null || true
+    rm -f "$OUT/snapshots.local.json"
+    trap - EXIT
+fi
 
 echo
 echo "bundle ready in $OUT (version $VERSION, targeting /$PREFIX/):"
 ls -lh "$OUT"
-
-echo
-echo "New bytes need a new baseline: the perf suites look their timings up by digest,"
-echo "so strict mode fails until this channel publishes one. Upload the snapshots,"
-echo "then record and upload $BASELINE beside them:"
-echo
-echo "  cd sdks/python && VPOD_REGISTRY=$REGISTRY_BASE/$PREFIX/snapshots.json \\"
-echo "      VPOD_PERF_RECORD=1 pytest tests/test_performance.py -m performance"
-echo
-echo "That writes $OUT/$BASELINE, keyed by both the raw and lz4 digest so it serves the"
-echo "Python and TypeScript suites alike. Upload it beside the snapshots. Guest time is"
-echo "deterministic, so the numbers it records are the ones CI will measure, and there"
-echo "is nothing to commit: the baseline ships with the image, not with the repo."
