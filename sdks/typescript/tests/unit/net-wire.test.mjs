@@ -134,17 +134,19 @@ describe("turning a request into a fetch", () => {
         const parsed = parseRequest(
             bytes(
                 "GET / HTTP/1.1\r\nHost: h\r\nConnection: keep-alive\r\n" +
-                    "User-Agent: pip/24\r\nAccept-Encoding: gzip\r\nSec-Fetch-Mode: cors\r\n\r\n",
+                    "User-Agent: pip/24\r\nAccept-Encoding: gzip\r\nSec-Fetch-Mode: cors\r\n" +
+                    "Accept: application/json\r\n\r\n",
             ),
         );
         const fetchable = toFetchable(parsed.request, "h", 443, true);
 
-        assert.deepEqual(fetchable.headers, [["User-Agent", "pip/24"]]);
+        assert.deepEqual(fetchable.headers, [["Accept", "application/json"]]);
         assert.deepEqual(fetchable.stripped.sort(), [
             "Accept-Encoding",
             "Connection",
             "Host",
             "Sec-Fetch-Mode",
+            "User-Agent",
         ]);
     });
 });

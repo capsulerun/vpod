@@ -86,6 +86,28 @@ describe("fetch driver", () => {
         assert.ok(wire.endsWith("{}"));
     });
 
+    it("forwards the guest's own headers but never User-Agent", async () => {
+        const calls = stubFetch(() => jsonResponse("{}"));
+        const driver = new FetchDriver();
+        const connection = connect(driver);
+
+        connection.send("VPOD-CONNECT pypi.org 443\n");
+        connection.send(
+            "GET /simple/ HTTP/1.1\r\nHost: pypi.org\r\nUser-Agent: pip/24\r\n" +
+                "Authorization: Bearer t\r\nAccept: application/json\r\n\r\n",
+        );
+
+        await connection.drainUntilFinished();
+
+        const sent = new Map(
+            calls[0].init.headers.map(([name, value]) => [name.toLowerCase(), value]),
+        );
+        assert.equal(sent.has("user-agent"), false, "User-Agent would force a CORS preflight");
+        assert.equal(sent.has("host"), false, "the browser sets Host itself");
+        assert.equal(sent.get("authorization"), "Bearer t");
+        assert.equal(sent.get("accept"), "application/json");
+    });
+
     it("tolerates the preamble and request arriving in one write or many", async () => {
         const calls = stubFetch(() => jsonResponse("ok"));
         const driver = new FetchDriver();

@@ -68,6 +68,28 @@ try {
     const stopped = await interrupted;
     check("an interrupt reaches the blob-loaded worker", stopped.exitCode === 130, `exit ${stopped.exitCode}`);
 
+    if (crossOriginIsolated) {
+        const plain = await sandbox.commands.run(
+            "wget -q -O- http://ip-api.com/json | head -c 40",
+            { timeout: 120 },
+        );
+        check(
+            "the guest reaches the network from a blob-loaded driver",
+            plain.exitCode === 0 && plain.stdout.trim().length > 0,
+            JSON.stringify(plain.stdout.trim().slice(0, 40)),
+        );
+
+        const secure = await sandbox.commands.run(
+            "wget -q -O- https://pypi.org/simple/ | head -c 40",
+            { timeout: 120 },
+        );
+        check(
+            "the guest reaches an https upstream",
+            secure.exitCode === 0 && secure.stdout.trim().length > 0,
+            JSON.stringify(secure.stdout.trim().slice(0, 40)),
+        );
+    }
+
     await sandbox.close();
 
 

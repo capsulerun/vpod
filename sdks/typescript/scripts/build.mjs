@@ -199,13 +199,22 @@ async function bundleEmbed(componentPath) {
         outfile: workerPath,
     });
 
+    const networkWorkerPath = join(embedComponentDir, "vpod.net.js");
+
+    await esbuild.build({
+        ...shared,
+        entryPoints: ["src/net/entry.ts"],
+        outfile: networkWorkerPath,
+    });
+
     await esbuild.build({
         ...shared,
         stdin: {
             contents:
                 `export * from "./src/index.ts";\n` +
-                `import { setBundledWorkerSource } from "./src/transport/worker.ts";\n` +
-                `setBundledWorkerSource(${JSON.stringify(readFileSync(workerPath, "utf8"))});\n`,
+                `import { setBundledWorkerSource, setBundledNetworkWorkerSource } from "./src/transport/worker.ts";\n` +
+                `setBundledWorkerSource(${JSON.stringify(readFileSync(workerPath, "utf8"))});\n` +
+                `setBundledNetworkWorkerSource(${JSON.stringify(readFileSync(networkWorkerPath, "utf8"))});\n`,
             resolveDir: packageRoot,
             loader: "ts",
         },

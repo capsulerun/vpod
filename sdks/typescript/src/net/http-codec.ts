@@ -28,6 +28,7 @@ export const FORBIDDEN_REQUEST_HEADERS = new Set([
     "trailer",
     "transfer-encoding",
     "upgrade",
+    "user-agent",
     "via",
 ]);
 
