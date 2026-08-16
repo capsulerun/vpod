@@ -8,6 +8,9 @@ on:
     branches:
       - main
 
+env:
+  VPOD_TEST_CHANNEL: https://registry.vpod.sh/tests/v1
+
 jobs:
   rust-fmt:
     name: Rust Format Check
@@ -109,7 +112,7 @@ jobs:
       - name: Run integration tests
         working-directory: sdks/python
         env:
-          VPOD_REGISTRY: https://registry.vpod.sh/tests/v1/snapshots.json
+          VPOD_REGISTRY: ${{ env.VPOD_TEST_CHANNEL }}/snapshots.json
         run: pytest tests/ -v -m integration
 
   typescript-sdk-tests:
@@ -164,7 +167,7 @@ jobs:
         working-directory: sdks/typescript
         run: |
           ./scripts/fetch-test-snapshot.sh \
-            https://registry.vpod.sh/tests/v1/alpine-3.23.0-256mb.snap \
+            $VPOD_TEST_CHANNEL/alpine-3.23.0-256mb.snap \
             /tmp/alpine-3.23.0-256mb.snap
 
       - name: Assert the integration tests will actually run
@@ -246,7 +249,7 @@ jobs:
         run: |
           mkdir -p /tmp/snapshots
           ./scripts/fetch-test-snapshot.sh \
-            https://registry.vpod.sh/tests/v1/alpine-3.23.0-256mb.snap \
+            $VPOD_TEST_CHANNEL/alpine-3.23.0-256mb.snap \
             /tmp/snapshots/alpine-3.23.0-256mb.snap
 
       - name: Sandbox in a browser, Chrome
@@ -317,7 +320,7 @@ jobs:
         run: |
           mkdir -p /tmp/snapshots
           ./scripts/fetch-test-snapshot.sh \
-            https://registry.vpod.sh/tests/v1/alpine-3.23.0-256mb.snap \
+            $VPOD_TEST_CHANNEL/alpine-3.23.0-256mb.snap \
             /tmp/snapshots/alpine-3.23.0-256mb.snap
 
       - name: Embed packaging, Chrome
@@ -422,13 +425,14 @@ jobs:
         working-directory: sdks/typescript
         run: |
           ./scripts/fetch-test-snapshot.sh \
-            https://registry.vpod.sh/tests/v1/alpine-3.23.0-256mb.snap \
+            $VPOD_TEST_CHANNEL/alpine-3.23.0-256mb.snap \
             /tmp/alpine-3.23.0-256mb.snap
 
       - name: Measure
         working-directory: sdks/typescript
         env:
           VPOD_TEST_SNAPSHOT: /tmp/alpine-3.23.0-256mb.snap
+          VPOD_PERF_BASELINE: ${{ env.VPOD_TEST_CHANNEL }}/perf.json
           VPOD_PERF_OUTPUT: /tmp/typescript-performance.json
           VPOD_PERF_REQUIRE_STRICT: '1'
         run: npm run test:perf
@@ -471,7 +475,7 @@ jobs:
       - name: Measure
         working-directory: sdks/python
         env:
-          VPOD_REGISTRY: https://registry.vpod.sh/tests/v1/snapshots.json
+          VPOD_REGISTRY: ${{ env.VPOD_TEST_CHANNEL }}/snapshots.json
           VPOD_PERF_OUTPUT: /tmp/python-performance.json
           VPOD_PERF_REQUIRE_STRICT: '1'
         run: pytest tests/test_performance.py -m performance -v

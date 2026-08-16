@@ -7,6 +7,7 @@ cd "$(dirname "$0")/.."
 CATALOG="${CATALOG:-registry/catalog.json}"
 OUT="${OUT:-dist/registry-bundle}"
 PREFIX="${PREFIX:-v1}"
+BASELINE="perf.json"
 VERSION="${VERSION:-0.0.0-local}"
 REGISTRY_BASE="${REGISTRY_BASE:-https://registry.vpod.sh}"
 
@@ -107,3 +108,16 @@ PY
 echo
 echo "bundle ready in $OUT (version $VERSION, targeting /$PREFIX/):"
 ls -lh "$OUT"
+
+echo
+echo "New bytes need a new baseline: the perf suites look their timings up by digest,"
+echo "so strict mode fails until this channel publishes one. Upload the snapshots,"
+echo "then record and upload $BASELINE beside them:"
+echo
+echo "  cd sdks/python && VPOD_REGISTRY=$REGISTRY_BASE/$PREFIX/snapshots.json \\"
+echo "      VPOD_PERF_RECORD=1 pytest tests/test_performance.py -m performance"
+echo
+echo "That writes $OUT/$BASELINE, keyed by both the raw and lz4 digest so it serves the"
+echo "Python and TypeScript suites alike. Upload it beside the snapshots. Guest time is"
+echo "deterministic, so the numbers it records are the ones CI will measure, and there"
+echo "is nothing to commit: the baseline ships with the image, not with the repo."
