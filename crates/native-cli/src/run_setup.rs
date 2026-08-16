@@ -72,7 +72,7 @@ fn shell_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
     wait_for_prompt(bus, hart, false);
     drain_all(bus);
 
-    push_line(bus, b"echo VPOD_INIT_OK");
+    push_line(bus, b"command -v __ec >/dev/null && echo VPOD_INIT_OK");
     let output = wait_for_prompt(bus, hart, false);
     let text = String::from_utf8_lossy(&output);
 
@@ -81,6 +81,9 @@ fn shell_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
         false
     } else if text.contains("echo VPOD_INIT_OK") {
         eprintln!("[vpod-setup] stty -echo not active");
+        false
+    } else if text.contains("__ec: not found") {
+        eprintln!("[vpod-setup] the prompt cannot reach __ec: {:?}", text);
         false
     } else {
         eprintln!("[vpod-setup] shell_init verified OK");
