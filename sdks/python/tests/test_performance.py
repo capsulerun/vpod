@@ -19,6 +19,7 @@ WORKLOADS = SHARED["workloads"]
 CEILINGS = SHARED["wallCeilings"]
 
 BASELINE_NAME = "perf.json"
+BASELINE_ERROR: dict = {}
 
 
 def _baseline_url() -> str | None:
@@ -41,10 +42,18 @@ def _load_baseline() -> dict:
         if url.startswith(("http://", "https://")):
             import urllib.request
 
-            with urllib.request.urlopen(url, timeout=30) as response:
+            from vpod.snapshots import _create_ssl_context, _version
+
+            request = urllib.request.Request(
+                url, headers={"User-Agent": f"vpod-py/{_version()}"}
+            )
+            with urllib.request.urlopen(
+                request, timeout=30, context=_create_ssl_context()
+            ) as response:
                 return json.loads(response.read())
         return json.loads(Path(url).read_text())
     except Exception as thrown:
+        BASELINE_ERROR["reason"] = f"{url}: {thrown}"
         print(f"\nno baseline at {url}: {thrown}")
         return {}
 
@@ -167,6 +176,11 @@ def baseline() -> dict | None:
     REPORT["strict"] = entry is not None
 
     if entry is None and os.environ.get("VPOD_PERF_REQUIRE_STRICT") == "1":
+        if "reason" in BASELINE_ERROR:
+            pytest.fail(
+                f"the baseline could not be read, so nothing was compared: "
+                f"{BASELINE_ERROR['reason']}"
+            )
         pytest.fail(
             f"the snapshot is {digest[:16]}, and {_baseline_url()} has no timings for "
             f"those bytes. Either the channel was republished without re-recording, or "
