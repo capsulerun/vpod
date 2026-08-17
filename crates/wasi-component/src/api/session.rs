@@ -123,11 +123,6 @@ fn run_shell_slice(
 fn finish_shell_exec(session: &mut Session, state: repl::ExecState) -> ExecutionResult {
     let stdout = repl::finish_output(&session.bus, None, false, state);
 
-    let stderr_bytes = session.bus.uart_stderr.drain_tx();
-    let stderr = String::from_utf8_lossy(&stderr_bytes)
-        .trim_end()
-        .to_string();
-
     let mut timed_out = false;
     let exit_code = if session.is_shell {
         let ctrl_bytes = repl::drain_ctrl_with_grace(&mut session.bus, &mut session.hart);
@@ -141,6 +136,11 @@ fn finish_shell_exec(session: &mut Session, state: repl::ExecState) -> Execution
     } else {
         0
     };
+
+    let stderr_bytes = session.bus.uart_stderr.drain_tx();
+    let stderr = String::from_utf8_lossy(&stderr_bytes)
+        .trim_end()
+        .to_string();
 
     if session.is_shell && timed_out {
         recover_shell(session);
@@ -442,11 +442,6 @@ impl SessionManager {
                 true,
             );
 
-            let stderr_bytes = session.bus.uart_stderr.drain_tx();
-            let stderr = String::from_utf8_lossy(&stderr_bytes)
-                .trim_end()
-                .to_string();
-
             let ctrl_bytes = repl::drain_ctrl_with_grace(&mut session.bus, &mut session.hart);
             let exit_code = match ctrl_bytes.first() {
                 Some(byte) => *byte as u32,
@@ -455,6 +450,11 @@ impl SessionManager {
                     124
                 }
             };
+
+            let stderr_bytes = session.bus.uart_stderr.drain_tx();
+            let stderr = String::from_utf8_lossy(&stderr_bytes)
+                .trim_end()
+                .to_string();
 
             Ok(ExecutionResult {
                 stdout,

@@ -204,13 +204,8 @@ fn python_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
     }
 }
 
-/// Runs the guest, collecting ttyS3, until pyrunner answers or the budget runs out.
-fn step_data(
-    bus: &mut MachineBus,
-    hart: &mut Hart,
-    budget: u32,
-    data_buf: &mut Vec<u8>,
-) -> bool {
+// Runs the guest, collecting ttyS3, until pyrunner answers or the budget runs out.
+fn step_data(bus: &mut MachineBus, hart: &mut Hart, budget: u32, data_buf: &mut Vec<u8>) -> bool {
     for _ in 0..budget {
         if hart.is_waiting {
             hart.is_waiting = false;
