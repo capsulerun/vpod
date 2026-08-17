@@ -31,10 +31,19 @@ pub fn run(
     let mut final_flags = snap_flags;
     if snap_flags & FLAG_SHELL_READY != 0 {
         eprintln!("[vpod-setup] running shell_init for warm snapshot...");
-        drain_all(bus);
 
-        if !shell_init(bus, hart) {
-            eprintln!("[vpod-setup] shell_init failed, saving cold snapshot");
+        let mut ready = false;
+        for attempt in 1..=3 {
+            drain_all(bus);
+            if shell_init(bus, hart) {
+                ready = true;
+                break;
+            }
+            eprintln!("[vpod-setup] shell_init attempt {attempt} failed");
+        }
+
+        if !ready {
+            eprintln!("[vpod-setup] shell_init failed 3 times, saving cold snapshot");
             final_flags &= !FLAG_SHELL_READY;
         }
     }
@@ -72,7 +81,7 @@ fn shell_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
     wait_for_prompt(bus, hart, false);
     drain_all(bus);
 
-    push_line(bus, b"echo VPOD_INIT_OK");
+    push_line(bus, b"command -v __ec >/dev/null && echo VPOD_INIT_OK");
     let output = wait_for_prompt(bus, hart, false);
     let text = String::from_utf8_lossy(&output);
 
@@ -81,6 +90,9 @@ fn shell_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
         false
     } else if text.contains("echo VPOD_INIT_OK") {
         eprintln!("[vpod-setup] stty -echo not active");
+        false
+    } else if text.contains("__ec: not found") {
+        eprintln!("[vpod-setup] the prompt cannot reach __ec: {:?}", text);
         false
     } else {
         eprintln!("[vpod-setup] shell_init verified OK");
@@ -150,6 +162,9 @@ fn push_line(bus: &mut MachineBus, data: &[u8]) {
 }
 
 fn python_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
+    bus.uart_data.drain_tx();
+    bus.uart_data.drain_rx();
+
     push_line(bus, b"stty -F /dev/ttyS3 -echo");
     wait_for_prompt(bus, hart, false);
     drain_all(bus);
@@ -161,12 +176,37 @@ fn python_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
     wait_for_prompt(bus, hart, false);
     drain_all(bus);
 
-    for &b in b"cGFzcw==\n" {
-        bus.uart_data.push_rx(b);
+    let mut data_buf = Vec::new();
+    let mut answered = step_data(bus, hart, 400_000, &mut data_buf);
+
+    for _ in 0..3 {
+        if answered {
+            break;
+        }
+        bus.uart_data.drain_rx();
+
+        for &b in b"\n\n\n\ncGFzcw==\n" {
+            bus.uart_data.push_rx(b);
+        }
+        answered = step_data(bus, hart, 700_000, &mut data_buf);
     }
 
-    let mut data_buf = Vec::new();
-    for _ in 0..2_000_000u32 {
+    if answered {
+        eprintln!("[vpod-setup] pyrunner verified OK");
+        drain_all(bus);
+        bus.uart_data.drain_tx();
+        bus.uart_data.drain_rx();
+        true
+    } else {
+        let text = String::from_utf8_lossy(&data_buf);
+        eprintln!("[vpod-setup] pyrunner probe failed: {:?}", text.trim());
+        false
+    }
+}
+
+// Runs the guest, collecting ttyS3, until pyrunner answers or the budget runs out.
+fn step_data(bus: &mut MachineBus, hart: &mut Hart, budget: u32, data_buf: &mut Vec<u8>) -> bool {
+    for _ in 0..budget {
         if hart.is_waiting {
             hart.is_waiting = false;
 
@@ -183,28 +223,18 @@ fn python_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
 
         match hart.run_until_wait(bus, 8192) {
             riscv_core::StepResult::Ok => {}
-            _ => break,
+            _ => return false,
         }
 
         let tx = bus.uart_data.drain_tx();
         if !tx.is_empty() {
             data_buf.extend_from_slice(&tx);
-            if String::from_utf8_lossy(&data_buf).contains("---VPOD_DONE---") {
-                break;
+            if String::from_utf8_lossy(data_buf).contains("---VPOD_DONE---") {
+                return true;
             }
         }
     }
-
-    let text = String::from_utf8_lossy(&data_buf);
-
-    if text.contains("---VPOD_DONE---") {
-        eprintln!("[vpod-setup] pyrunner verified OK");
-        drain_all(bus);
-        true
-    } else {
-        eprintln!("[vpod-setup] pyrunner probe failed: {:?}", text.trim());
-        false
-    }
+    false
 }
 
 fn drain_all(bus: &mut MachineBus) {

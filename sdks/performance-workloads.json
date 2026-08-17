@@ -1,31 +1,22 @@
 {
   "_comment": [
-    "used for test"
-  ],
-  "recordedSnapshot": "alpine-3.23.0-256mb.snap",
-  "recordedSnapshotSha256": [
-    "3eb2e111ca974bf9e2290bad1938b456b7773f32b37e3b618de98abe91476ccf",
-    "c905e86a1df3d3816efbfa74575e3be37c8260f1c126fa18ea0ccfd7f61537c0"
+   ""
   ],
   "workloads": {
     "compute": {
       "body": "s=0\nfor i in range(120000): s=(s+i*i)^(i&0xff)",
-      "guestSeconds": 3.664773,
       "tolerance": 0.02
     },
     "strings": {
       "body": "p=[]\nfor i in range(8000): p.append(str(i)*3)\nj='.'.join(p)\nq=j[::2][:1000]",
-      "guestSeconds": 0.298844,
       "tolerance": 0.02
     },
     "dicts": {
       "body": "d={}\nfor i in range(30000): d[i%997]=d.get(i%997,0)+i\ntotal=sum(d.values())",
-      "guestSeconds": 1.059062,
       "tolerance": 0.02
     },
     "regex": {
       "body": "import re\npat=re.compile(r'(\\w+)@(\\w+)\\.com')\nn=0\nfor i in range(4000):\n    n+=1 if pat.match(f'user{i}@host{i}.com') else 0\nassert n==4000, f'the pattern matched {n} of 4000, so this measures the wrong work'",
-      "guestSeconds": 0.38273,
       "tolerance": 0.02
     }
   },
@@ -35,6 +26,5 @@
     "networkRoundTripSeconds": 30,
     "throughputFloor": 0.2,
     "throughputFloorAot": 0.6
-  },
-  "recordedSnapshotNote": "One image, two on-disk encodings: the TypeScript tests load it lz4-wrapped as the registry serves it, the Python SDK decompresses on pull. Either is the recorded image; a name is not enough, because v1 and tests/v1 ship different builds under the same file name."
+  }
 }

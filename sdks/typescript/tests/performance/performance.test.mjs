@@ -6,10 +6,13 @@ import { after, before, describe, it } from "node:test";
 
 import { distPath, loadSdk, locateSnapshot, skipReason } from "../helpers.mjs";
 import {
+    BASELINE_NAME,
     GUEST_WORKLOADS,
-    RECORDED_SNAPSHOT_SHA256,
     WALL_CEILINGS,
+    baselineUrl,
+    entryFor,
     guestProgram,
+    loadBaseline,
     withinTolerance,
 } from "./workloads.mjs";
 
@@ -27,18 +30,18 @@ function builtTier() {
 function snapshotIdentity() {
     const path = locateSnapshot();
     if (path === null) {
-        return { name: null, sha256: null, matches: false };
+        return { name: null, sha256: null };
     }
-    const sha256 = createHash("sha256").update(readFileSync(path)).digest("hex");
     return {
         name: basename(path),
-        sha256,
-        matches: RECORDED_SNAPSHOT_SHA256.includes(sha256),
+        sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
     };
 }
 
 const snapshot = snapshotIdentity();
-const strict = snapshot.matches;
+
+const recorded = entryFor(await loadBaseline(), snapshot.sha256);
+const strict = recorded !== null;
 
 describe("performance", { skip: reason ?? false }, () => {
     let sandbox;
@@ -83,16 +86,13 @@ describe("performance", { skip: reason ?? false }, () => {
     });
 
     it("compares against the snapshot the constants were recorded from", () => {
-        // Without strict mode only the wall-clock ceilings remain, and those are loose
-        // enough to pass on almost anything. Somewhere that expects real coverage should
-        // hear about that rather than quietly get less.
         if (!strict && process.env.VPOD_PERF_REQUIRE_STRICT === "1") {
             assert.fail(
-                `the snapshot is ${snapshot.sha256?.slice(0, 16) ?? "missing"}, recorded ` +
-                    `none of ${RECORDED_SNAPSHOT_SHA256.map((h) => h.slice(0, 16)).join(", ")}. ` +
-                    `The guest-time comparison is ` +
-                    `skipped for a different image, so this run proves much less than it ` +
-                    `looks like it does.`,
+                `the snapshot is ${snapshot.sha256?.slice(0, 16) ?? "missing"}, and ` +
+                    `${baselineUrl() ?? "no baseline URL"} has no timings for those bytes. ` +
+                    `Either the channel was republished without re-recording, or this is a ` +
+                    `different image. Re-record with VPOD_PERF_RECORD=1 and upload ` +
+                    `${BASELINE_NAME} alongside the snapshots.`,
             );
         }
         assert.ok(true);
@@ -119,22 +119,24 @@ describe("performance", { skip: reason ?? false }, () => {
             const guestSeconds = Number(result.text.trim());
             assert.ok(Number.isFinite(guestSeconds), `${name} reported ${result.text}`);
 
+            const expected = recorded?.guestSeconds?.[name];
             report.guest[name] = {
                 guestSeconds,
                 wallSeconds,
                 throughput: guestSeconds / wallSeconds,
-                expected: workload.guestSeconds,
+                expected,
             };
 
-            if (!strict) return;
+            if (expected === undefined) return;
 
             assert.ok(
-                withinTolerance(guestSeconds, workload.guestSeconds, workload.tolerance),
-                `${name} guest time is ${guestSeconds.toFixed(6)}s, recorded ` +
-                    `${workload.guestSeconds}s (tolerance ${workload.tolerance * 100}%). ` +
-                    `Guest time is deterministic, so this is the guest doing a different ` +
-                    `amount of work, not the host running slower. If the change is ` +
-                    `intended, update the constant in tests/performance/workloads.mjs.`,
+                withinTolerance(guestSeconds, expected, workload.tolerance),
+                `${name} guest time is ${guestSeconds.toFixed(6)}s, the channel recorded ` +
+                    `${expected}s for these exact bytes (tolerance ` +
+                    `${workload.tolerance * 100}%). Guest time is deterministic, so this is ` +
+                    `the guest doing a different amount of work, not the host running ` +
+                    `slower. If the change is intended, re-record with VPOD_PERF_RECORD=1 ` +
+                    `and republish ${BASELINE_NAME}.`,
             );
         });
     }
