@@ -717,6 +717,34 @@ def test_two_sandboxes_do_not_share_one_mersenne_twister():
     )
 
 
+def test_two_sandboxes_do_not_share_one_numpy_global():
+    probe = (
+        "try:\n"
+        "    import numpy\n"
+        "except ImportError:\n"
+        "    print('NO_NUMPY')\n"
+        "else:\n"
+        "    print(numpy.random.rand(), numpy.random.randint(0, 10**9))"
+    )
+
+    samples = []
+    for _ in range(2):
+        with Sandbox.create() as sbx:
+            result = sbx.code.run(probe, timeout=180)
+            assert result.success, f"the probe failed: {result.error}"
+            samples.append(result.text.strip())
+
+    first, second = samples
+    if first == "NO_NUMPY":
+        pytest.skip("this snapshot does not carry numpy")
+
+    assert first != second, (
+        f"both sandboxes produced {first!r}. numpy.random's legacy global was seeded "
+        f"when the snapshot warm-imported it, so reseeding the kernel pool and random "
+        f"alone leaves it shared."
+    )
+
+
 def test_two_shells_do_not_share_one_random_variable():
     samples = []
     for _ in range(2):

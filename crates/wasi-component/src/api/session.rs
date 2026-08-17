@@ -664,7 +664,13 @@ impl SessionManager {
     }
 }
 
-const PYRUNNER_RESEED_CODE: &str = "import random\nrandom.seed()\ndel random";
+const PYRUNNER_RESEED_CODE: &str = "\
+import sys, random
+random.seed()
+numpy = sys.modules.get('numpy')
+if numpy is not None:
+    numpy.random.seed()
+del sys, random, numpy";
 
 fn warn_if_pyrunner_unseeded(complaint: &[u8]) {
     static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

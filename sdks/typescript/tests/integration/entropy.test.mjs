@@ -62,6 +62,35 @@ describe("entropy", { skip: skipReason() ?? false }, () => {
         );
     });
 
+    it("does not hand two sandboxes the same numpy global stream", async (t) => {
+        const probe =
+            "try:\n" +
+            "    import numpy\n" +
+            "except ImportError:\n" +
+            "    print('NO_NUMPY')\n" +
+            "else:\n" +
+            "    print(numpy.random.rand(), numpy.random.randint(0, 10**9))";
+
+        const [first, second] = await sampleTwice(async (sandbox) => {
+            const result = await sandbox.code.run(probe, { timeout: 180 });
+            assert.equal(result.success, true, `the probe failed: ${result.error}`);
+            return result.text.trim();
+        });
+
+        if (first === "NO_NUMPY") {
+            t.skip("this snapshot does not carry numpy");
+            return;
+        }
+
+        assert.notEqual(
+            first,
+            second,
+            `both sandboxes produced ${first}. numpy.random's legacy global was seeded ` +
+                `when the snapshot warm-imported it, so reseeding the kernel pool and ` +
+                `random alone leaves it shared.`,
+        );
+    });
+
     it("does not hand two shells the same $RANDOM sequence", async () => {
         const [first, second] = await sampleTwice(async (sandbox) => {
             const result = await sandbox.commands.run("echo $RANDOM $RANDOM $RANDOM");
