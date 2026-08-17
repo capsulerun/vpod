@@ -341,6 +341,7 @@ echo "── Booting guest to pre-install ca-certificates + python3..."
 CA_MARKER="$(sed -n '2p' "$ROOT/crates/machine/assets/tls/vpod-ca-cert.pem")"
 BUILD_LOG="$ROOT/dist/.snapshot-build.log"
 NOW="$(date -u '+%Y-%m-%d %H:%M:%S')"
+SEED_HEX="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
 
 
 SETUP_CMD=""
@@ -356,7 +357,7 @@ SETUP_CMD="${SETUP_CMD}grep -qF '$CA_MARKER' /etc/ssl/certs/ca-certificates.crt 
 SETUP_CMD="${SETUP_CMD}if grep -qF '$CA_MARKER' /etc/ssl/certs/ca-certificates.crt; then echo VPOD_CA_INSTALLED; else echo VPOD_CA_FAILED; fi; "
 SETUP_CMD="${SETUP_CMD}sed -i 's|http://|https://|g' /etc/apk/repositories; "
 SETUP_CMD="${SETUP_CMD}cp /usr/bin/ssl_client /usr/bin/ssl_client.real && cp /usr/lib/vpod/vpod-ssl-client /usr/bin/ssl_client && chmod +x /usr/bin/ssl_client && echo VPOD_SSL_CLIENT_SWAPPED; "
-SETUP_CMD="${SETUP_CMD}/usr/lib/vpod/vpod-seed-entropy 00112233445566778899aabbccddeeff && echo VPOD_SEED_ENTROPY_OK; "
+SETUP_CMD="${SETUP_CMD}/usr/lib/vpod/vpod-seed-entropy $SEED_HEX && echo VPOD_SEED_ENTROPY_OK; "
 SETUP_CMD="${SETUP_CMD}PYBIN=\$(readlink -f /usr/bin/python3) && cp \$PYBIN /usr/bin/python3.real && cp /usr/lib/vpod/vpod-python-shim \$PYBIN && chmod +x \$PYBIN /usr/bin/python3.real && echo VPOD_PY_SHIM_INSTALLED; "
 SETUP_CMD="${SETUP_CMD}/usr/bin/python3.real /usr/lib/vpod/pydaemon.py </dev/null >/dev/null 2>&1 & "
 SETUP_CMD="${SETUP_CMD}n=0; while [ ! -S /run/vpod-pyd.sock ] && [ \$n -lt 300 ]; do sleep 0.1; n=\$((n+1)); done; "

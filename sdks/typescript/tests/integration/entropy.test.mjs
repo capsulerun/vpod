@@ -3,22 +3,28 @@ import { describe, it } from "node:test";
 
 import { skipReason, withSandbox } from "../helpers.mjs";
 
+async function sampleTwice(take) {
+    const samples = [];
+    for (let round = 0; round < 2; round += 1) {
+        await withSandbox(async (sandbox) => {
+            samples.push(await take(sandbox));
+        });
+    }
+    return samples;
+}
+
 describe("entropy", { skip: skipReason() ?? false }, () => {
     it("does not hand two sandboxes the same random stream", async () => {
         const probe =
             "import os, secrets, uuid\n" +
             "print(os.urandom(16).hex(), secrets.token_hex(16), uuid.uuid4())";
 
-        const samples = [];
-        for (let round = 0; round < 2; round += 1) {
-            await withSandbox(async (sandbox) => {
-                const result = await sandbox.code.run(probe);
-                assert.equal(result.success, true, `the probe failed: ${result.error}`);
-                samples.push(result.text.trim());
-            });
-        }
+        const [first, second] = await sampleTwice(async (sandbox) => {
+            const result = await sandbox.code.run(probe);
+            assert.equal(result.success, true, `the probe failed: ${result.error}`);
+            return result.text.trim();
+        });
 
-        const [first, second] = samples;
         assert.ok(first, "the probe printed nothing");
         assert.notEqual(
             first,
@@ -30,19 +36,66 @@ describe("entropy", { skip: skipReason() ?? false }, () => {
     });
 
     it("reseeds the shell as well as the interpreter", async () => {
-        const samples = [];
-        for (let round = 0; round < 2; round += 1) {
-            await withSandbox(async (sandbox) => {
-                const result = await sandbox.commands.run(
-                    "head -c 16 /dev/urandom | od -An -tx1",
-                );
-                assert.equal(result.exitCode, 0, result.stderr);
-                samples.push(result.stdout.trim());
-            });
-        }
+        const [first, second] = await sampleTwice(async (sandbox) => {
+            const result = await sandbox.commands.run("head -c 16 /dev/urandom | od -An -tx1");
+            assert.equal(result.exitCode, 0, result.stderr);
+            return result.stdout.trim();
+        });
 
-        const [first, second] = samples;
         assert.ok(first, "the read returned nothing");
         assert.notEqual(first, second, `both shells read ${first} from /dev/urandom`);
+    });
+
+    it("does not hand two sandboxes the same random.random() sequence", async () => {
+        const [first, second] = await sampleTwice(async (sandbox) => {
+            const result = await sandbox.code.run("import random\nprint(random.random())");
+            assert.equal(result.success, true, `the probe failed: ${result.error}`);
+            return result.text.trim();
+        });
+
+        assert.ok(first, "the probe printed nothing");
+        assert.notEqual(
+            first,
+            second,
+            `both sandboxes produced ${first}. The interpreter was restored with random ` +
+                `already imported, so its Mersenne Twister state came from the snapshot.`,
+        );
+    });
+
+    it("does not hand two shells the same $RANDOM sequence", async () => {
+        const [first, second] = await sampleTwice(async (sandbox) => {
+            const result = await sandbox.commands.run("echo $RANDOM $RANDOM $RANDOM");
+            assert.equal(result.exitCode, 0, result.stderr);
+            return result.stdout.trim();
+        });
+
+        assert.ok(first, "the shell printed nothing");
+        assert.notEqual(
+            first,
+            second,
+            `both shells produced ${first}. RANDOM is the shell's own generator, seeded ` +
+                `before the snapshot was taken, so it survives a kernel pool reseed.`,
+        );
+    });
+
+    it("leaves a seed the caller sets on purpose alone", async () => {
+        await withSandbox(async (sandbox) => {
+            const seeded = await sandbox.code.run("import random\nrandom.seed(42)");
+            assert.equal(seeded.success, true, `seeding failed: ${seeded.error}`);
+
+            const first = await sandbox.code.run("print(random.random())");
+            assert.equal(first.success, true, `the probe failed: ${first.error}`);
+
+            const reference = await sandbox.code.run(
+                "import random\nrandom.seed(42)\nprint(random.random())",
+            );
+
+            assert.equal(
+                first.text.trim(),
+                reference.text.trim(),
+                "a reseed ran between two calls in one sandbox and threw away the " +
+                    "caller's own random.seed(42)",
+            );
+        });
     });
 });

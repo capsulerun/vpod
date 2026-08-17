@@ -15,15 +15,16 @@ const GRACE_STEPS: u32 = 2000;
 const SEED_BINARY: &str = "/usr/lib/vpod/vpod-seed-entropy";
 const SEED_BYTES: u64 = 32;
 
-pub fn reseed_fragment() -> String {
+fn reseed_fragment() -> String {
     let seed = wasi::random::random::get_random_bytes(SEED_BYTES);
 
     let mut hex = String::with_capacity(seed.len() * 2);
     for byte in &seed {
         hex.push_str(&format!("{byte:02x}"));
     }
+    let shell_seed = wasi::random::random::get_random_u64() as u32;
 
-    format!("{SEED_BINARY} {hex}")
+    format!("RANDOM={shell_seed}; {SEED_BINARY} {hex} 2>/dev/ttyS1")
 }
 
 fn warn_if_unseeded(complaint: &[u8]) {
@@ -41,45 +42,48 @@ fn warn_if_unseeded(complaint: &[u8]) {
     );
 }
 
-pub fn reseed(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
-    let cmd = format!("{} 2>/dev/ttyS1\n", reseed_fragment());
-
+fn run_quietly(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8], cmd: &str) -> Vec<u8> {
     bus.uart_stderr.drain_tx();
 
     for byte in cmd.bytes() {
         bus.uart.push_rx(byte);
     }
+    bus.uart.push_rx(b'\n');
 
     wait_for_prompt(bus, hart, prompt);
 
     bus.uart.drain_tx();
-    warn_if_unseeded(&bus.uart_stderr.drain_tx());
+    let complaint = bus.uart_stderr.drain_tx();
     bus.uart_ctrl.drain_tx();
+
+    complaint
+}
+
+pub fn reseed(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
+    let complaint = run_quietly(bus, hart, prompt, &reseed_fragment());
+    warn_if_unseeded(&complaint);
 }
 
 pub fn sync_clock(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     let now = wall_clock::now();
-    let date_cmd = format!(
-        "date -s @{} >/dev/null; {} 2>/dev/ttyS1\n",
-        now.seconds,
-        reseed_fragment()
+    run_quietly(
+        bus,
+        hart,
+        prompt,
+        &format!("date -s @{} >/dev/null", now.seconds),
     );
+}
 
-    bus.uart_stderr.drain_tx();
+pub fn sync_clock_and_reseed(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
+    let now = wall_clock::now();
+    let cmd = format!("date -s @{} >/dev/null; {}", now.seconds, reseed_fragment());
 
-    for byte in date_cmd.bytes() {
-        bus.uart.push_rx(byte);
-    }
-
-    wait_for_prompt(bus, hart, prompt);
-
-    bus.uart.drain_tx();
-    warn_if_unseeded(&bus.uart_stderr.drain_tx());
-    bus.uart_ctrl.drain_tx();
+    let complaint = run_quietly(bus, hart, prompt, &cmd);
+    warn_if_unseeded(&complaint);
 }
 
 pub fn shell_init(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
-    sync_clock(bus, hart, prompt);
+    sync_clock_and_reseed(bus, hart, prompt);
 
     for byte in b"stty -echo\n" {
         bus.uart.push_rx(*byte);
