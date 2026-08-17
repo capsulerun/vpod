@@ -340,11 +340,6 @@ fn ring_backed_client_interops_with_rustcrypto_server() {
 
 #[test]
 fn hello_retry_request_path_completes() {
-    // Modern rustls clients (uv via aws-lc-rs) lead with an X25519MLKEM768
-    // post-quantum keyshare. Our rustcrypto server doesn't support it, so
-    // it must send a HelloRetryRequest and complete on a classic group.
-    // OpenSSL clients lead with X25519 and never take this path — an HRR
-    // bug in the alpha rustcrypto provider only bites rustls clients.
     let (port, up_ca, up) = spawn_test_upstream(UPSTREAM_REPLY);
 
     let ctx = TlsContext::new().unwrap();
@@ -650,13 +645,6 @@ fn server_prefers_chacha20_when_client_offers_it() {
 
 #[test]
 fn mirrors_guest_handshake_x25519_aes256_no_hrr() {
-    // Reproduce the guest's EXACT handshake shape from the captured bytes:
-    // ring client (like uv on riscv), x25519-only keyshare so there's no
-    // HelloRetryRequest (guest sent one ClientHello), AES-256 offered first
-    // so the server honors client order and picks AES_256_GCM_SHA384, plus
-    // a large app-data request. If this decrypts, our server handles the
-    // guest's handshake correctly and the fault is in the guest's TLS
-    // client, not ours.
     let (port, up_ca, up) = spawn_test_upstream(UPSTREAM_REPLY);
 
     let ctx = TlsContext::new().unwrap();

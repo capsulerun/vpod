@@ -41,7 +41,7 @@ async function exchange(driver, id = 1) {
     await new Promise((done) => setTimeout(done, 20));
 }
 
-const PROXY = "https://cors-proxy.example.com";
+const PROXY = "https://browser-proxy.vpod.sh";
 const DIRECT = "https://dl-cdn.alpinelinux.org/alpine/x";
 
 describe("corsProxy", () => {

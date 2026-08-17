@@ -84,6 +84,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           PREFIX: ${{ inputs.prefix }}
           SKIP_BUILD: '1'
+          CONFIRM_PRODUCTION: '1'
         run: ./scripts/build-registry-bundle.sh
 
       - name: Upload artifact
