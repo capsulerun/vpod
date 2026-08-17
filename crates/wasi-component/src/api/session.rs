@@ -326,6 +326,8 @@ impl SessionManager {
 
             repl::shell_init(&mut bus, &mut hart, &prompt_bytes);
         } else {
+            repl::reseed(&mut bus, &mut hart, &prompt_bytes);
+
             let launch = format!("stty -echo; {command}\n");
             for byte in launch.bytes() {
                 bus.uart.push_rx(byte);

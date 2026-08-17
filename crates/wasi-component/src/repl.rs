@@ -12,9 +12,60 @@ const NET_YIELD_NS: u64 = 5_000_000; // 5 ms
 
 const GRACE_STEPS: u32 = 2000;
 
+const SEED_BINARY: &str = "/usr/lib/vpod/vpod-seed-entropy";
+const SEED_BYTES: u64 = 32;
+
+pub fn reseed_fragment() -> String {
+    let seed = wasi::random::random::get_random_bytes(SEED_BYTES);
+
+    let mut hex = String::with_capacity(seed.len() * 2);
+    for byte in &seed {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+
+    format!("{SEED_BINARY} {hex}")
+}
+
+fn warn_if_unseeded(complaint: &[u8]) {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    if complaint.is_empty() || WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+
+    eprintln!(
+        "[vpod] warning: could not reseed the guest random pool, so every sandbox from \
+         this snapshot will produce identical random bytes. Re-pull the snapshot so it \
+         carries {SEED_BINARY}. ({})",
+        String::from_utf8_lossy(complaint).trim()
+    );
+}
+
+pub fn reseed(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
+    let cmd = format!("{} 2>/dev/ttyS1\n", reseed_fragment());
+
+    bus.uart_stderr.drain_tx();
+
+    for byte in cmd.bytes() {
+        bus.uart.push_rx(byte);
+    }
+
+    wait_for_prompt(bus, hart, prompt);
+
+    bus.uart.drain_tx();
+    warn_if_unseeded(&bus.uart_stderr.drain_tx());
+    bus.uart_ctrl.drain_tx();
+}
+
 pub fn sync_clock(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     let now = wall_clock::now();
-    let date_cmd = format!("date -s @{}\n", now.seconds);
+    let date_cmd = format!(
+        "date -s @{} >/dev/null; {} 2>/dev/ttyS1\n",
+        now.seconds,
+        reseed_fragment()
+    );
+
+    bus.uart_stderr.drain_tx();
 
     for byte in date_cmd.bytes() {
         bus.uart.push_rx(byte);
@@ -23,7 +74,7 @@ pub fn sync_clock(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     wait_for_prompt(bus, hart, prompt);
 
     bus.uart.drain_tx();
-    bus.uart_stderr.drain_tx();
+    warn_if_unseeded(&bus.uart_stderr.drain_tx());
     bus.uart_ctrl.drain_tx();
 }
 

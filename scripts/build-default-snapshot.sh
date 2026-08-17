@@ -136,6 +136,12 @@ zig cc -target riscv64-linux-musl -Os -static -s \
     "$ROOT/guest/tls/vpod_ssl_client.c"
 chmod +x "$OVERLAY/usr/lib/vpod/vpod-ssl-client"
 
+echo "── Cross-compiling vpod seed_entropy (riscv64-musl, static)..."
+zig cc -target riscv64-linux-musl -Os -static -s \
+    -o "$OVERLAY/usr/lib/vpod/vpod-seed-entropy" \
+    "$ROOT/guest/entropy/vpod_seed_entropy.c"
+chmod +x "$OVERLAY/usr/lib/vpod/vpod-seed-entropy"
+
 mkdir -p "$OVERLAY/etc/vpod"
 cat > "$OVERLAY/etc/vpod/pydaemon-warm-imports" << 'WARM_EOF'
 # Warm set for the python3 shim/daemon path (commands.run("python3 ...")
@@ -350,6 +356,7 @@ SETUP_CMD="${SETUP_CMD}grep -qF '$CA_MARKER' /etc/ssl/certs/ca-certificates.crt 
 SETUP_CMD="${SETUP_CMD}if grep -qF '$CA_MARKER' /etc/ssl/certs/ca-certificates.crt; then echo VPOD_CA_INSTALLED; else echo VPOD_CA_FAILED; fi; "
 SETUP_CMD="${SETUP_CMD}sed -i 's|http://|https://|g' /etc/apk/repositories; "
 SETUP_CMD="${SETUP_CMD}cp /usr/bin/ssl_client /usr/bin/ssl_client.real && cp /usr/lib/vpod/vpod-ssl-client /usr/bin/ssl_client && chmod +x /usr/bin/ssl_client && echo VPOD_SSL_CLIENT_SWAPPED; "
+SETUP_CMD="${SETUP_CMD}/usr/lib/vpod/vpod-seed-entropy 00112233445566778899aabbccddeeff && echo VPOD_SEED_ENTROPY_OK; "
 SETUP_CMD="${SETUP_CMD}PYBIN=\$(readlink -f /usr/bin/python3) && cp \$PYBIN /usr/bin/python3.real && cp /usr/lib/vpod/vpod-python-shim \$PYBIN && chmod +x \$PYBIN /usr/bin/python3.real && echo VPOD_PY_SHIM_INSTALLED; "
 SETUP_CMD="${SETUP_CMD}/usr/bin/python3.real /usr/lib/vpod/pydaemon.py </dev/null >/dev/null 2>&1 & "
 SETUP_CMD="${SETUP_CMD}n=0; while [ ! -S /run/vpod-pyd.sock ] && [ \$n -lt 300 ]; do sleep 0.1; n=\$((n+1)); done; "
@@ -379,6 +386,14 @@ if ! grep -q VPOD_SSL_CLIENT_SWAPPED "$BUILD_LOG"; then
     echo "" >&2
     echo "error: the vpod ssl_client was not installed over busybox's." >&2
     echo "       wget https would pay the full guest-TLS cost. Aborting the build." >&2
+    echo "       (see $BUILD_LOG for the guest setup output)" >&2
+    exit 1
+fi
+if ! grep -q VPOD_SEED_ENTROPY_OK "$BUILD_LOG"; then
+    echo "" >&2
+    echo "error: the guest could not reseed its random pool." >&2
+    echo "       Every sandbox resumed from this snapshot would share one crng key," >&2
+    echo "       so the same uuids, tokens and keys for every user. Aborting the build." >&2
     echo "       (see $BUILD_LOG for the guest setup output)" >&2
     exit 1
 fi
