@@ -10,8 +10,8 @@
 # pipeline — vpod overlay on top, boot in vpod-native, capture machine
 # state with --snapshot-save.
 #
-#   ./scripts/build-snapshot-from-dockerfile.sh -f Dockerfile -n my-image
-#   ./scripts/build-snapshot-from-dockerfile.sh -f tools/Dockerfile -C tools \
+#   ./scripts/build-custom-snapshot-macos.sh -f Dockerfile -n my-image
+#   ./scripts/build-custom-snapshot-macos.sh -f tools/Dockerfile -C tools \
 #       -n my-tools --ram 512
 #
 # Notes:
@@ -281,17 +281,11 @@ zig cc -target riscv64-linux-musl -Os -static -s \
 chmod +x "$OVERLAY/usr/lib/vpod/vpod-ssl-client"
 
 echo "── Cross-compiling vpod entropy seeder (riscv64-musl, static)..."
-# Deterministic emulation produces no jitter entropy, so the guest crng
-# never initializes and blocking getrandom() — node/V8 startup — hangs
-# forever. Seed + CREDIT the crng during finalize from host randomness;
-# the seed file is deleted before the snapshot is captured.
+# The SDK runs this at resume, once per sandbox, so the image only has to carry it.
 zig cc -target riscv64-linux-musl -Os -static -s \
     -o "$OVERLAY/usr/lib/vpod/vpod-seed-entropy" \
     "$ROOT/guest/entropy/vpod_seed_entropy.c"
 chmod +x "$OVERLAY/usr/lib/vpod/vpod-seed-entropy"
-mkdir -p "$OVERLAY/etc/vpod"
-head -c 512 /dev/urandom > "$OVERLAY/etc/vpod/entropy-seed"
-chmod 600 "$OVERLAY/etc/vpod/entropy-seed"
 
 mkdir -p "$OVERLAY/etc/vpod"
 cat > "$OVERLAY/etc/vpod/pydaemon-warm-imports" << 'WARM_EOF'
@@ -480,10 +474,6 @@ NOW="$(date -u '+%Y-%m-%d %H:%M:%S')"
 SETUP_CMD=""
 SETUP_CMD="${SETUP_CMD}date -s '$NOW'; "
 
-# Initialize the crng first — anything started later in this boot (the
-# warm-python daemon included) may issue a blocking getrandom().
-SETUP_CMD="${SETUP_CMD}/usr/lib/vpod/vpod-seed-entropy && rm -f /etc/vpod/entropy-seed && echo VPOD_ENTROPY_SEEDED; "
-
 # Trust the vpod proxy CA. `update-ca-certificates` when the image ships
 # it (Alpine ca-certificates package); plain bundle append otherwise.
 SETUP_CMD="${SETUP_CMD}command -v update-ca-certificates >/dev/null && update-ca-certificates; "
@@ -526,13 +516,6 @@ if grep -q "Kernel panic" "$BUILD_LOG"; then
     echo "" >&2
     echo "error: the guest kernel panicked during boot — the saved snapshot is unusable." >&2
     echo "       (see $BUILD_LOG for the boot output)" >&2
-    exit 1
-fi
-if ! grep -q "^VPOD_ENTROPY_SEEDED" "$BUILD_LOG"; then
-    echo "" >&2
-    echo "error: the guest crng was not seeded — blocking getrandom() users" >&2
-    echo "       (node, jvm) would hang forever in resumed guests. Aborting." >&2
-    echo "       (see $BUILD_LOG for the guest setup output)" >&2
     exit 1
 fi
 if ! grep -q "^VPOD_CA_INSTALLED" "$BUILD_LOG"; then

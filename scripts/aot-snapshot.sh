@@ -120,11 +120,7 @@ else
 fi
 
 TRACE_LOG="$ROOT/dist/.aot-trace-run.log"
-# Custom workloads may boot heavy runtimes (node, JVM) whose startup
-# alone exceeds the default per-step window under trace instrumentation.
-PATIENCE=1
-[ "$WORKLOAD" = "custom" ] && PATIENCE="${VPOD_SETUP_PATIENCE:-25}"
-VPOD_AOT_TRACE="$AOT_TRACE" VPOD_SETUP_PATIENCE="$PATIENCE" \
+VPOD_AOT_TRACE="$AOT_TRACE" \
     "$VPOD" --snapshot-load "$SNAP" $NET_FLAG "$@" 2>&1 | tee "$TRACE_LOG"
 
 if [ ! -s "$AOT_TRACE" ]; then

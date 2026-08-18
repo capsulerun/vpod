@@ -243,7 +243,7 @@ container builder start
 ```
 
 ```bash
-./scripts/build-snapshot-from-dockerfile.sh -f Dockerfile -n my-image   # dist/my-image-256mb.snap
+./scripts/build-custom-snapshot-macos.sh -f Dockerfile -n my-image   # dist/my-image-256mb.snap
 # optionally: --aot --trace-cmd '<the image's hot command>' to bake AOT blocks
 ```
 
