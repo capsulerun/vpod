@@ -50,6 +50,7 @@ pub struct Session {
     pub is_pyrunner: bool,
     pub has_pyrunner: bool,
     pub pyrunner_dirty: bool,
+    pub pyrunner_reseeded: bool,
     pub shell_lost: bool,
     pub exec: Option<repl::ExecState>,
 }
@@ -316,7 +317,7 @@ impl SessionManager {
                 bus.uart.drain_tx();
                 repl::shell_init(&mut bus, &mut hart, &prompt_bytes);
             } else {
-                repl::sync_clock(&mut bus, &mut hart, &prompt_bytes);
+                repl::sync_clock_and_reseed(&mut bus, &mut hart, &prompt_bytes);
             }
         } else if use_pyrunner {
             if !shell_ready {
@@ -326,6 +327,8 @@ impl SessionManager {
 
             repl::shell_init(&mut bus, &mut hart, &prompt_bytes);
         } else {
+            repl::reseed(&mut bus, &mut hart, &prompt_bytes);
+
             let launch = format!("stty -echo; {command}\n");
             for byte in launch.bytes() {
                 bus.uart.push_rx(byte);
@@ -374,6 +377,7 @@ impl SessionManager {
                 is_pyrunner: use_pyrunner,
                 has_pyrunner: python_ready,
                 pyrunner_dirty: false,
+                pyrunner_reseeded: false,
                 shell_lost: false,
                 exec: None,
             },
@@ -418,6 +422,11 @@ impl SessionManager {
             if session.pyrunner_dirty {
                 restart_pyrunner(session);
                 session.pyrunner_dirty = false;
+            }
+
+            if !session.pyrunner_reseeded {
+                reseed_pyrunner(session);
+                session.pyrunner_reseeded = true;
             }
 
             let b64 = base64::engine::general_purpose::STANDARD.encode(code.as_bytes());
@@ -550,7 +559,7 @@ impl SessionManager {
             .map_err(|e| format!("suspend failed: {e}"))?;
 
         let meta = format!(
-            "{}|{}|{}",
+            "{}|{}|{}|{}",
             if session.is_shell {
                 "shell"
             } else if session.is_pyrunner {
@@ -559,6 +568,7 @@ impl SessionManager {
                 "custom"
             },
             session.has_pyrunner,
+            session.pyrunner_reseeded,
             String::from_utf8_lossy(&session.prompt),
         );
 
@@ -597,9 +607,9 @@ impl SessionManager {
         machine::snapshot::restore_delta(&mut bus, &mut hart, &mut cursor)
             .map_err(|e| format!("resume failed: {e}"))?;
 
-        let parts: Vec<&str> = meta_str.splitn(3, '|').collect();
-        let prompt_bytes: Vec<u8> = if parts.len() == 3 {
-            parts[2].as_bytes().to_vec()
+        let parts: Vec<&str> = meta_str.splitn(4, '|').collect();
+        let prompt_bytes: Vec<u8> = if parts.len() == 4 {
+            parts[3].as_bytes().to_vec()
         } else {
             b"# ".to_vec()
         };
@@ -609,14 +619,22 @@ impl SessionManager {
         bus.uart_ctrl.drain_tx();
         hart.is_waiting = false;
         repl::sync_clock(&mut bus, &mut hart, &prompt_bytes);
-        let (is_shell, is_pyrunner, has_pyrunner, mut prompt) = if parts.len() == 3 {
-            let kind = parts[0];
-            let has_py = parts[1] == "true";
-            let prompt = parts[2].as_bytes().to_vec();
-            (kind == "shell", kind == "pyrunner", has_py, prompt)
-        } else {
-            (true, false, false, b"# ".to_vec())
-        };
+        let (is_shell, is_pyrunner, has_pyrunner, pyrunner_reseeded, mut prompt) =
+            if parts.len() == 4 {
+                let kind = parts[0];
+                let has_py = parts[1] == "true";
+                let reseeded = parts[2] == "true";
+                let prompt = parts[3].as_bytes().to_vec();
+                (
+                    kind == "shell",
+                    kind == "pyrunner",
+                    has_py,
+                    reseeded,
+                    prompt,
+                )
+            } else {
+                (true, false, false, false, b"# ".to_vec())
+            };
 
         if is_shell {
             install_prompt_sentinel(&mut bus, &mut hart, &mut prompt);
@@ -636,6 +654,7 @@ impl SessionManager {
                 is_pyrunner,
                 has_pyrunner,
                 pyrunner_dirty: false,
+                pyrunner_reseeded,
                 shell_lost: false,
                 exec: None,
             },
@@ -643,6 +662,53 @@ impl SessionManager {
 
         Ok(id)
     }
+}
+
+const PYRUNNER_RESEED_CODE: &str = "\
+import sys, random
+random.seed()
+numpy = sys.modules.get('numpy')
+if numpy is not None:
+    numpy.random.seed()
+del sys, random, numpy";
+
+fn warn_if_pyrunner_unseeded(complaint: &[u8]) {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    if complaint.is_empty() || WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+
+    eprintln!(
+        "[vpod] warning: could not reseed the interpreter's random module, so every \
+         sandbox from this snapshot will get the same random.random() sequence. \
+         os.urandom, secrets and uuid4 are unaffected. ({})",
+        String::from_utf8_lossy(complaint).trim()
+    );
+}
+
+fn reseed_pyrunner(session: &mut Session) {
+    let line = base64::engine::general_purpose::STANDARD.encode(PYRUNNER_RESEED_CODE.as_bytes());
+
+    for byte in line.bytes() {
+        session.bus.uart_data.push_rx(byte);
+    }
+    session.bus.uart_data.push_rx(b'\n');
+
+    let _ = repl::capture_output(
+        &mut session.bus,
+        &mut session.hart,
+        b"",
+        30,
+        false,
+        Some(PYRUNNER_SENTINEL),
+        true,
+    );
+
+    repl::drain_ctrl_with_grace(&mut session.bus, &mut session.hart);
+    warn_if_pyrunner_unseeded(&session.bus.uart_stderr.drain_tx());
+
+    session.bus.uart_data.drain_tx();
 }
 
 fn restart_pyrunner(session: &mut Session) {
@@ -680,4 +746,6 @@ fn restart_pyrunner(session: &mut Session) {
     session.bus.uart_data.drain_tx();
     session.bus.uart_stderr.drain_tx();
     session.bus.uart_ctrl.drain_tx();
+
+    session.pyrunner_reseeded = true;
 }

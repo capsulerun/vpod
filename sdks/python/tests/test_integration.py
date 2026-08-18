@@ -667,6 +667,118 @@ def test_a_command_that_cannot_finish_can_be_interrupted():
         assert sbx.commands.run("echo alive").stdout.strip() == "alive"
 
 
+def test_two_sandboxes_do_not_share_one_random_stream():
+    probe = (
+        "import os, secrets, uuid\n"
+        "print(os.urandom(16).hex(), secrets.token_hex(16), uuid.uuid4())"
+    )
+
+    samples = []
+    for _ in range(2):
+        with Sandbox.create() as sbx:
+            result = sbx.code.run(probe, timeout=120)
+            assert result.success, f"the probe failed: {result.error}"
+            samples.append(result.text.strip())
+
+    first, second = samples
+    assert first and second, "the probe printed nothing"
+    assert first != second, (
+        f"both sandboxes produced {first!r}. The guest crng was restored from the "
+        f"snapshot and never re-keyed, so every sandbox from this image shares one "
+        f"stream of uuids, tokens and keys."
+    )
+
+
+def test_the_shell_gets_the_same_reseed_as_the_interpreter():
+    samples = []
+    for _ in range(2):
+        with Sandbox.create() as sbx:
+            result = sbx.commands.run("head -c 16 /dev/urandom | od -An -tx1", timeout=60)
+            assert result.exit_code == 0, result.stderr
+            samples.append(result.stdout.strip())
+
+    first, second = samples
+    assert first and second, "the read returned nothing"
+    assert first != second, f"both shells read {first!r} from /dev/urandom"
+
+def test_two_sandboxes_do_not_share_one_mersenne_twister():
+    samples = []
+    for _ in range(2):
+        with Sandbox.create() as sbx:
+            result = sbx.code.run("import random\nprint(random.random())", timeout=120)
+            assert result.success, f"the probe failed: {result.error}"
+            samples.append(result.text.strip())
+
+    first, second = samples
+    assert first and second, "the probe printed nothing"
+    assert first != second, (
+        f"both sandboxes produced {first!r}. The interpreter was restored with random "
+        f"already imported, so its Mersenne Twister state came from the snapshot."
+    )
+
+
+def test_two_sandboxes_do_not_share_one_numpy_global():
+    probe = (
+        "try:\n"
+        "    import numpy\n"
+        "except ImportError:\n"
+        "    print('NO_NUMPY')\n"
+        "else:\n"
+        "    print(numpy.random.rand(), numpy.random.randint(0, 10**9))"
+    )
+
+    samples = []
+    for _ in range(2):
+        with Sandbox.create() as sbx:
+            result = sbx.code.run(probe, timeout=180)
+            assert result.success, f"the probe failed: {result.error}"
+            samples.append(result.text.strip())
+
+    first, second = samples
+    if first == "NO_NUMPY":
+        pytest.skip("this snapshot does not carry numpy")
+
+    assert first != second, (
+        f"both sandboxes produced {first!r}. numpy.random's legacy global was seeded "
+        f"when the snapshot warm-imported it, so reseeding the kernel pool and random "
+        f"alone leaves it shared."
+    )
+
+
+def test_two_shells_do_not_share_one_random_variable():
+    samples = []
+    for _ in range(2):
+        with Sandbox.create() as sbx:
+            result = sbx.commands.run("echo $RANDOM $RANDOM $RANDOM", timeout=60)
+            assert result.exit_code == 0, result.stderr
+            samples.append(result.stdout.strip())
+
+    first, second = samples
+    assert first and second, "the shell printed nothing"
+    assert first != second, (
+        f"both shells produced {first!r}. RANDOM is the shell's own generator, seeded "
+        f"before the snapshot was taken, so it survives a kernel pool reseed."
+    )
+
+
+def test_a_seed_the_caller_sets_on_purpose_survives():
+    with Sandbox.create() as sbx:
+        seeded = sbx.code.run("import random\nrandom.seed(42)", timeout=120)
+        assert seeded.success, f"seeding failed: {seeded.error}"
+
+        first = sbx.code.run("print(random.random())", timeout=120)
+        assert first.success, f"the probe failed: {first.error}"
+
+        reference = sbx.code.run(
+            "import random\nrandom.seed(42)\nprint(random.random())", timeout=120
+        )
+
+        assert first.text.strip() == reference.text.strip(), (
+            "a reseed ran between two calls in one sandbox and threw away the caller's "
+            "own random.seed(42)"
+        )
+
+
 def test_an_unfinishable_command_waits_for_its_timeout_rather_than_guessing():
     with Sandbox.create() as sbx:
         started = time.time()
