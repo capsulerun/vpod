@@ -793,3 +793,72 @@ def test_an_unfinishable_command_waits_for_its_timeout_rather_than_guessing():
         assert elapsed < 15, f"took {elapsed:.2f}s, far past the timeout asked for"
 
         assert sbx.commands.run("echo alive").stdout.strip() == "alive"
+
+
+# --- streaming ---
+
+@pytest.mark.integration
+def test_output_arrives_in_more_than_one_chunk():
+    with Sandbox.create() as sbx:
+        chunks = []
+        result = sbx.commands.run(
+            "for i in 1 2 3 4; do echo line$i; sleep 1; done",
+            timeout=60,
+            on_stdout=chunks.append,
+        )
+
+        assert result.exit_code == 0
+        assert result.stdout.strip() == "line1\nline2\nline3\nline4"
+
+        assert len(chunks) > 1, f"got one chunk: {chunks!r}"
+
+
+@pytest.mark.integration
+def test_the_chunks_concatenate_to_what_the_callback_free_call_returns():
+    command = "for i in 1 2 3; do echo $i; sleep 1; done"
+
+    with Sandbox.create() as sbx:
+        chunks = []
+        streamed = sbx.commands.run(command, timeout=60, on_stdout=chunks.append)
+        plain = sbx.commands.run(command, timeout=60)
+
+        assert "".join(chunks).rstrip() == streamed.stdout
+        assert streamed.stdout == plain.stdout
+
+
+@pytest.mark.integration
+def test_stderr_streams_on_its_own_callback():
+    with Sandbox.create() as sbx:
+        out, err = [], []
+        result = sbx.commands.run(
+            "echo to-stdout; echo to-stderr >&2",
+            timeout=30,
+            on_stdout=out.append,
+            on_stderr=err.append,
+        )
+
+        assert result.exit_code == 0
+        assert "to-stdout" in "".join(out)
+        assert "to-stderr" in "".join(err)
+        assert "to-stderr" not in "".join(out)
+
+
+@pytest.mark.integration
+def test_an_interrupt_keeps_the_chunks_that_already_arrived():
+    with Sandbox.create() as sbx:
+        chunks = []
+
+        def stop_after_two(chunk):
+            chunks.append(chunk)
+            if len(chunks) == 2:
+                sbx.commands.interrupt()
+
+        result = sbx.commands.run(
+            "for i in $(seq 1 60); do echo tick$i; sleep 1; done",
+            timeout=120,
+            on_stdout=stop_after_two,
+        )
+
+        assert result.exit_code == 130, f"exited {result.exit_code}"
+        assert "tick1" in result.stdout
+        assert len(chunks) >= 2

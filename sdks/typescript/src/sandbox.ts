@@ -37,6 +37,8 @@ const yieldToEventLoop = () => new Promise<void>((resolve) => setTimeout(resolve
 export interface RunOptions {
     timeout?: number;
     signal?: AbortSignal;
+    onStdout?: (chunk: string) => void;
+    onStderr?: (chunk: string) => void;
 }
 
 export class Commands {
@@ -47,11 +49,10 @@ export class Commands {
     }
 
     async run(command: string, options: RunOptions = {}): Promise<CommandResult> {
-        const result = await this.#sandbox._execSliced(
-            command,
-            options.timeout,
-            options.signal,
-        );
+        const result = await this.#sandbox._execSliced(command, options.timeout, options.signal, {
+            onStdout: options.onStdout,
+            onStderr: options.onStderr,
+        });
         return new CommandResult(
             normalizeLineEndings(result.stdout),
             normalizeLineEndings(result.stderr ?? ""),
@@ -198,6 +199,10 @@ export class Sandbox {
         payload: string,
         timeoutSeconds = DEFAULT_TIMEOUT_SECONDS,
         signal?: AbortSignal,
+        listeners: {
+            onStdout?: (chunk: string) => void;
+            onStderr?: (chunk: string) => void;
+        } = {},
     ) {
         signal?.throwIfAborted();
         const handle = await this.#ensureSession();
@@ -216,8 +221,17 @@ export class Sandbox {
             );
             code = null;
 
-            stdout += slice.stdout;
-            stderr += slice.stderr;
+            const stdoutChunk = normalizeLineEndings(slice.stdout);
+            const stderrChunk = normalizeLineEndings(slice.stderr);
+
+            if (stdoutChunk) {
+                stdout += stdoutChunk;
+                listeners.onStdout?.(stdoutChunk);
+            }
+            if (stderrChunk) {
+                stderr += stderrChunk;
+                listeners.onStderr?.(stderrChunk);
+            }
 
             if (slice.exitCode != null) {
                 if (stopped) {
