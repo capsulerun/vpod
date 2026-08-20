@@ -326,6 +326,13 @@ pub fn run_slice(
     }
 }
 
+fn safe_boundary(buf: &[u8]) -> usize {
+    match buf.iter().rposition(|&byte| byte == b'\n') {
+        Some(position) => position + 1,
+        None => 0,
+    }
+}
+
 pub fn finish_output(
     bus: &MachineBus,
     sentinel: Option<&str>,
@@ -335,11 +342,7 @@ pub fn finish_output(
     let mut output = state.output;
 
     if !data_channel && !state.ended_at_prompt && !output.is_empty() && !output.ends_with(b"\n") {
-        if let Some(pos) = output.iter().rposition(|&b| b == b'\n') {
-            output.truncate(pos + 1);
-        } else {
-            output.clear();
-        }
+        output.truncate(safe_boundary(&output));
     }
 
     let raw = String::from_utf8_lossy(&output);
@@ -433,4 +436,74 @@ fn strip_ansi(s: &str) -> String {
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn never_splits_a_multibyte_character() {
+        let buf = "héllo\nwörld".as_bytes();
+        let boundary = safe_boundary(buf);
+
+        assert_eq!(&buf[..boundary], "héllo\n".as_bytes());
+        assert!(std::str::from_utf8(&buf[..boundary]).is_ok());
+        assert!(std::str::from_utf8(&buf[boundary..]).is_ok());
+    }
+
+    #[test]
+    fn never_splits_an_ansi_escape() {
+        let buf = b"done\n\x1b[0";
+        assert_eq!(safe_boundary(buf), 5);
+        assert_eq!(&buf[..5], b"done\n");
+    }
+
+    #[test]
+    fn never_splits_a_crlf_pair() {
+        let buf = b"a\r\nb\r";
+        assert_eq!(safe_boundary(buf), 3);
+        assert_eq!(&buf[..3], b"a\r\n");
+    }
+
+    #[test]
+    fn never_splits_the_prompt_sentinel() {
+        let buf = b"out\n\x1fvpo";
+        assert_eq!(safe_boundary(buf), 4);
+        assert_eq!(&buf[..4], b"out\n");
+    }
+
+    #[test]
+    fn releases_nothing_without_a_newline() {
+        assert_eq!(safe_boundary(b""), 0);
+        assert_eq!(safe_boundary(b"no newline here"), 0);
+    }
+
+    #[test]
+    fn releases_everything_when_it_ends_on_a_newline() {
+        assert_eq!(safe_boundary(b"a\n"), 2);
+        assert_eq!(safe_boundary(b"a\nb\n"), 4);
+    }
+
+    #[test]
+    fn matches_the_trim_finish_output_used_to_do_inline() {
+        for case in [
+            &b"line1\nline2\npartial"[..],
+            &b"partial"[..],
+            &b"line1\n"[..],
+            &b""[..],
+        ] {
+            let mut expected = case.to_vec();
+            if let Some(position) = expected.iter().rposition(|&byte| byte == b'\n') {
+                expected.truncate(position + 1);
+            } else {
+                expected.clear();
+            }
+
+            let mut actual = case.to_vec();
+            actual.truncate(safe_boundary(&actual));
+
+            assert_eq!(actual, expected, "diverged on {case:?}");
+        }
+    }
 }
