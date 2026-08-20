@@ -2,16 +2,15 @@
 
 # Build a vpod snapshot from a Dockerfile.
 #
-# The Dockerfile is built for linux/riscv64 with Apple's `container` CLI
-# (https://github.com/apple/container), whose BuildKit builder executes
-# RUN steps under riscv64 emulation and can export the flattened root
-# filesystem as a tarball. That rootfs replaces the Alpine minirootfs of
-# build-default-snapshot.sh; everything after that follows the same
-# pipeline — vpod overlay on top, boot in vpod-native, capture machine
-# state with --snapshot-save.
+# The Dockerfile is built for linux/riscv64 with Docker Buildx on Linux or
+# Apple's `container` CLI on macOS. Both builders execute RUN steps under
+# riscv64 emulation and export the flattened root filesystem as a tarball.
+# That rootfs replaces the Alpine minirootfs of build-default-snapshot.sh;
+# everything after that follows the same pipeline — vpod overlay on top,
+# boot in vpod-native, capture machine state with --snapshot-save.
 #
-#   ./scripts/build-custom-snapshot-macos.sh -f Dockerfile -n my-image
-#   ./scripts/build-custom-snapshot-macos.sh -f tools/Dockerfile -C tools \
+#   ./scripts/build-custom-snapshot.sh -f Dockerfile -n my-image
+#   ./scripts/build-custom-snapshot.sh -f tools/Dockerfile -C tools \
 #       -n my-tools --ram 512
 #
 # Notes:
@@ -100,6 +99,15 @@ fi
 [ -n "$CONTEXT" ] || CONTEXT="$(dirname "$DOCKERFILE")"
 [ -n "$OUT" ] || OUT="$ROOT/dist/${NAME}-${RAM_MB}mb.snap"
 
+case "$(uname -s)" in
+    Darwin) IMAGE_BUILDER="container" ;;
+    Linux)  IMAGE_BUILDER="docker" ;;
+    *)
+        echo "ERROR: Dockerfile snapshot builds are supported on macOS and Linux"
+        exit 1
+        ;;
+esac
+
 ALPINE_MINOR="${ALPINE_VERSION%.*}"
 ALPINE_DIR="$ROOT/dist/alpine-standard-${ALPINE_VERSION}-riscv64"
 ISO_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_MINOR}/releases/riscv64/alpine-standard-${ALPINE_VERSION}-riscv64.iso"
@@ -117,6 +125,7 @@ echo "=== Capsulev snapshot builder (Dockerfile) ==="
 echo "Dockerfile : ${DOCKERFILE}"
 echo "Context    : ${CONTEXT}"
 echo "Platform   : ${PLATFORM}"
+echo "Builder    : ${IMAGE_BUILDER}"
 echo "Name       : ${NAME}"
 echo "RAM        : ${RAM_MB} MB"
 echo "Out        : ${OUT}"
@@ -124,13 +133,17 @@ echo ""
 
 echo "── Checking host tools..."
 MISSING=""
-for cmd in curl bsdtar cpio gzip cargo zig container; do
+for cmd in curl bsdtar cpio gzip cargo zig "$IMAGE_BUILDER"; do
     command -v "$cmd" >/dev/null || MISSING="$MISSING $cmd"
 done
 if [ -n "$MISSING" ]; then
     echo "ERROR: missing tools:$MISSING"
     echo "  macOS  : brew install libarchive zig; container from https://github.com/apple/container/releases"
-    echo "  (this script drives Apple's container CLI and is macOS-only for now)"
+    echo "  Linux  : install Docker with the Buildx plugin, libarchive, cpio, and zig"
+    exit 1
+fi
+if [ "$IMAGE_BUILDER" = "docker" ] && ! docker buildx version >/dev/null 2>&1; then
+    echo "ERROR: Docker Buildx is required (install the docker-buildx-plugin package)"
     exit 1
 fi
 echo "   OK"
@@ -182,14 +195,22 @@ else
 fi
 
 
-echo "── Building ${PLATFORM} image with Apple container..."
-container system start >/dev/null 2>&1 || true
-container build \
-    --platform "$PLATFORM" \
-    --output "type=tar,dest=$ROOTFS_TAR" \
-    -t "vpod-snapshot-build-$NAME" \
-    -f "$DOCKERFILE" \
-    "$CONTEXT"
+echo "── Building ${PLATFORM} image with ${IMAGE_BUILDER}..."
+if [ "$IMAGE_BUILDER" = "container" ]; then
+    container system start >/dev/null 2>&1 || true
+    container build \
+        --platform "$PLATFORM" \
+        --output "type=tar,dest=$ROOTFS_TAR" \
+        -t "vpod-snapshot-build-$NAME" \
+        -f "$DOCKERFILE" \
+        "$CONTEXT"
+else
+    docker buildx build \
+        --platform "$PLATFORM" \
+        --output "type=tar,dest=$ROOTFS_TAR" \
+        -f "$DOCKERFILE" \
+        "$CONTEXT"
+fi
 echo "   rootfs tar : $(du -sh "$ROOTFS_TAR" | cut -f1)"
 
 echo "── Extracting rootfs..."

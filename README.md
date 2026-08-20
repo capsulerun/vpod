@@ -230,20 +230,27 @@ The project uses pre-built Alpine snapshots from `registry.vpod.sh`, so you norm
 
 Snapshot builds can also run the AOT pass (`scripts/aot-snapshot.sh <snapshot>`), which traces a representative workload, translates the hot blocks, and rebuilds the emulator with them baked in. It takes a while; the stub from `aot-stub.sh` is fine for everyday development, everything works the same, just slower.
 
-#### From a Dockerfile (macOS)
+#### From a Dockerfile (macOS and Linux)
 
-Custom snapshots can also be built from a **Dockerfile**, using
-[Apple's `container` CLI](https://github.com/apple/container) as the riscv64
-image builder. A fresh install needs its runtime configured once, otherwise the
-build waits on a builder that never starts:
+Custom snapshots can also be built from a **Dockerfile**. The builder uses
+[Apple's `container` CLI](https://github.com/apple/container) on macOS and
+Docker Buildx on Linux. A fresh macOS install needs its runtime configured once,
+otherwise the build waits on a builder that never starts:
 
 ```bash
 container system kernel set --recommended
 container builder start
 ```
 
+On Linux, install Docker with the Buildx plugin and register riscv64 emulation
+once if the host is not already configured for cross-platform builds:
+
 ```bash
-./scripts/build-custom-snapshot-macos.sh -f Dockerfile -n my-image   # dist/my-image-256mb.snap
+docker run --privileged --rm tonistiigi/binfmt --install riscv64
+```
+
+```bash
+./scripts/build-custom-snapshot.sh -f Dockerfile -n my-image   # dist/my-image-256mb.snap
 # optionally: --aot --trace-cmd '<the image's hot command>' to bake AOT blocks
 ```
 
