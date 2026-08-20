@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::exports::vpod::sandbox::executor::ExecutionResult;
+use crate::exports::vpod::sandbox::executor::{ExecutionResult, SliceOutput};
 use crate::repl;
 use crate::vm;
 
@@ -122,6 +122,7 @@ fn run_shell_slice(
 }
 
 fn finish_shell_exec(session: &mut Session, state: repl::ExecState) -> ExecutionResult {
+    let stderr_tail = repl::finish_stderr(&state);
     let stdout = repl::finish_output(&session.bus, None, false, state);
 
     let mut timed_out = false;
@@ -138,10 +139,11 @@ fn finish_shell_exec(session: &mut Session, state: repl::ExecState) -> Execution
         0
     };
 
-    let stderr_bytes = session.bus.uart_stderr.drain_tx();
-    let stderr = String::from_utf8_lossy(&stderr_bytes)
-        .trim_end()
-        .to_string();
+    let mut stderr = stderr_tail;
+    stderr.push_str(&String::from_utf8_lossy(
+        &session.bus.uart_stderr.drain_tx(),
+    ));
+    let stderr = stderr.trim_end().to_string();
 
     if session.is_shell && timed_out {
         recover_shell(session);
@@ -489,7 +491,7 @@ impl SessionManager {
         code: Option<String>,
         timeout: Option<u64>,
         slice_nanos: u64,
-    ) -> Result<Option<ExecutionResult>, String> {
+    ) -> Result<SliceOutput, String> {
         let mut sessions = self.sessions.borrow_mut();
         let session = sessions
             .get_mut(&handle)
@@ -517,12 +519,28 @@ impl SessionManager {
             None => return Err("no command is running in this session".to_string()),
         };
 
-        if run_shell_slice(session, &mut state, slice_nanos) == repl::SliceOutcome::Yielded {
+        let outcome = run_shell_slice(session, &mut state, slice_nanos);
+        state.absorb_stderr(&session.bus.uart_stderr.drain_tx());
+
+        if outcome == repl::SliceOutcome::Yielded {
+            let stdout = repl::drain_output(&mut state);
+            let stderr = repl::drain_stderr(&mut state);
             session.exec = Some(state);
-            return Ok(None);
+
+            return Ok(SliceOutput {
+                stdout,
+                stderr,
+                exit_code: None,
+            });
         }
 
-        Ok(Some(finish_shell_exec(session, state)))
+        let finished = finish_shell_exec(session, state);
+
+        Ok(SliceOutput {
+            stdout: finished.stdout,
+            stderr: finished.stderr,
+            exit_code: Some(finished.exit_code),
+        })
     }
 
     pub fn interrupt_session(&self, handle: u64) -> Result<(), String> {

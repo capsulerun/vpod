@@ -209,6 +209,7 @@ pub enum SliceOutcome {
 
 pub struct ExecState {
     output: Vec<u8>,
+    stderr: Vec<u8>,
     ended_at_prompt: bool,
     deadline: u64,
 }
@@ -217,9 +218,14 @@ impl ExecState {
     pub fn new(timeout_secs: u64) -> Self {
         Self {
             output: Vec::new(),
+            stderr: Vec::new(),
             ended_at_prompt: false,
             deadline: monotonic_clock::now() + timeout_secs * 1_000_000_000,
         }
+    }
+
+    pub fn absorb_stderr(&mut self, bytes: &[u8]) {
+        self.stderr.extend_from_slice(bytes);
     }
 }
 
@@ -326,6 +332,30 @@ pub fn run_slice(
     }
 }
 
+pub fn drain_output(state: &mut ExecState) -> String {
+    let boundary = safe_boundary(&state.output);
+    if boundary == 0 {
+        return String::new();
+    }
+
+    let chunk: Vec<u8> = state.output.drain(..boundary).collect();
+    strip_kernel_log(&strip_ansi(&String::from_utf8_lossy(&chunk)))
+}
+
+pub fn drain_stderr(state: &mut ExecState) -> String {
+    let boundary = safe_boundary(&state.stderr);
+    if boundary == 0 {
+        return String::new();
+    }
+
+    let chunk: Vec<u8> = state.stderr.drain(..boundary).collect();
+    String::from_utf8_lossy(&chunk).into_owned()
+}
+
+pub fn finish_stderr(state: &ExecState) -> String {
+    String::from_utf8_lossy(&state.stderr).into_owned()
+}
+
 fn safe_boundary(buf: &[u8]) -> usize {
     match buf.iter().rposition(|&byte| byte == b'\n') {
         Some(position) => position + 1,
@@ -393,7 +423,8 @@ pub fn capture_output(
 
 // TODO: evaluate if it's possible to refactor to a solution that filter directly the kernel log on the uart
 fn strip_kernel_log(s: &str) -> String {
-    s.lines()
+    let mut stripped = s
+        .lines()
         .filter(|line| {
             let t = line.trim_start();
 
@@ -412,7 +443,13 @@ fn strip_kernel_log(s: &str) -> String {
                 })
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+
+    if s.ends_with('\n') && !stripped.is_empty() {
+        stripped.push('\n');
+    }
+
+    stripped
 }
 
 fn strip_ansi(s: &str) -> String {
@@ -505,5 +542,18 @@ mod tests {
 
             assert_eq!(actual, expected, "diverged on {case:?}");
         }
+    }
+
+    #[test]
+    fn a_chunk_keeps_the_newline_that_separates_it_from_the_next() {
+        assert_eq!(strip_kernel_log("a\n"), "a\n");
+        assert_eq!(strip_kernel_log("a\nb\n"), "a\nb\n");
+        assert_eq!(strip_kernel_log("a"), "a");
+        assert_eq!(strip_kernel_log("a\n\n"), "a\n\n");
+    }
+
+    #[test]
+    fn a_chunk_of_nothing_but_kernel_log_stays_empty() {
+        assert_eq!(strip_kernel_log("[    0.123456] booting\n"), "");
     }
 }
