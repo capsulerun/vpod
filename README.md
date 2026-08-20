@@ -225,10 +225,37 @@ The project uses pre-built Alpine snapshots from `registry.vpod.sh`, so you norm
 ./scripts/build-data-snapshot.sh      # 512 MB variant with numpy/pandas/scipy
 ```
 
-> [!IMPORTANT]
-> To use a locally built snapshot, uncomment the lines in `resolve_snapshot()` in `crates/vpod/src/main.rs`.
+> [!TIP]
+> To use a locally built snapshot in the CLI, uncomment the lines in `resolve_snapshot()` in `crates/vpod/src/main.rs`.
 
 Snapshot builds can also run the AOT pass (`scripts/aot-snapshot.sh <snapshot>`), which traces a representative workload, translates the hot blocks, and rebuilds the emulator with them baked in. It takes a while; the stub from `aot-stub.sh` is fine for everyday development, everything works the same, just slower.
+
+#### From a Dockerfile (macOS)
+
+Custom snapshots can also be built from a **Dockerfile**, using
+[Apple's `container` CLI](https://github.com/apple/container) as the riscv64
+image builder. A fresh install needs its runtime configured once, otherwise the
+build waits on a builder that never starts:
+
+```bash
+container system kernel set --recommended
+container builder start
+```
+
+```bash
+./scripts/build-custom-snapshot-macos.sh -f Dockerfile -n my-image   # dist/my-image-256mb.snap
+# optionally: --aot --trace-cmd '<the image's hot command>' to bake AOT blocks
+```
+
+The Dockerfile is built for `linux/riscv64` (BuildKit executes RUN steps
+under emulation), its flattened rootfs replaces the Alpine minirootfs,
+and the rest of the pipeline is identical: vpod overlay, boot,
+`--snapshot-save`.
+
+Only the filesystem survives the export. `ENV`, `CMD` and `ENTRYPOINT` from the
+image config are discarded, so persist environment through `/etc/profile.d/` in
+a `RUN` step. Python warm-start is applied automatically for musl-based images
+that ship `python3` in `/usr/bin` or `/bin`.
 
 ### Pull requests
 
