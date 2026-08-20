@@ -611,7 +611,9 @@ def test_an_abandoned_sliced_command_does_not_brick_the_session():
         started = unwrap_result(
             sbx._exports["session-exec-slice"](session_id, "sleep 30", 30, SLICE_NANOS)
         )
-        assert started is None, "sleep 30 cannot have finished in one slice"
+        assert (
+            getattr(started, "exit-code") is None
+        ), "sleep 30 cannot have finished in one slice"
 
         recovered = sbx.commands.run("echo recovered", timeout=10)
         assert recovered.exit_code == 0

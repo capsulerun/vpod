@@ -204,9 +204,11 @@ export class Sandbox {
 
         let code: string | null = payload;
         let stopped = false;
+        let stdout = "";
+        let stderr = "";
 
         for (;;) {
-            const result = await this.#runtime.sessionExecSlice(
+            const slice = await this.#runtime.sessionExecSlice(
                 handle,
                 code,
                 BigInt(timeoutSeconds),
@@ -214,11 +216,18 @@ export class Sandbox {
             );
             code = null;
 
-            if (result != null) {
+            stdout += slice.stdout;
+            stderr += slice.stderr;
+
+            if (slice.exitCode != null) {
                 if (stopped) {
                     signal?.throwIfAborted();
                 }
-                return result;
+                return {
+                    stdout: stdout.trimEnd(),
+                    stderr: stderr.trimEnd(),
+                    exitCode: slice.exitCode,
+                };
             }
 
             await yieldToEventLoop();

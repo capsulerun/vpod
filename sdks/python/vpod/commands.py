@@ -22,10 +22,12 @@ class Commands:
 
         code = command
         stopped = False
+        stdout = ""
+        stderr = ""
 
         while True:
             try:
-                result = unwrap_result(
+                slice_output = unwrap_result(
                     exec_slice(session_id, code, timeout, SLICE_NANOS)
                 )
             except KeyboardInterrupt:
@@ -35,11 +37,15 @@ class Commands:
 
             code = None
 
-            if result is not None:
+            stdout += slice_output.stdout
+            stderr += slice_output.stderr or ""
+
+            exit_code = getattr(slice_output, "exit-code")
+            if exit_code is not None:
                 return CommandResult(
-                    stdout=normalize_line_endings(result.stdout),
-                    stderr=normalize_line_endings(result.stderr or ""),
-                    exit_code=getattr(result, "exit-code"),
+                    stdout=normalize_line_endings(stdout).rstrip(),
+                    stderr=normalize_line_endings(stderr).rstrip(),
+                    exit_code=exit_code,
                 )
 
             if stopped:
