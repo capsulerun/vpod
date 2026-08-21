@@ -407,7 +407,27 @@ def _which_layer_failed(sbx):
             f"GUEST DNS is broken: {address} answers with a Host header, but the "
             f"name does not resolve. {where}"
         )
-    return f"GUEST EGRESS is broken: {address} is unreachable even without DNS. {where}"
+
+    # The guest cannot get out. Whether that is our problem depends entirely on
+    # whether the machine running these tests can, so ask it the same question.
+    # Without this the message cannot tell "vpod broke" from "this network
+    # cannot reach the host", and those need completely different people.
+    host_reachable = _host_can_reach(address, 80)
+    blame = (
+        "the RUNNER reaches it fine, so this is vpod's TCP path"
+        if host_reachable
+        else "the RUNNER cannot reach it either, so this is the network, not vpod"
+    )
+    return f"GUEST EGRESS is broken: {address}:80 unreachable without DNS. {blame}. {where}"
+
+
+def _host_can_reach(address, port, timeout=10):
+    """Can the machine running the tests open a TCP connection to the same place?"""
+    try:
+        with socket.create_connection((address, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def test_network_dns_resolves():
