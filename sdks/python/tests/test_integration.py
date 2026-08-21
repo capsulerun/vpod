@@ -1,3 +1,4 @@
+import socket
 import threading
 import time
 
@@ -364,19 +365,65 @@ def test_shell_working_directory():
         assert result.success
         assert "created_here.txt" in result.stdout
 
+NETWORK_HOST = "kfuckkfmkyxe0l-tests.vpod.sh"
+NETWORK_TIMEOUT = 15
+NETWORK_ATTEMPTS = 2
+
+
+def _wget(sbx, url, extra="", spider=True):
+    mode = "--spider" if spider else "-O-"
+    for attempt in range(NETWORK_ATTEMPTS):
+        result = sbx.commands.run(
+            f"wget -q {mode} -T {NETWORK_TIMEOUT} -t 1 {extra} {url}",
+            timeout=NETWORK_TIMEOUT * 2,
+        )
+        if result.success or attempt == NETWORK_ATTEMPTS - 1:
+            return result
+        time.sleep(1)
+    raise AssertionError("unreachable")
+
+
+def _which_layer_failed(sbx):
+    try:
+        address = socket.gethostbyname(NETWORK_HOST)
+    except OSError as unresolvable:
+        return (
+            f"the TEST RUNNER itself cannot resolve {NETWORK_HOST} ({unresolvable}), "
+            "so this says nothing about the guest"
+        )
+
+
+    by_name_http = _wget(sbx, f"http://{NETWORK_HOST}")
+    by_address = _wget(sbx, f"http://{address}", extra=f"--header 'Host: {NETWORK_HOST}'")
+
+    resolv = sbx.commands.run("cat /etc/resolv.conf").stdout.strip().replace("\n", " ")
+    link = sbx.commands.run("ip addr show eth0 2>&1 | head -1").stdout.strip()
+    where = f"resolv.conf={resolv!r} eth0={link!r}"
+
+    if by_name_http.success:
+        return f"DNS and egress are both fine over http, so this is TLS or https-specific. {where}"
+    if by_address.success:
+        return (
+            f"GUEST DNS is broken: {address} answers with a Host header, but the "
+            f"name does not resolve. {where}"
+        )
+    return f"GUEST EGRESS is broken: {address} is unreachable even without DNS. {where}"
+
+
 def test_network_dns_resolves():
     with Sandbox.create() as sbx:
-        result = sbx.commands.run(
-            "wget -q --spider -T 15 -t 1 https://kfuckkfmkyxe0l-tests.vpod.sh"
+        result = _wget(sbx, f"https://{NETWORK_HOST}")
+        assert result.success, (
+            f"exit={result.exit_code} stderr={result.stderr} :: {_which_layer_failed(sbx)}"
         )
-        assert result.success, f"exit={result.exit_code} stderr={result.stderr}"
+
 
 def test_network_https_fetches_body():
     with Sandbox.create() as sbx:
-        result = sbx.commands.run(
-            "wget -qO- -T 15 -t 1 https://kfuckkfmkyxe0l-tests.vpod.sh"
+        result = _wget(sbx, f"https://{NETWORK_HOST}", spider=False)
+        assert result.success, (
+            f"exit={result.exit_code} stderr={result.stderr} :: {_which_layer_failed(sbx)}"
         )
-        assert result.success, f"exit={result.exit_code} stderr={result.stderr}"
         assert "VPOD_TEST_OK" in result.stdout, f"stdout={result.stdout!r}"
 
 def test_shared_vm_shell_writes_python_reads():
