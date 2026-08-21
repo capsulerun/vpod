@@ -1,4 +1,4 @@
-package vpod:sandbox@0.1.0;
+package vpod:sandbox@0.2.0;
 
 world library {
     export executor;
@@ -11,6 +11,12 @@ interface executor {
         exit-code: u32,
     }
 
+    record slice-output {
+        stdout: string,
+        stderr: string,
+        exit-code: option<u32>,
+    }
+
     record mount-entry {
         host-alias: string,
         guest-path: string,
@@ -21,7 +27,7 @@ interface executor {
     session-exec: func(handle: u64, code: string, timeout: option<u64>) -> result<execution-result, string>;
     session-close: func(handle: u64);
 
-    session-exec-slice: func(handle: u64, code: option<string>, timeout: option<u64>, slice-nanos: u64) -> result<option<execution-result>, string>;
+    session-exec-slice: func(handle: u64, code: option<string>, timeout: option<u64>, slice-nanos: u64) -> result<slice-output, string>;
     session-interrupt: func(handle: u64) -> result<_, string>;
 
     session-suspend: func(handle: u64, delta-path: string) -> result<u64, string>;

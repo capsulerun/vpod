@@ -198,13 +198,11 @@ export class Dispatcher {
                 );
 
             case "session-exec-slice":
-                return (
-                    this.#requireExecutor().sessionExecSlice(
-                        call.handle,
-                        call.code ?? undefined,
-                        call.timeoutSeconds ?? undefined,
-                        call.sliceNanos,
-                    ) ?? null
+                return this.#requireExecutor().sessionExecSlice(
+                    call.handle,
+                    call.code ?? undefined,
+                    call.timeoutSeconds ?? undefined,
+                    call.sliceNanos,
                 );
 
             case "session-interrupt":

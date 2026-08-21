@@ -9,6 +9,7 @@ import type { ExecutorTransport } from "./transport/types.js";
 import type {
     ExecutionResult,
     PullResult,
+    SliceOutput,
     SnapshotMount,
     SuspendResult,
 } from "./worker/protocol.js";
@@ -104,17 +105,13 @@ export class SandboxRuntime {
         });
     }
 
-    /**
-     * One bounded step of a command. `code` starts one, `null` continues the one
-     * already in flight. Resolves to null while it is still running and to the result when it ends.
-     */
     sessionExecSlice(
         handle: bigint,
         code: string | null,
         timeoutSeconds: bigint | null,
         sliceNanos: bigint,
-    ): Promise<ExecutionResult | null> {
-        return this.#transport.call<ExecutionResult | null>({
+    ): Promise<SliceOutput> {
+        return this.#transport.call<SliceOutput>({
             kind: "session-exec-slice",
             handle,
             code,
