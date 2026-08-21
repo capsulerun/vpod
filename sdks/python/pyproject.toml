@@ -23,7 +23,7 @@ classifiers = [
     "Topic :: System :: Emulators",
 ]
 dependencies = [
-    "wasmtime>=25.0.0",
+    "wasmtime>=25.0.0,<48",
     "platformdirs>=4.0",
     "certifi>=2023.0.0",
     "lz4>=4.4.5",
