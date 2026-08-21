@@ -110,6 +110,8 @@ esac
 
 ALPINE_MINOR="${ALPINE_VERSION%.*}"
 ALPINE_DIR="$ROOT/dist/alpine-standard-${ALPINE_VERSION}-riscv64"
+MINIROOTFS_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_MINOR}/releases/riscv64/alpine-minirootfs-${ALPINE_VERSION}-riscv64.tar.gz"
+MINIROOTFS="$ROOT/dist/alpine-minirootfs-${ALPINE_VERSION}-riscv64.tar.gz"
 ISO_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_MINOR}/releases/riscv64/alpine-standard-${ALPINE_VERSION}-riscv64.iso"
 ISO="$ROOT/dist/alpine-standard-${ALPINE_VERSION}-riscv64.iso"
 KERNEL="$ALPINE_DIR/kernel"
@@ -251,6 +253,45 @@ if [ ! -e "$ROOTFS/bin/sh" ] && [ ! -L "$ROOTFS/bin/sh" ]; then
     echo "       become a snapshot. Add a shell to the Dockerfile."
     exit 1
 fi
+
+# ships shasum for aot
+sha256sum_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d" " -f1
+    else
+        shasum -a 256 "$1" | cut -d" " -f1
+    fi
+}
+
+# To make the AOT translations works properly
+if [ ! -f "$MINIROOTFS" ]; then
+    echo "── Downloading Alpine minirootfs ${ALPINE_VERSION} (to compare libc)..."
+    curl -L --progress-bar -o "$MINIROOTFS" "$MINIROOTFS_URL"
+fi
+PINNED_LIBC_DIR="$ROOT/dist/.pinned-libc"
+rm -rf "$PINNED_LIBC_DIR"
+mkdir -p "$PINNED_LIBC_DIR"
+bsdtar -xf "$MINIROOTFS" -C "$PINNED_LIBC_DIR" --no-same-owner "lib/ld-musl-riscv64.so.1" 2>/dev/null || true
+
+PINNED_LIBC="$PINNED_LIBC_DIR/lib/ld-musl-riscv64.so.1"
+IMAGE_LIBC="$ROOTFS/lib/ld-musl-riscv64.so.1"
+if [ -f "$PINNED_LIBC" ] && [ -f "$IMAGE_LIBC" ]; then
+    if [ "$(sha256sum_of "$PINNED_LIBC")" = "$(sha256sum_of "$IMAGE_LIBC")" ]; then
+        echo "   libc matches the pinned base — the image inherits the shipped AOT translations."
+    else
+        echo ""
+        echo "   WARNING: this image's libc is not the one the shipped AOT was traced against."
+        echo "            pinned  (alpine ${ALPINE_VERSION}): $(sha256sum_of "$PINNED_LIBC")"
+        echo "            image                             : $(sha256sum_of "$IMAGE_LIBC")"
+        echo "            Everything still works, but every libc page runs interpreted and"
+        echo "            nothing at runtime will tell you. Pin the patch version in your"
+        echo "            Dockerfile (FROM alpine:${ALPINE_VERSION}, not alpine:${ALPINE_MINOR#v})."
+        echo ""
+    fi
+elif [ -f "$IMAGE_LIBC" ]; then
+    echo "   note: could not read the pinned libc, skipping the AOT drift check."
+fi
+rm -rf "$PINNED_LIBC_DIR"
 
 PY_PRESENT=0
 if [ -e "$ROOTFS/usr/bin/python3" ] || [ -e "$ROOTFS/bin/python3" ]; then
@@ -494,6 +535,7 @@ NOW="$(date -u '+%Y-%m-%d %H:%M:%S')"
 
 SETUP_CMD=""
 SETUP_CMD="${SETUP_CMD}date -s '$NOW'; "
+SETUP_CMD="${SETUP_CMD}ip link show eth0 >/dev/null 2>&1 && echo VPOD_NET_UP; "
 
 # Trust the vpod proxy CA. `update-ca-certificates` when the image ships
 # it (Alpine ca-certificates package); plain bundle append otherwise.
@@ -526,6 +568,7 @@ SNAP_PY_FLAG=""
     --initrd "$INITRD" \
     --ram "$RAM_MB" \
     --bootargs "$BOOTARGS" \
+    --net \
     --setup "$SETUP_CMD" \
     --snapshot-save "$OUT" \
     $SNAP_PY_FLAG 2>&1 | tee "$BUILD_LOG"
@@ -543,6 +586,15 @@ if ! grep -q "^VPOD_CA_INSTALLED" "$BUILD_LOG"; then
     echo "" >&2
     echo "error: the vpod proxy CA is not in the guest trust store." >&2
     echo "       HTTPS interception (:443) would fail at runtime. Aborting the build." >&2
+    echo "       (see $BUILD_LOG for the guest setup output)" >&2
+    exit 1
+fi
+if ! grep -q "^VPOD_NET_UP" "$BUILD_LOG"; then
+    echo "" >&2
+    echo "error: the guest has no eth0, so this snapshot would be permanently offline." >&2
+    echo "       The virtio-mmio bus is enumerated at boot, so networking cannot be" >&2
+    echo "       added after capture. Check that --net reached vpod-native and that" >&2
+    echo "       kernel modules were extracted into the rootfs." >&2
     echo "       (see $BUILD_LOG for the guest setup output)" >&2
     exit 1
 fi
