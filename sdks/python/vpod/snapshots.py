@@ -175,7 +175,7 @@ def _record_origin(dest: Path, origin: str) -> None:
         print(f"vpod: cannot record the origin of {dest.name}: {unwritable}", file=sys.stderr)
 
 
-def _prune_stale_snapshots(registry: list[dict], registry_url: str) -> None:
+def _prune_stale_snapshots(registry: list[dict], current_origin: str) -> None:
     known_ids = {snapshot["id"] for snapshot in registry}
     referenced_by_instances, references_are_complete = _snapshots_referenced_by_instances()
 
@@ -190,10 +190,10 @@ def _prune_stale_snapshots(registry: list[dict], registry_url: str) -> None:
 
             origin_file = snap_file.with_suffix(".origin")
             try:
-                origin = origin_file.read_text().strip()
+                recorded_origin = origin_file.read_text().strip()
             except OSError:
                 continue
-            if origin != registry_url:
+            if recorded_origin != current_origin:
                 continue
 
             print(
@@ -269,6 +269,8 @@ def fetch_registry(
     force: bool = False,
 ) -> list[dict]:
     registry_url = registry_url or REGISTRY_URL
+    if api_key is not None:
+        _check_api_key_kind(api_key)
     cache_path = _registry_cache_path(registry_url, api_key)
 
     if not force and cache_path.exists() and _registry_cache_version_matches():

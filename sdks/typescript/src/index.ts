@@ -19,6 +19,7 @@ export { InstanceStore } from "./instances.js";
 export type { InstanceRecord, SuspendedInstance } from "./instances.js";
 
 export * as snapshots from "./snapshots/index.js";
+export { SnapshotAuthError } from "./snapshots/index.js";
 
 export { WorkerTransport } from "./transport/worker.js";
 export type { WorkerTransportOptions } from "./transport/worker.js";
