@@ -45,8 +45,9 @@ class Sandbox:
         snapshot: str = "alpine:latest",
         mounts: dict[str, str] | None = None,
         registry_url: str | None = None,
+        api_key: str | None = None,
     ):
-        snapshot_path = snapshots.pull(snapshot, registry_url=registry_url)
+        snapshot_path = snapshots.pull(snapshot, registry_url=registry_url, api_key=api_key)
         wasm_path = locate_wasm()
 
         self._snapshot_path = "snap/" + snapshot_path.name
@@ -78,8 +79,9 @@ class Sandbox:
         snapshot: str = "vsnap-base:latest",
         mounts: dict[str, str] | None = None,
         registry_url: str | None = None,
+        api_key: str | None = None,
     ) -> "Sandbox":
-        return cls(snapshot, mounts=mounts, registry_url=registry_url)
+        return cls(snapshot, mounts=mounts, registry_url=registry_url, api_key=api_key)
 
     def _mount_entries(self) -> list:
         mount_entries = []
