@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
 
-use crate::registry::Snapshot;
+use crate::registry::{self, AuthRefused, Snapshot};
 
 pub fn cache_dir() -> PathBuf {
     let base = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("~/.local/share"));
@@ -21,6 +21,23 @@ pub fn meta_path(snap: &Snapshot) -> PathBuf {
     cache_dir().join(format!("{}.meta", snap.id))
 }
 
+pub fn origin_path(snap: &Snapshot) -> PathBuf {
+    cache_dir().join(format!("{}.origin", snap.id))
+}
+
+fn record_origin(snap: &Snapshot, origin: &str) {
+    let path = origin_path(snap);
+    if path.exists() {
+        return;
+    }
+    if let Err(unwritable) = fs::write(&path, origin) {
+        eprintln!(
+            "vpod: cannot record the origin of {}: {unwritable}",
+            path.display()
+        );
+    }
+}
+
 pub fn is_cached(snap: &Snapshot) -> bool {
     let dest = snapshot_path(snap);
     let meta = meta_path(snap);
@@ -33,17 +50,27 @@ pub fn is_cached(snap: &Snapshot) -> bool {
     }
 }
 
-pub fn pull(snap: &Snapshot) -> Result<PathBuf> {
+pub fn pull(snap: &Snapshot, registry_url: &str, api_key: Option<&str>) -> Result<PathBuf> {
     let dest = snapshot_path(snap);
     fs::create_dir_all(dest.parent().unwrap())?;
 
     let tmp = dest.with_extension("snap.tmp");
 
-    let resp = reqwest::blocking::get(&snap.url)
+    let client = reqwest::blocking::Client::new();
+    let resp = registry::authorize(client.get(&snap.url), &snap.url, registry_url, api_key)
+        .send()
         .with_context(|| format!("failed to download {}", snap.url))?;
 
-    if !resp.status().is_success() {
-        anyhow::bail!("download failed: {}", resp.status());
+    let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Err(anyhow::Error::new(AuthRefused {
+            status: status.as_u16(),
+            url: snap.url.clone(),
+        }));
+    }
+
+    if !status.is_success() {
+        anyhow::bail!("download failed: {status}");
     }
 
     let pb = ProgressBar::new(snap.size);
@@ -93,7 +120,11 @@ pub fn pull(snap: &Snapshot) -> Result<PathBuf> {
     Ok(dest)
 }
 
-pub fn prune_stale(registry_snapshots: &[Snapshot]) {
+pub fn record_pull_origin(snap: &Snapshot, origin: &str) {
+    record_origin(snap, origin);
+}
+
+pub fn prune_stale(registry_snapshots: &[Snapshot], current_origin: &str) {
     let known_ids: std::collections::HashSet<&str> =
         registry_snapshots.iter().map(|s| s.id.as_str()).collect();
     let referenced = snapshots_referenced_by_instances();
@@ -105,22 +136,43 @@ pub fn prune_stale(registry_snapshots: &[Snapshot]) {
     for entry in entries.flatten() {
         let path = entry.path();
 
-        let is_snapshot_artifact = path
-            .extension()
-            .is_some_and(|ext| ext == "snap" || ext == "raw");
-        let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-
-        if is_snapshot_artifact && !known_ids.contains(id) && !referenced.contains(id) {
-            fs::remove_file(&path).ok();
-            fs::remove_file(path.with_extension("meta")).ok();
-        }
-
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if name.ends_with(".tmp") {
             fs::remove_file(&path).ok();
+            continue;
         }
+
+        let is_snapshot_artifact = path
+            .extension()
+            .is_some_and(|ext| ext == "snap" || ext == "raw");
+        if !is_snapshot_artifact {
+            continue;
+        }
+
+        let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        if known_ids.contains(id) || referenced.contains(id) {
+            continue;
+        }
+
+        let meta = path.with_extension("meta");
+        if !meta.exists() {
+            continue;
+        }
+
+        let origin = path.with_extension("origin");
+        let Ok(recorded_origin) = fs::read_to_string(&origin) else {
+            continue;
+        };
+        if recorded_origin.trim() != current_origin {
+            continue;
+        }
+
+        eprintln!("vpod: removing {name}, which we downloaded and the registry no longer lists");
+        fs::remove_file(&path).ok();
+        fs::remove_file(&meta).ok();
+        fs::remove_file(&origin).ok();
     }
 }
 
