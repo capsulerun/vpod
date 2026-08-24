@@ -75,6 +75,7 @@ export class NodeDispatcher {
                 const pulled = await pullSnapshot({
                     name: call.name,
                     registryUrl: call.registryUrl,
+                    apiKey: call.apiKey,
                     store: await this.#store.ready(),
                 });
 

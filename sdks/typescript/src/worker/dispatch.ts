@@ -140,6 +140,7 @@ export class Dispatcher {
                 const pulled = await pullSnapshot({
                     name: call.name,
                     registryUrl: call.registryUrl,
+                    apiKey: call.apiKey,
                     force: call.force,
                 });
                 const snapshotPath = mountSnapshot(`${pulled.entry.id}.snap`, pulled.bytes);

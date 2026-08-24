@@ -58,12 +58,13 @@ export class SandboxRuntime {
 
     pullSnapshot(
         name?: string,
-        options: { registryUrl?: string; force?: boolean } = {},
+        options: { registryUrl?: string; apiKey?: string; force?: boolean } = {},
     ): Promise<PullResult> {
         return this.#transport.call<PullResult>({
             kind: "pull-snapshot",
             name,
             registryUrl: options.registryUrl,
+            apiKey: options.apiKey,
             force: options.force,
         });
     }

@@ -34,7 +34,13 @@ export interface SuspendResult {
 }
 
 export type WorkerCall =
-    | { kind: "pull-snapshot"; name?: string; registryUrl?: string; force?: boolean }
+    | {
+          kind: "pull-snapshot";
+          name?: string;
+          registryUrl?: string;
+          apiKey?: string;
+          force?: boolean;
+      }
     | { kind: "storage-quota" }
     | { kind: "fetch-snapshot"; url: string; name?: string }
     | { kind: "mount-snapshot"; name: string; bytes: ArrayBuffer }

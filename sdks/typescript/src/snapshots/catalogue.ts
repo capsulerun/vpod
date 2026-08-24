@@ -1,3 +1,4 @@
+import { authHeaders, checkApiKeyKind, resolveApiKey } from "./auth.js";
 import { registryCacheKey, resolveRegistryUrl } from "./registry.js";
 import type { SnapshotStorage } from "./store.js";
 import type { Catalogue, SnapshotEntry } from "./types.js";
@@ -6,27 +7,36 @@ export { DEFAULT_REGISTRY_URL } from "./registry.js";
 
 const DEFAULT_TTL_SECONDS = 86_400;
 
-const catalogueFile = (registryUrl: string): string =>
-    `catalogue-${registryCacheKey(registryUrl)}.json`;
+const catalogueFile = async (registryUrl: string, apiKey?: string): Promise<string> =>
+    `catalogue-${await registryCacheKey(registryUrl, apiKey)}.json`;
 
-const catalogueFetchedAtFile = (registryUrl: string): string =>
-    `catalogue-${registryCacheKey(registryUrl)}.fetched-at`;
+const catalogueFetchedAtFile = async (
+    registryUrl: string,
+    apiKey?: string,
+): Promise<string> => `catalogue-${await registryCacheKey(registryUrl, apiKey)}.fetched-at`;
 
 export interface CatalogueOptions {
     registryUrl?: string;
+    apiKey?: string;
     ttlSeconds?: number;
     force?: boolean;
 }
+
+export class SnapshotAuthError extends Error {}
 
 export async function fetchCatalogue(
     store: SnapshotStorage | null,
     options: CatalogueOptions = {},
 ): Promise<Catalogue> {
-    const registryUrl = resolveRegistryUrl(options.registryUrl);
+    const apiKey = resolveApiKey(options.apiKey);
+    if (apiKey !== undefined) {
+        checkApiKeyKind(apiKey);
+    }
+    const registryUrl = resolveRegistryUrl(options.registryUrl, apiKey);
     const ttlSeconds = options.ttlSeconds ?? DEFAULT_TTL_SECONDS;
 
     if (store !== null && options.force !== true) {
-        const cached = await readCachedCatalogue(store, registryUrl, ttlSeconds);
+        const cached = await readCachedCatalogue(store, registryUrl, ttlSeconds, apiKey);
         if (cached !== null) {
             return cached;
         }
@@ -34,10 +44,14 @@ export async function fetchCatalogue(
 
     let response: Response;
     try {
-        response = await fetch(registryUrl);
+        response = await fetch(registryUrl, {
+            headers: authHeaders(registryUrl, registryUrl, apiKey),
+        });
     } catch (thrown: unknown) {
         const stale =
-            store === null ? null : await readCachedCatalogue(store, registryUrl, Infinity);
+            store === null
+                ? null
+                : await readCachedCatalogue(store, registryUrl, Infinity, apiKey);
 
         if (stale !== null) {
             return stale;
@@ -47,6 +61,14 @@ export async function fetchCatalogue(
             `vpod: could not fetch the snapshot registry at ${registryUrl}. ` +
                 `If the host sends no Access-Control-Allow-Origin, a page cannot ` +
                 `read it at all. Underlying error: ${String(thrown)}`,
+        );
+    }
+
+    if (response.status === 401 || response.status === 403) {
+        throw new SnapshotAuthError(
+            `vpod: ${registryUrl} rejected the API key (${response.status}). The ` +
+                `key may be revoked, or it may belong to a different organisation ` +
+                `than the snapshot you asked for.`,
         );
     }
 
@@ -61,8 +83,14 @@ export async function fetchCatalogue(
     if (store !== null) {
 
         try {
-            await store.writeText(catalogueFile(registryUrl), JSON.stringify(catalogue));
-            await store.writeText(catalogueFetchedAtFile(registryUrl), String(Date.now()));
+            await store.writeText(
+                await catalogueFile(registryUrl, apiKey),
+                JSON.stringify(catalogue),
+            );
+            await store.writeText(
+                await catalogueFetchedAtFile(registryUrl, apiKey),
+                String(Date.now()),
+            );
         } catch {
         }
     }
@@ -74,14 +102,17 @@ async function readCachedCatalogue(
     store: SnapshotStorage,
     registryUrl: string,
     ttlSeconds: number,
+    apiKey?: string,
 ): Promise<Catalogue | null> {
-    const text = await store.readText(catalogueFile(registryUrl));
+    const text = await store.readText(await catalogueFile(registryUrl, apiKey));
     if (text === null) {
         return null;
     }
 
     if (ttlSeconds !== Infinity) {
-        const fetchedAt = Number(await store.readText(catalogueFetchedAtFile(registryUrl)));
+        const fetchedAt = Number(
+            await store.readText(await catalogueFetchedAtFile(registryUrl, apiKey)),
+        );
         if (!Number.isFinite(fetchedAt)) {
             return null;
         }
@@ -101,6 +132,7 @@ export function resolveSnapshot(
     snapshots: SnapshotEntry[],
     name: string,
     registryUrl?: string,
+    authenticated = false,
 ): SnapshotEntry {
     const separator = name.indexOf(":");
     const wantedName = separator === -1 ? name : name.slice(0, separator);
@@ -116,7 +148,11 @@ export function resolveSnapshot(
 
     const available = snapshots.map((s) => `${s.name}:${s.tag}`).join(", ") || "nothing";
     const searched = registryUrl === undefined ? "" : ` in ${registryUrl}`;
+    const credentials = authenticated
+        ? " An API key WAS sent, so this catalogue is what that key can reach."
+        : " No API key was sent, so only public snapshots were searched.";
+
     throw new Error(
-        `vpod: snapshot '${name}' not found${searched}. Available: ${available}`,
+        `vpod: snapshot '${name}' not found${searched}. Available: ${available}.${credentials}`,
     );
 }
