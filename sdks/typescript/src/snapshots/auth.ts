@@ -93,11 +93,13 @@ export function authHeaders(
     return { Authorization: `Bearer ${apiKey}` };
 }
 
-export function keyFingerprint(apiKey: string): string {
-    let hash = 0x811c9dc5;
-    for (let index = 0; index < apiKey.length; index += 1) {
-        hash ^= apiKey.charCodeAt(index);
-        hash = Math.imul(hash, 0x01000193) >>> 0;
-    }
-    return hash.toString(16).padStart(8, "0");
+export async function keyFingerprint(apiKey: string): Promise<string> {
+    const digest = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(apiKey) as BufferSource,
+    );
+    return [...new Uint8Array(digest)]
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("")
+        .slice(0, 12);
 }

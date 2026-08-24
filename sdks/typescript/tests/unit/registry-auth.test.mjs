@@ -9,6 +9,7 @@ const {
     authHeaders,
     checkApiKeyKind,
     isBrowser,
+    keyFingerprint,
     PRIVATE_REGISTRY_URL,
     PUBLIC_REGISTRY_URL,
     pullSnapshot,
@@ -75,6 +76,10 @@ describe("key kinds", () => {
     it("refuses an unrecognised prefix rather than guessing", () => {
         assert.throws(() => checkApiKeyKind("sk-openai-style"), /vpod_sk_/);
     });
+});
+
+it("derives the same key fingerprint as the Python SDK", async () => {
+    assert.equal(await keyFingerprint("vpod_sk_example"), "b5e68514b5f1");
 });
 
 describe("the key never leaves the registry origin", () => {

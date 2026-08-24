@@ -92,6 +92,10 @@ def test_public_cache_path_is_unchanged_without_a_key():
     )
 
 
+def test_key_fingerprint_matches_the_typescript_sdk():
+    assert snapshots._key_fingerprint("vpod_sk_example") == "b5e68514b5f1"
+
+
 def test_origin_tag_is_scoped_by_key_but_bare_without_one():
     url = snapshots.PRIVATE_REGISTRY_URL
     assert snapshots._origin_tag(url, None) == url
