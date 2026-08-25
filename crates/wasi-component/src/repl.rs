@@ -209,6 +209,7 @@ pub enum SliceOutcome {
 
 pub struct ExecState {
     output: Vec<u8>,
+    stderr: Vec<u8>,
     ended_at_prompt: bool,
     deadline: u64,
 }
@@ -217,9 +218,14 @@ impl ExecState {
     pub fn new(timeout_secs: u64) -> Self {
         Self {
             output: Vec::new(),
+            stderr: Vec::new(),
             ended_at_prompt: false,
             deadline: monotonic_clock::now() + timeout_secs * 1_000_000_000,
         }
+    }
+
+    pub fn absorb_stderr(&mut self, bytes: &[u8]) {
+        self.stderr.extend_from_slice(bytes);
     }
 }
 
@@ -326,6 +332,37 @@ pub fn run_slice(
     }
 }
 
+pub fn drain_output(state: &mut ExecState) -> String {
+    let boundary = safe_boundary(&state.output);
+    if boundary == 0 {
+        return String::new();
+    }
+
+    let chunk: Vec<u8> = state.output.drain(..boundary).collect();
+    strip_kernel_log(&strip_ansi(&String::from_utf8_lossy(&chunk)))
+}
+
+pub fn drain_stderr(state: &mut ExecState) -> String {
+    let boundary = safe_boundary(&state.stderr);
+    if boundary == 0 {
+        return String::new();
+    }
+
+    let chunk: Vec<u8> = state.stderr.drain(..boundary).collect();
+    String::from_utf8_lossy(&chunk).into_owned()
+}
+
+pub fn finish_stderr(state: &ExecState) -> String {
+    String::from_utf8_lossy(&state.stderr).into_owned()
+}
+
+fn safe_boundary(buf: &[u8]) -> usize {
+    match buf.iter().rposition(|&byte| byte == b'\n') {
+        Some(position) => position + 1,
+        None => 0,
+    }
+}
+
 pub fn finish_output(
     bus: &MachineBus,
     sentinel: Option<&str>,
@@ -335,11 +372,7 @@ pub fn finish_output(
     let mut output = state.output;
 
     if !data_channel && !state.ended_at_prompt && !output.is_empty() && !output.ends_with(b"\n") {
-        if let Some(pos) = output.iter().rposition(|&b| b == b'\n') {
-            output.truncate(pos + 1);
-        } else {
-            output.clear();
-        }
+        output.truncate(safe_boundary(&output));
     }
 
     let raw = String::from_utf8_lossy(&output);
@@ -390,7 +423,8 @@ pub fn capture_output(
 
 // TODO: evaluate if it's possible to refactor to a solution that filter directly the kernel log on the uart
 fn strip_kernel_log(s: &str) -> String {
-    s.lines()
+    let mut stripped = s
+        .lines()
         .filter(|line| {
             let t = line.trim_start();
 
@@ -409,7 +443,13 @@ fn strip_kernel_log(s: &str) -> String {
                 })
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+
+    if s.ends_with('\n') && !stripped.is_empty() {
+        stripped.push('\n');
+    }
+
+    stripped
 }
 
 fn strip_ansi(s: &str) -> String {
@@ -433,4 +473,87 @@ fn strip_ansi(s: &str) -> String {
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn never_splits_a_multibyte_character() {
+        let buf = "héllo\nwörld".as_bytes();
+        let boundary = safe_boundary(buf);
+
+        assert_eq!(&buf[..boundary], "héllo\n".as_bytes());
+        assert!(std::str::from_utf8(&buf[..boundary]).is_ok());
+        assert!(std::str::from_utf8(&buf[boundary..]).is_ok());
+    }
+
+    #[test]
+    fn never_splits_an_ansi_escape() {
+        let buf = b"done\n\x1b[0";
+        assert_eq!(safe_boundary(buf), 5);
+        assert_eq!(&buf[..5], b"done\n");
+    }
+
+    #[test]
+    fn never_splits_a_crlf_pair() {
+        let buf = b"a\r\nb\r";
+        assert_eq!(safe_boundary(buf), 3);
+        assert_eq!(&buf[..3], b"a\r\n");
+    }
+
+    #[test]
+    fn never_splits_the_prompt_sentinel() {
+        let buf = b"out\n\x1fvpo";
+        assert_eq!(safe_boundary(buf), 4);
+        assert_eq!(&buf[..4], b"out\n");
+    }
+
+    #[test]
+    fn releases_nothing_without_a_newline() {
+        assert_eq!(safe_boundary(b""), 0);
+        assert_eq!(safe_boundary(b"no newline here"), 0);
+    }
+
+    #[test]
+    fn releases_everything_when_it_ends_on_a_newline() {
+        assert_eq!(safe_boundary(b"a\n"), 2);
+        assert_eq!(safe_boundary(b"a\nb\n"), 4);
+    }
+
+    #[test]
+    fn matches_the_trim_finish_output_used_to_do_inline() {
+        for case in [
+            &b"line1\nline2\npartial"[..],
+            &b"partial"[..],
+            &b"line1\n"[..],
+            &b""[..],
+        ] {
+            let mut expected = case.to_vec();
+            if let Some(position) = expected.iter().rposition(|&byte| byte == b'\n') {
+                expected.truncate(position + 1);
+            } else {
+                expected.clear();
+            }
+
+            let mut actual = case.to_vec();
+            actual.truncate(safe_boundary(&actual));
+
+            assert_eq!(actual, expected, "diverged on {case:?}");
+        }
+    }
+
+    #[test]
+    fn a_chunk_keeps_the_newline_that_separates_it_from_the_next() {
+        assert_eq!(strip_kernel_log("a\n"), "a\n");
+        assert_eq!(strip_kernel_log("a\nb\n"), "a\nb\n");
+        assert_eq!(strip_kernel_log("a"), "a");
+        assert_eq!(strip_kernel_log("a\n\n"), "a\n\n");
+    }
+
+    #[test]
+    fn a_chunk_of_nothing_but_kernel_log_stays_empty() {
+        assert_eq!(strip_kernel_log("[    0.123456] booting\n"), "");
+    }
 }

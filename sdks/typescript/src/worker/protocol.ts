@@ -13,6 +13,12 @@ export interface ExecutionResult {
     exitCode: number;
 }
 
+export interface SliceOutput {
+    stdout: string;
+    stderr: string;
+    exitCode?: number;
+}
+
 export interface PullResult {
     snapshotPath: string;
     id: string;
