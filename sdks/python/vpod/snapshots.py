@@ -15,6 +15,7 @@ import platformdirs
 PUBLIC_REGISTRY_URL = "https://registry.vpod.sh/v1/snapshots.json"
 PRIVATE_REGISTRY_URL = "https://api.vpod.sh/v1/snapshots.json"
 
+
 REGISTRY_URL = os.environ.get("VPOD_REGISTRY", PUBLIC_REGISTRY_URL)
 
 
@@ -268,9 +269,10 @@ def fetch_registry(
     api_key: str | None = None,
     force: bool = False,
 ) -> list[dict]:
-    registry_url = registry_url or REGISTRY_URL
+    api_key = _resolve_api_key(api_key)
     if api_key is not None:
         _check_api_key_kind(api_key)
+    registry_url = _resolve_registry_url(registry_url, api_key)
     cache_path = _registry_cache_path(registry_url, api_key)
 
     if not force and cache_path.exists() and _registry_cache_version_matches():
@@ -294,10 +296,15 @@ def fetch_registry(
         return json.loads(data)["snapshots"]
     except urllib.error.HTTPError as http_error:
         if http_error.code in (401, 403):
+            reason = (
+                "The key may be revoked, or it may belong to a different "
+                "organisation than the snapshot you asked for."
+                if api_key
+                else "No API key was sent. Set VPOD_API_KEY or pass api_key=."
+            )
             raise SnapshotAuthError(
-                f"vpod: {registry_url} rejected the API key "
-                f"({http_error.code}). The key may be revoked, or it may belong "
-                f"to a different organisation than the snapshot you asked for."
+                f"vpod: {registry_url} refused the request "
+                f"({http_error.code}). {reason}"
             ) from http_error
         if cache_path.exists():
             return json.loads(cache_path.read_text())["snapshots"]

@@ -128,10 +128,13 @@ pub fn fetch(registry_url: &str, api_key: Option<&str>) -> Result<(String, Vec<S
             status: status.as_u16(),
             url: registry_url.to_string(),
         })
-        .context(
+        .context(if api_key.is_some() {
             "the key may be revoked, or it may belong to a different organisation \
-             than the snapshot you asked for",
-        ));
+             than the snapshot you asked for"
+        } else {
+            "this registry needs an API key and none was sent — pass --api-key or \
+             set VPOD_API_KEY"
+        }));
     }
     if !status.is_success() {
         anyhow::bail!("registry request failed: {status}");

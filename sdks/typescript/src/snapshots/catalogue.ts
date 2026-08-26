@@ -66,9 +66,11 @@ export async function fetchCatalogue(
 
     if (response.status === 401 || response.status === 403) {
         throw new SnapshotAuthError(
-            `vpod: ${registryUrl} rejected the API key (${response.status}). The ` +
-                `key may be revoked, or it may belong to a different organisation ` +
-                `than the snapshot you asked for.`,
+            `vpod: ${registryUrl} refused the request (${response.status}). ` +
+                (apiKey === undefined
+                    ? "No API key was sent. Set VPOD_API_KEY or pass apiKey."
+                    : "The key may be revoked, or it may belong to a different " +
+                      "organisation than the snapshot you asked for."),
         );
     }
 

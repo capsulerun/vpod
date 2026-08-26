@@ -1,14 +1,9 @@
 """Auth for private snapshots.
-
-Every test here corresponds to a line in
-docs/design/console/sdk-private-snapshots.md#testing. They are unit tests
-against a local HTTP server rather than integration tests, because the failures
-they guard are silent ones: a key that goes to the wrong origin, a retry loop
-that never terminates, a cache that one org reads out of another's.
 """
 
 import http.server
 import json
+import urllib.error
 import threading
 from pathlib import Path
 
@@ -130,10 +125,12 @@ class _Registry(http.server.BaseHTTPRequestHandler):
     blob_403_until = 0
     payload = b"VPODtest-snapshot-bytes"
     seen_blob_auth: list[str | None] = []
+    seen_catalogue_auth: list[str | None] = []
 
     def do_GET(self):
         if self.path.startswith("/catalogue"):
             type(self).catalogue_hits += 1
+            type(self).seen_catalogue_auth.append(self.headers.get("Authorization"))
             import hashlib as _h
             body = json.dumps({
                 "version": "1",
@@ -174,6 +171,7 @@ def registry_server(tmp_path, monkeypatch):
     _Registry.blob_hits = 0
     _Registry.blob_403_until = 0
     _Registry.seen_blob_auth = []
+    _Registry.seen_catalogue_auth = []
 
     server = http.server.HTTPServer(("127.0.0.1", 0), _Registry)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -217,3 +215,29 @@ def test_the_key_is_actually_sent_to_a_same_origin_blob(registry_server):
 def test_no_key_means_no_header_anywhere(registry_server):
     snapshots.pull("mine:1.0", registry_url=registry_server)
     assert _Registry.seen_blob_auth == [None]
+
+
+def test_fetch_registry_reads_the_key_from_the_environment(registry_server, monkeypatch):
+    monkeypatch.setenv("VPOD_API_KEY", "vpod_sk_from_env")
+
+    snapshots.fetch_registry(registry_url=registry_server, force=True)
+
+    assert _Registry.seen_catalogue_auth == ["Bearer vpod_sk_from_env"]
+
+
+def test_fetch_registry_defaults_to_the_private_registry_when_a_key_is_present(monkeypatch):
+    monkeypatch.delenv("VPOD_REGISTRY", raising=False)
+    monkeypatch.setenv("VPOD_API_KEY", "vpod_sk_from_env")
+
+    asked: list[str] = []
+
+    def _capture(request, *args, **kwargs):
+        asked.append(request.full_url)
+        raise urllib.error.URLError("not going to the network in a unit test")
+
+    monkeypatch.setattr(snapshots.urllib.request, "urlopen", _capture)
+
+    with pytest.raises(Exception):
+        snapshots.fetch_registry(force=True)
+
+    assert asked == [snapshots.PRIVATE_REGISTRY_URL]
