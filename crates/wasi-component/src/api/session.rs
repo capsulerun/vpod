@@ -302,7 +302,8 @@ fn install_prompt_sentinel(bus: &mut MachineBus, hart: &mut Hart, prompt_bytes: 
         return;
     }
 
-    let export = "set -o ignoreeof; export PS2=''; export PS1='$(__ec $?)'\"$(printf '\\037vpod\\037')\"\n";
+    let export =
+        "set -o ignoreeof; export PS2=''; export PS1='$(__ec $?)'\"$(printf '\\037vpod\\037')\"\n";
     for byte in export.bytes() {
         bus.uart.push_rx(byte);
     }
