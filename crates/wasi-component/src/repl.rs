@@ -212,16 +212,33 @@ pub struct ExecState {
     stderr: Vec<u8>,
     ended_at_prompt: bool,
     deadline: u64,
+    tty: bool,
 }
 
 impl ExecState {
     pub fn new(timeout_secs: u64) -> Self {
+        Self::with_mode(timeout_secs, false)
+    }
+
+    pub fn with_mode(timeout_secs: u64, tty: bool) -> Self {
+        let deadline = if timeout_secs == 0 {
+            u64::MAX
+        } else {
+            monotonic_clock::now() + timeout_secs * 1_000_000_000
+        };
+
         Self {
             output: Vec::new(),
             stderr: Vec::new(),
             ended_at_prompt: false,
-            deadline: monotonic_clock::now() + timeout_secs * 1_000_000_000,
+            deadline,
+            tty,
         }
+    }
+
+
+    pub fn is_terminal(&self) -> bool {
+        self.tty
     }
 
     pub fn absorb_stderr(&mut self, bytes: &[u8]) {
@@ -332,14 +349,60 @@ pub fn run_slice(
     }
 }
 
-pub fn drain_output(state: &mut ExecState) -> String {
-    let boundary = safe_boundary(&state.output);
+pub fn drain_output(state: &mut ExecState, prompt: &[u8]) -> String {
+    let boundary = if state.tty {
+        tty_boundary(&state.output, prompt)
+    } else {
+        safe_boundary(&state.output)
+    };
+
     if boundary == 0 {
         return String::new();
     }
 
     let chunk: Vec<u8> = state.output.drain(..boundary).collect();
-    strip_kernel_log(&strip_ansi(&String::from_utf8_lossy(&chunk)))
+    let text = String::from_utf8_lossy(&chunk);
+
+    if state.tty {
+        strip_kernel_log(&text)
+    } else {
+        strip_kernel_log(&strip_ansi(&text))
+    }
+}
+
+fn tty_boundary(buf: &[u8], prompt: &[u8]) -> usize {
+    let mut end = buf.len();
+
+    if end > 0 && buf[end - 1] == b'\r' {
+        end -= 1;
+    }
+
+    end = match std::str::from_utf8(&buf[..end]) {
+        Ok(_) => end,
+        Err(broken) if broken.error_len().is_none() => broken.valid_up_to(),
+        Err(_) => end,
+    };
+
+    if let Some(escape) = buf[..end].iter().rposition(|&byte| byte == 0x1b) {
+        let tail = &buf[escape..end];
+        let complete = match tail.len() {
+            0 | 1 => false,
+            _ if tail[1] == b'[' => tail[2..].iter().any(|b| b.is_ascii_alphabetic()),
+            _ => true,
+        };
+        if !complete {
+            end = escape;
+        }
+    }
+
+    for n in (1..=prompt.len().min(end)).rev() {
+        if buf[end - n..end] == prompt[..n] {
+            end -= n;
+            break;
+        }
+    }
+
+    end
 }
 
 pub fn drain_stderr(state: &mut ExecState) -> String {
@@ -371,12 +434,21 @@ pub fn finish_output(
 ) -> String {
     let mut output = state.output;
 
-    if !data_channel && !state.ended_at_prompt && !output.is_empty() && !output.ends_with(b"\n") {
+    if !state.tty
+        && !data_channel
+        && !state.ended_at_prompt
+        && !output.is_empty()
+        && !output.ends_with(b"\n")
+    {
         output.truncate(safe_boundary(&output));
     }
 
     let raw = String::from_utf8_lossy(&output);
-    let cleaned = strip_ansi(&raw);
+    let cleaned = if state.tty {
+        raw.to_string()
+    } else {
+        strip_ansi(&raw)
+    };
 
     if data_channel {
         if let Some(s) = sentinel
@@ -388,10 +460,16 @@ pub fn finish_output(
         return cleaned.trim_end().to_string();
     }
 
-    if !bus.uart_ctrl.tx_is_empty() {
-        strip_kernel_log(&cleaned).trim_end().to_string()
+    let filtered = if !bus.uart_ctrl.tx_is_empty() {
+        strip_kernel_log(&cleaned)
     } else {
-        cleaned.trim_end().to_string()
+        cleaned
+    };
+
+    if state.tty {
+        filtered
+    } else {
+        filtered.trim_end().to_string()
     }
 }
 
@@ -555,5 +633,64 @@ mod tests {
     #[test]
     fn a_chunk_of_nothing_but_kernel_log_stays_empty() {
         assert_eq!(strip_kernel_log("[    0.123456] booting\n"), "");
+    }
+
+    const SENTINEL: &[u8] = b"\x1fvpod\x1f";
+
+    #[test]
+    fn a_terminal_releases_a_prompt_that_has_no_newline() {
+        assert_eq!(safe_boundary(b">>> "), 0);
+        assert_eq!(tty_boundary(b">>> ", SENTINEL), 4);
+    }
+
+    #[test]
+    fn a_terminal_never_splits_a_multibyte_character() {
+        let whole = "héllo".as_bytes();
+        assert_eq!(tty_boundary(whole, SENTINEL), whole.len());
+        assert_eq!(tty_boundary(&whole[..3], SENTINEL), 3);
+
+        let torn = &whole[..2];
+        assert_eq!(tty_boundary(torn, SENTINEL), 1);
+        assert!(std::str::from_utf8(&torn[..tty_boundary(torn, SENTINEL)]).is_ok());
+    }
+
+    #[test]
+    fn a_terminal_never_splits_an_ansi_escape() {
+        assert_eq!(tty_boundary(b"red\x1b[31", SENTINEL), 3);
+        assert_eq!(tty_boundary(b"red\x1b[31m", SENTINEL), 8);
+        assert_eq!(tty_boundary(b"red\x1b", SENTINEL), 3);
+    }
+
+    #[test]
+    fn a_terminal_never_splits_a_crlf_pair() {
+        assert_eq!(tty_boundary(b"a\r", SENTINEL), 1);
+        assert_eq!(tty_boundary(b"a\r\n", SENTINEL), 3);
+    }
+
+    #[test]
+    fn a_terminal_never_leaks_a_partial_prompt_sentinel() {
+        assert_eq!(tty_boundary(b"out\x1fvpo", SENTINEL), 3);
+        assert_eq!(tty_boundary(b"out\x1f", SENTINEL), 3);
+        // A lone 0x1f that is not the start of the sentinel is still held, which
+        // costs one byte of latency and never corrupts the stream.
+        assert_eq!(tty_boundary(b"out", SENTINEL), 3);
+    }
+
+    #[test]
+    fn a_terminal_holds_back_nothing_it_does_not_have_to() {
+        assert_eq!(tty_boundary(b"", SENTINEL), 0);
+        assert_eq!(tty_boundary(b"plain text", SENTINEL), 10);
+        assert_eq!(tty_boundary(b"line\n", SENTINEL), 5);
+    }
+
+    #[test]
+    fn an_invalid_byte_does_not_stall_the_stream_forever() {
+        assert_eq!(tty_boundary(b"ok\xff", SENTINEL), 3);
+    }
+
+    #[test]
+    fn a_zero_timeout_means_no_deadline() {
+        assert_eq!(ExecState::with_mode(0, true).deadline, u64::MAX);
+        assert!(ExecState::with_mode(30, false).deadline < u64::MAX);
     }
 }

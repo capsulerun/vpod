@@ -1,5 +1,7 @@
 use crate::api::session::SESSION_MANAGER;
-use crate::exports::vpod::sandbox::executor::{ExecutionResult, Guest, MountEntry, SliceOutput};
+use crate::exports::vpod::sandbox::executor::{
+    ExecMode, ExecutionResult, Guest, MountEntry, SliceOutput,
+};
 use crate::vm;
 
 pub struct Executor;
@@ -36,12 +38,17 @@ impl Guest for Executor {
         code: Option<String>,
         timeout: Option<u64>,
         slice_nanos: u64,
+        mode: ExecMode,
     ) -> Result<SliceOutput, String> {
-        SESSION_MANAGER.exec_slice(handle, code, timeout, slice_nanos)
+        SESSION_MANAGER.exec_slice(handle, code, timeout, slice_nanos, mode)
     }
 
     fn session_interrupt(handle: u64) -> Result<(), String> {
         SESSION_MANAGER.interrupt_session(handle)
+    }
+
+    fn session_stdin(handle: u64, data: Vec<u8>) -> Result<(), String> {
+        SESSION_MANAGER.write_stdin(handle, data)
     }
 
     fn session_close(handle: u64) {
