@@ -340,6 +340,7 @@ def _resolve_exports(store, instance):
             "session-exec",
             "session-exec-slice",
             "session-interrupt",
+            "session-stdin",
             "session-close",
             "session-suspend",
             "session-resume",

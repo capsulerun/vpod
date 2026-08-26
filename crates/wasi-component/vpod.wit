@@ -23,12 +23,16 @@ interface executor {
         writable: bool,
     }
 
+    enum exec-mode { closed, piped, terminal }
+
     session-start: func(snapshot-path: string, command: string, prompt: string, mounts: list<mount-entry>) -> result<u64, string>;
     session-exec: func(handle: u64, code: string, timeout: option<u64>) -> result<execution-result, string>;
     session-close: func(handle: u64);
 
-    session-exec-slice: func(handle: u64, code: option<string>, timeout: option<u64>, slice-nanos: u64) -> result<slice-output, string>;
+
+    session-exec-slice: func(handle: u64, code: option<string>, timeout: option<u64>, slice-nanos: u64, mode: exec-mode) -> result<slice-output, string>;
     session-interrupt: func(handle: u64) -> result<_, string>;
+    session-stdin: func(handle: u64, data: list<u8>) -> result<_, string>;
 
     session-suspend: func(handle: u64, delta-path: string) -> result<u64, string>;
     session-resume: func(snapshot-path: string, delta-path: string, command: string, prompt: string, mounts: list<mount-entry>) -> result<u64, string>;

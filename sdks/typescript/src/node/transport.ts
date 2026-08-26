@@ -22,8 +22,10 @@ interface Executor {
         code: string | undefined,
         timeout: bigint | undefined,
         sliceNanos: bigint,
+        mode: string,
     ): ExecutionResult | undefined;
     sessionInterrupt(handle: bigint): void;
+    sessionStdin(handle: bigint, data: Uint8Array): void;
     sessionClose(handle: bigint): void;
     sessionSuspend(handle: bigint, deltaPath: string): bigint;
     sessionResume(
@@ -138,11 +140,16 @@ export class NodeDispatcher {
                         call.code ?? undefined,
                         call.timeoutSeconds ?? undefined,
                         call.sliceNanos,
+                        call.mode,
                     ) ?? null
                 );
 
             case "session-interrupt":
                 this.#executor.sessionInterrupt(call.handle);
+                return null;
+
+            case "session-stdin":
+                this.#executor.sessionStdin(call.handle, call.data);
                 return null;
 
             case "session-close":

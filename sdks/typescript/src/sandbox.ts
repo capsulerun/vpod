@@ -35,11 +35,148 @@ const SLICE_NANOS = 100_000_000n;
 
 const yieldToEventLoop = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+export type ExecMode = "closed" | "piped" | "terminal";
+
+export type Stdin =
+    | string
+    | Uint8Array
+    | AsyncIterable<string | Uint8Array>
+    | ReadableStream<string | Uint8Array>;
+
 export interface RunOptions {
     timeout?: number;
     signal?: AbortSignal;
     onStdout?: (chunk: string) => void;
     onStderr?: (chunk: string) => void;
+    stdin?: Stdin;
+    tty?: boolean;
+}
+
+const encoder = new TextEncoder();
+
+const toBytes = (chunk: string | Uint8Array): Uint8Array =>
+    typeof chunk === "string" ? encoder.encode(chunk) : chunk;
+
+export class Execution {
+    #runtime: SandboxRuntime;
+    #handle: bigint;
+    #pending: string | null;
+    #timeout: bigint;
+    #mode: ExecMode;
+    #tty: boolean;
+
+    #outbox: Uint8Array[] = [];
+    #interruptRequested = false;
+    #interruptSent = false;
+
+    stdout = "";
+    stderr = "";
+    exitCode: number | null = null;
+
+    /** @internal */
+    constructor(
+        runtime: SandboxRuntime,
+        handle: bigint,
+        command: string,
+        timeoutSeconds: number,
+        mode: ExecMode,
+    ) {
+        this.#runtime = runtime;
+        this.#handle = handle;
+        this.#pending = command;
+        this.#timeout = BigInt(timeoutSeconds);
+        this.#mode = mode;
+        this.#tty = mode === "terminal";
+    }
+
+    get done(): boolean {
+        return this.exitCode !== null;
+    }
+
+    write(data: string | Uint8Array): void {
+        this.#outbox.push(toBytes(data));
+    }
+
+    interrupt(): void {
+        this.#interruptRequested = true;
+    }
+
+    async step(): Promise<string> {
+        if (this.done) return "";
+
+        await this.#flushInput();
+
+        const slice = await this.#runtime.sessionExecSlice(
+            this.#handle,
+            this.#pending,
+            this.#timeout,
+            SLICE_NANOS,
+            this.#mode,
+        );
+        this.#pending = null;
+
+        const stdoutChunk = this.#clean(slice.stdout);
+        const stderrChunk = this.#clean(slice.stderr ?? "");
+
+        this.stdout += stdoutChunk;
+        this.stderr += stderrChunk;
+
+        if (slice.exitCode != null) {
+            this.exitCode = slice.exitCode;
+        } else if (this.#interruptRequested && !this.#interruptSent) {
+            await this.#runtime.sessionInterrupt(this.#handle);
+            this.#interruptSent = true;
+        }
+
+        return this.#tty ? stdoutChunk + stderrChunk : stdoutChunk;
+    }
+
+    async *[Symbol.asyncIterator](): AsyncIterator<string> {
+        while (!this.done) {
+            const chunk = await this.step();
+            if (chunk) yield chunk;
+            await yieldToEventLoop();
+        }
+    }
+
+    async wait(): Promise<CommandResult> {
+        while (!this.done) {
+            await this.step();
+            await yieldToEventLoop();
+        }
+        return this.result();
+    }
+
+    result(): CommandResult {
+        if (this.exitCode === null) {
+            throw new Error("the command is still running; await wait() first");
+        }
+        return this.#tty
+            ? new CommandResult(this.stdout, this.stderr, this.exitCode)
+            : new CommandResult(this.stdout.trimEnd(), this.stderr.trimEnd(), this.exitCode);
+    }
+
+    // A terminal keeps its CRLF: a TUI positions the cursor with it.
+    #clean(chunk: string): string {
+        return this.#tty ? chunk : normalizeLineEndings(chunk);
+    }
+
+    async #flushInput(): Promise<void> {
+        if (this.#outbox.length === 0) return;
+
+        const pending = this.#outbox;
+        this.#outbox = [];
+
+        const total = pending.reduce((n, part) => n + part.length, 0);
+        const joined = new Uint8Array(total);
+        let at = 0;
+        for (const part of pending) {
+            joined.set(part, at);
+            at += part.length;
+        }
+
+        await this.#runtime.sessionStdin(this.#handle, joined);
+    }
 }
 
 export class Commands {
@@ -49,21 +186,118 @@ export class Commands {
         this.#sandbox = sandbox;
     }
 
-    async run(command: string, options: RunOptions = {}): Promise<CommandResult> {
-        const result = await this.#sandbox._execSliced(command, options.timeout, options.signal, {
-            onStdout: options.onStdout,
-            onStderr: options.onStderr,
-        });
-        return new CommandResult(
-            normalizeLineEndings(result.stdout),
-            normalizeLineEndings(result.stderr ?? ""),
-            result.exitCode,
+    async start(command: string, options: RunOptions = {}): Promise<Execution> {
+        const mode: ExecMode = options.tty
+            ? "terminal"
+            : options.stdin !== undefined
+              ? "piped"
+              : "closed";
+
+        const execution = await this.#sandbox._start(
+            command,
+            options.timeout ?? DEFAULT_TIMEOUT_SECONDS,
+            mode,
         );
+        this.#running = execution;
+        return execution;
+    }
+
+    async run(command: string, options: RunOptions = {}): Promise<CommandResult> {
+        if (options.stdin === undefined && !options.tty && !options.onStdout && !options.onStderr) {
+            const result = await this.#sandbox._execSliced(
+                command,
+                options.timeout,
+                options.signal,
+                {},
+            );
+            return new CommandResult(
+                normalizeLineEndings(result.stdout),
+                normalizeLineEndings(result.stderr ?? ""),
+                result.exitCode,
+            );
+        }
+
+        options.signal?.throwIfAborted();
+        const execution = await this.start(command, options);
+
+        const feeding =
+            options.stdin === undefined ? null : feedStdin(execution, options.stdin);
+
+        const onAbort = () => execution.interrupt();
+        options.signal?.addEventListener("abort", onAbort, { once: true });
+
+        try {
+            let seenOut = 0;
+            let seenErr = 0;
+            while (!execution.done) {
+                await execution.step();
+
+                if (options.onStdout && execution.stdout.length > seenOut) {
+                    options.onStdout(execution.stdout.slice(seenOut));
+                    seenOut = execution.stdout.length;
+                }
+                if (options.onStderr && execution.stderr.length > seenErr) {
+                    options.onStderr(execution.stderr.slice(seenErr));
+                    seenErr = execution.stderr.length;
+                }
+
+                await yieldToEventLoop();
+            }
+        } finally {
+            options.signal?.removeEventListener("abort", onAbort);
+            await feeding?.stop();
+        }
+
+        options.signal?.throwIfAborted();
+        return execution.result();
     }
 
     async interrupt(): Promise<void> {
+        if (this.#running && !this.#running.done) {
+            this.#running.interrupt();
+            return;
+        }
         await this.#sandbox._interrupt();
     }
+
+    #running: Execution | null = null;
+}
+
+function feedStdin(execution: Execution, stdin: Stdin): { stop(): Promise<void> } {
+    if (typeof stdin === "string" || stdin instanceof Uint8Array) {
+        execution.write(stdin);
+        return { stop: async () => {} };
+    }
+
+    let stopped = false;
+
+    const pump = (async () => {
+        if (typeof (stdin as ReadableStream).getReader === "function") {
+            const reader = (stdin as ReadableStream<string | Uint8Array>).getReader();
+            try {
+                for (;;) {
+                    const { done, value } = await reader.read();
+                    if (done || stopped) break;
+                    if (value !== undefined) execution.write(value);
+                }
+            } finally {
+                reader.releaseLock();
+            }
+        } else {
+            for await (const chunk of stdin as AsyncIterable<string | Uint8Array>) {
+                if (stopped) break;
+                execution.write(chunk);
+            }
+        }
+
+    })();
+
+    return {
+        stop: async () => {
+            stopped = true;
+            await pump.catch(() => {});
+        },
+    };
 }
 
 export class Code {
@@ -196,6 +430,12 @@ export class Sandbox {
     async _exec(payload: string, timeoutSeconds = DEFAULT_TIMEOUT_SECONDS) {
         const handle = await this.#ensureSession();
         return this.#runtime.sessionExec(handle, payload, BigInt(timeoutSeconds));
+    }
+
+    /** @internal */
+    async _start(command: string, timeoutSeconds: number, mode: ExecMode): Promise<Execution> {
+        const handle = await this.#ensureSession();
+        return new Execution(this.#runtime, handle, command, timeoutSeconds, mode);
     }
 
     async _execSliced(

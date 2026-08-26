@@ -236,7 +236,6 @@ impl ExecState {
         }
     }
 
-
     pub fn is_terminal(&self) -> bool {
         self.tty
     }

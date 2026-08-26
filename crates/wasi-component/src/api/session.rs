@@ -15,14 +15,14 @@ const PYRUNNER_SENTINEL: &str = "---VPOD_DONE---";
 const MAX_INLINE_EXEC: usize = 1900;
 const STAGE_CHUNK: usize = 1500;
 const STAGE_PATH: &str = "/tmp/.vpod_cmd";
+const STDIN_PATH: &str = "/tmp/.vpod_stdin";
+
+const STDIN_STAGE_CHUNK: usize = STAGE_CHUNK;
 
 const PYRUNNER_MAX_LINE: usize = 3800;
 const PYRUNNER_STAGE_CHUNK: usize = 2500;
 
 const SHELL_PROMPT_SENTINEL: &[u8] = b"\x1fvpod\x1f";
-
-// A path that cannot exist, so the warm-python shim's connect() fails and it execs the real interpreter.
-const PYD_SOCK_DISABLED: &str = "/nonexistent/vpod-pyd.sock";
 
 const AOT_MISMATCH_PROBE_THRESHOLD: u64 = 64;
 
@@ -56,6 +56,10 @@ pub struct Session {
     pub pyrunner_reseeded: bool,
     pub shell_lost: bool,
     pub exec: Option<repl::ExecState>,
+    /// Input written before the command started. Staged to a file rather than
+    /// pushed at the terminal, so EOF belongs to the command instead of leaking
+    /// to the shell behind it.
+    pub staged_stdin: Vec<u8>,
 }
 
 fn recover_shell(session: &mut Session) {
@@ -94,14 +98,25 @@ fn begin_shell_exec(session: &mut Session, code: String, timeout_secs: u64, mode
         code
     };
 
+    let pending_stdin = std::mem::take(&mut session.staged_stdin);
+    let staged = !pending_stdin.is_empty() && session.is_shell && mode == ExecMode::Piped;
+    if staged {
+        stage_stdin(session, &pending_stdin);
+    }
+
     let cmd = if session.is_shell {
         match mode {
             ExecMode::Closed => format!("{{\n{code}\n}} </dev/null 2>/dev/ttyS1\n"),
+            ExecMode::Piped if staged => format!(
+                "{{\n\
+                 rm -f {STDIN_PATH}\n\
+                 {code}\n\
+                 }} < {STDIN_PATH} 2>/dev/ttyS1\n"
+            ),
             ExecMode::Piped => format!("{{\n{code}\n}} 2>/dev/ttyS1\n"),
             ExecMode::Terminal => format!(
                 "{{\n\
                  stty -icanon -echo\n\
-                 export VPOD_PYD_SOCK={PYD_SOCK_DISABLED}\n\
                  {code}\n\
                  }} 2>&1\n"
             ),
@@ -112,6 +127,12 @@ fn begin_shell_exec(session: &mut Session, code: String, timeout_secs: u64, mode
 
     for byte in cmd.bytes() {
         session.bus.uart.push_rx(byte);
+    }
+
+    if mode == ExecMode::Terminal {
+        for byte in &pending_stdin {
+            session.bus.uart.push_rx(*byte);
+        }
     }
 
     session.exec = Some(repl::ExecState::with_mode(
@@ -214,6 +235,34 @@ fn stage_long_command(session: &mut Session, code: &str) -> String {
     )
 }
 
+fn stage_stdin(session: &mut Session, data: &[u8]) {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+    let prompt = session.prompt.clone();
+
+    for (i, chunk) in encoded.as_bytes().chunks(STDIN_STAGE_CHUNK).enumerate() {
+        let chunk = std::str::from_utf8(chunk).unwrap_or_default();
+        let redirect = if i == 0 { ">" } else { ">>" };
+        let upload = format!("printf %s {chunk} {redirect} {STDIN_PATH}.b64\n");
+
+        for byte in upload.bytes() {
+            session.bus.uart.push_rx(byte);
+        }
+        repl::wait_for_prompt(&mut session.bus, &mut session.hart, &prompt);
+        session.bus.uart.drain_tx();
+        session.bus.uart_stderr.drain_tx();
+        session.bus.uart_ctrl.drain_tx();
+    }
+
+    let decode = format!("base64 -d {STDIN_PATH}.b64 > {STDIN_PATH} && rm -f {STDIN_PATH}.b64\n");
+    for byte in decode.bytes() {
+        session.bus.uart.push_rx(byte);
+    }
+    repl::wait_for_prompt(&mut session.bus, &mut session.hart, &prompt);
+    session.bus.uart.drain_tx();
+    session.bus.uart_stderr.drain_tx();
+    session.bus.uart_ctrl.drain_tx();
+}
+
 fn stage_pyrunner_code(session: &mut Session, encoded: &str) -> String {
     for (i, chunk) in encoded.as_bytes().chunks(PYRUNNER_STAGE_CHUNK).enumerate() {
         let chunk = std::str::from_utf8(chunk).unwrap_or_default();
@@ -253,7 +302,7 @@ fn install_prompt_sentinel(bus: &mut MachineBus, hart: &mut Hart, prompt_bytes: 
         return;
     }
 
-    let export = "export PS2=''; export PS1='$(__ec $?)'\"$(printf '\\037vpod\\037')\"\n";
+    let export = "set -o ignoreeof; export PS2=''; export PS1='$(__ec $?)'\"$(printf '\\037vpod\\037')\"\n";
     for byte in export.bytes() {
         bus.uart.push_rx(byte);
     }
@@ -416,6 +465,7 @@ impl SessionManager {
                 pyrunner_reseeded: false,
                 shell_lost: false,
                 exec: None,
+                staged_stdin: Vec::new(),
             },
         );
 
@@ -586,6 +636,7 @@ impl SessionManager {
             .ok_or_else(|| format!("invalid session handle: {handle}"))?;
 
         if session.exec.is_none() {
+            session.staged_stdin.extend_from_slice(&data);
             return Ok(());
         }
 
@@ -728,6 +779,7 @@ impl SessionManager {
                 pyrunner_reseeded,
                 shell_lost: false,
                 exec: None,
+                staged_stdin: Vec::new(),
             },
         );
 

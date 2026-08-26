@@ -676,7 +676,7 @@ def test_an_abandoned_sliced_command_does_not_brick_the_session():
 
         session_id = sbx._get_shell_session_id()
         started = unwrap_result(
-            sbx._exports["session-exec-slice"](session_id, "sleep 30", 30, SLICE_NANOS)
+            sbx._exports["session-exec-slice"](session_id, "sleep 30", 30, SLICE_NANOS, "closed")
         )
         assert (
             getattr(started, "exit-code") is None
@@ -929,3 +929,142 @@ def test_an_interrupt_keeps_the_chunks_that_already_arrived():
         assert result.exit_code == 130, f"exited {result.exit_code}"
         assert "tick1" in result.stdout
         assert len(chunks) >= 2
+
+
+# --- stdin and terminal mode ---------------------------------------------
+
+def test_a_command_can_be_written_to():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("cat", stdin="hello stdin\n", timeout=30)
+        assert result.exit_code == 0
+        assert "hello stdin" in result.stdout
+
+
+def test_stdin_is_still_closed_by_default():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("cat", timeout=20)
+        assert result.exit_code == 0
+        assert result.stdout == ""
+
+
+def test_a_repl_prompt_arrives_without_a_newline_after_it():
+    with Sandbox.create() as sbx:
+        execution = sbx.commands.start("python3", timeout=0, tty=True)
+
+        banner = ""
+        for _ in range(400):
+            banner += execution.step()
+            if ">>>" in banner:
+                break
+
+        assert ">>>" in banner, f"never saw a prompt, got {banner!r}"
+
+        execution.write("print(40 + 2)\n")
+        answer = ""
+        for _ in range(400):
+            answer += execution.step()
+            if "42" in answer:
+                break
+        assert "42" in answer, f"REPL did not answer, got {answer!r}"
+
+        execution.write("exit()\n")
+        result = execution.wait()
+        assert result.exit_code == 0
+
+
+def test_an_interactive_python_can_be_interrupted():
+    with Sandbox.create() as sbx:
+        execution = sbx.commands.start("python3", timeout=0, tty=True)
+
+        seen = ""
+        for _ in range(400):
+            seen += execution.step()
+            if ">>>" in seen:
+                break
+        assert ">>>" in seen
+
+        execution.write("import time\ntime.sleep(300)\n")
+        for _ in range(20):
+            execution.step()
+
+        execution.interrupt()
+        for _ in range(400):
+            execution.step()
+            if execution.done:
+                break
+
+        assert not execution.done, "interrupt should not end the python session"
+
+        execution.write("exit()\n")
+        result = execution.wait()
+        assert result.exit_code == 0
+
+
+def test_terminal_mode_restores_the_shell_for_the_next_command():
+    with Sandbox.create() as sbx:
+        sbx.commands.run("python3 -c 'input()'", stdin="x\n", tty=True, timeout=30)
+
+        after = sbx.commands.run("echo still-here", timeout=20)
+        assert after.exit_code == 0
+        assert after.stdout.strip() == "still-here"
+
+
+def test_a_python_script_can_read_the_terminal():
+    with Sandbox.create() as sbx:
+        has_fix = sbx.commands.run(
+            "grep -c caller_process_group /usr/lib/vpod/pydaemon.py || true", timeout=20
+        )
+        if has_fix.stdout.strip() in ("", "0"):
+            pytest.skip("snapshot predates the pydaemon process-group fix")
+
+        result = sbx.commands.run(
+            "python3 -c 'import sys; print(\"GOT\", sys.stdin.readline().strip())'",
+            stdin="hello\n",
+            tty=True,
+            timeout=30,
+        )
+        assert "GOT hello" in result.stdout, result.stdout
+        assert "I/O error" not in result.stdout
+
+
+def test_a_command_that_stops_early_does_not_kill_the_session():
+    reads_to_eof = ["cat", "sort", "wc -l"]
+    stops_early = ["head -1", "grep -m1 beta", "sh -c 'read x; echo $x'",
+                   "python3 -c 'print(input())'"]
+
+    with Sandbox.create() as sbx:
+        for command in reads_to_eof + stops_early:
+            result = sbx.commands.run(command, stdin="alpha\nbeta\ngamma\n", timeout=30)
+            assert result.exit_code == 0, f"{command}: {result}"
+
+            alive = sbx.commands.run("echo alive", timeout=15)
+            assert alive.exit_code == 0, f"{command} killed the session"
+            assert alive.stdout.strip() == "alive", f"{command} left {alive.stdout!r}"
+
+
+def test_staged_stdin_does_not_leak_into_the_next_command():
+    with Sandbox.create() as sbx:
+        first = sbx.commands.run("head -1", stdin="one\ntwo\nthree\n", timeout=25)
+        assert first.stdout.strip() == "one"
+
+        second = sbx.commands.run("echo done", timeout=15)
+        assert second.stdout.strip() == "done", second.stdout
+        assert "two" not in second.stdout and "three" not in second.stdout
+
+
+def test_stdin_survives_being_larger_than_one_staging_chunk():
+    payload = ("x" * 63 + "\n") * 400
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("wc -c", stdin=payload, timeout=180)
+        assert result.exit_code == 0, result
+        assert result.stdout.strip().split()[0] == str(len(payload)), result.stdout
+
+
+def test_stdin_is_delivered_byte_for_byte():
+    import base64 as _b64
+
+    raw = bytes(range(256)) * 4
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("base64", stdin=raw, timeout=120)
+        assert result.exit_code == 0, result
+        assert _b64.b64decode(result.stdout.replace("\n", "")) == raw

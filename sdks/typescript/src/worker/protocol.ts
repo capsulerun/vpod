@@ -1,3 +1,5 @@
+import type { ExecMode } from "../sandbox.js";
+
 import type { CoreModuleBytes } from "./component-imports.js";
 
 export interface WorkerInit {
@@ -63,8 +65,10 @@ export type WorkerCall =
           code: string | null;
           timeoutSeconds: bigint | null;
           sliceNanos: bigint;
+          mode: ExecMode;
       }
     | { kind: "session-interrupt"; handle: bigint }
+    | { kind: "session-stdin"; handle: bigint; data: Uint8Array }
     | { kind: "session-close"; handle: bigint }
     | { kind: "session-suspend"; handle: bigint }
     | {
