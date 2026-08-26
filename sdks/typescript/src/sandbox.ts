@@ -27,6 +27,7 @@ export interface SandboxOptions extends SandboxRuntimeOptions {
     snapshot?: SnapshotSource;
     network?: boolean;
     registryUrl?: string;
+    apiKey?: string;
     corsProxy?: string;
 }
 
@@ -120,9 +121,10 @@ export class Sandbox {
         runtime: SandboxRuntime,
         snapshot: SnapshotSource,
         registryUrl: string | undefined,
+        apiKey?: string,
     ): Promise<{ snapshotPath: string; snapshotId: string }> {
         if (typeof snapshot === "string") {
-            const pulled = await runtime.pullSnapshot(snapshot, { registryUrl });
+            const pulled = await runtime.pullSnapshot(snapshot, { registryUrl, apiKey });
             return { snapshotPath: pulled.snapshotPath, snapshotId: pulled.id };
         }
 
@@ -173,6 +175,7 @@ export class Sandbox {
             runtime,
             options.snapshot ?? DEFAULT_SNAPSHOT,
             options.registryUrl,
+            options.apiKey,
         );
         return new Sandbox(runtime, mounted.snapshotPath, mounted.snapshotId);
     }
@@ -302,6 +305,7 @@ export class Sandbox {
             runtime,
             options.snapshot ?? resolved.snapshotId,
             options.registryUrl,
+            options.apiKey,
         );
 
         const sandbox = new Sandbox(runtime, mounted.snapshotPath, mounted.snapshotId);

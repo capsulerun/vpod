@@ -5,8 +5,6 @@ mod start;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
-use registry::DEFAULT_REGISTRY;
-
 #[derive(Parser)]
 #[command(
     name = "vpod",
@@ -19,6 +17,9 @@ struct Cli {
 
     #[arg(long, env = "VPOD_REGISTRY", global = true, hide = true)]
     registry: Option<String>,
+
+    #[arg(long = "api-key", env = "VPOD_API_KEY", global = true)]
+    api_key: Option<String>,
 
     #[arg(short = 'm', long = "mount", global = true)]
     mounts: Vec<String>,
@@ -44,7 +45,15 @@ enum Cmd {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let reg_url = cli.registry.as_deref().unwrap_or(DEFAULT_REGISTRY);
+
+    let api_key = cli.api_key.as_deref().filter(|key| !key.is_empty());
+    if let Some(key) = api_key {
+        registry::check_api_key_kind(key)?;
+    }
+
+    let reg_url = registry::resolve_registry_url(cli.registry.as_deref(), api_key);
+    let reg_url = reg_url.as_str();
+    let origin = registry::origin_tag(reg_url, api_key);
 
     let mounts = cli.mounts;
 
@@ -54,7 +63,7 @@ fn main() -> Result<()> {
         Cmd::Start {
             snapshot: snapshot_name,
         } => {
-            let (version, snapshot) = resolve_snapshot(&snapshot_name, reg_url)?;
+            let (version, snapshot) = resolve_snapshot(&snapshot_name, reg_url, api_key, &origin)?;
             let parsed_mounts = start::parse_mounts(&mounts)?;
 
             start::run(start::RunConfig {
@@ -65,24 +74,29 @@ fn main() -> Result<()> {
         }
 
         Cmd::Pull { snapshot } => {
-            let (_, snapshots) = registry::fetch(reg_url)
+            let (_, snapshots) = registry::fetch(reg_url, api_key)
                 .context("failed to fetch registry — cannot pull without registry")?;
             let snap = registry::resolve(&snapshots, &snapshot)
-                .with_context(|| format!("unknown snapshot '{snapshot}' — run `vpod list`"))?;
+                .with_context(|| {
+                    registry::not_found_message(&snapshot, reg_url, api_key.is_some())
+                })?
+                .clone();
 
-            if pull::is_cached(snap) {
+            if pull::is_cached(&snap) {
+                pull::record_pull_origin(&snap, &origin);
                 eprintln!(
                     "'{}' is already cached at {}",
                     snap.display_name(),
-                    pull::snapshot_path(snap).display()
+                    pull::snapshot_path(&snap).display()
                 );
             } else {
-                pull::pull(snap)?;
-                pull::prune_stale(&snapshots);
+                let fresh = pull_with_one_retry(&snap, &snapshot, reg_url, api_key, snapshots)?;
+                pull::record_pull_origin(&snap, &origin);
+                pull::prune_stale(&fresh, &origin);
             }
         }
 
-        Cmd::List => match registry::fetch(reg_url) {
+        Cmd::List => match registry::fetch(reg_url, api_key) {
             Ok((_, snapshots)) => {
                 println!(
                     "{:<25} {:<15} {:<12} {:<10} DESCRIPTION STATUS",
@@ -114,7 +128,7 @@ fn main() -> Result<()> {
 
         Cmd::External(args) => {
             let snapshot_name = args.first().map(|s| s.as_str()).unwrap_or("vpod-base");
-            let (version, snapshot) = resolve_snapshot(snapshot_name, reg_url)?;
+            let (version, snapshot) = resolve_snapshot(snapshot_name, reg_url, api_key, &origin)?;
             let parsed_mounts = start::parse_mounts(&mounts)?;
 
             start::run(start::RunConfig {
@@ -128,7 +142,41 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn resolve_snapshot(name: &str, reg_url: &str) -> Result<(String, registry::Snapshot)> {
+fn pull_with_one_retry(
+    snap: &registry::Snapshot,
+    requested: &str,
+    reg_url: &str,
+    api_key: Option<&str>,
+    snapshots: Vec<registry::Snapshot>,
+) -> Result<Vec<registry::Snapshot>> {
+    match pull::pull(snap, reg_url, api_key) {
+        Ok(_) => Ok(snapshots),
+        Err(refused) if registry::is_auth_refused(&refused) => {
+            let (_, fresh) = registry::fetch(reg_url, api_key)
+                .context("the snapshot was refused, and the catalogue could not be refreshed")?;
+            let snap = registry::resolve(&fresh, requested).with_context(|| {
+                registry::not_found_message(requested, reg_url, api_key.is_some())
+            })?;
+
+            pull::pull(snap, reg_url, api_key).map_err(|again| {
+                anyhow::anyhow!(
+                    "{again}\n\nRefused again after refreshing the catalogue from \
+                     {reg_url}. A stale signed URL would have been fixed by that \
+                     refresh, so this is the key or the organisation, not the cache."
+                )
+            })?;
+            Ok(fresh)
+        }
+        Err(other) => Err(other),
+    }
+}
+
+fn resolve_snapshot(
+    name: &str,
+    reg_url: &str,
+    api_key: Option<&str>,
+    origin: &str,
+) -> Result<(String, registry::Snapshot)> {
     // Try local file first (for testing)
     // let local_paths = [
     //     std::path::PathBuf::from(&name),
@@ -151,49 +199,22 @@ fn resolve_snapshot(name: &str, reg_url: &str) -> Result<(String, registry::Snap
     //     }
     // }
 
-    if let Ok((version, snapshots)) = registry::fetch(reg_url)
-        && let Some(snap) = registry::resolve(&snapshots, name)
-    {
-        let path = if pull::is_cached(snap) {
-            pull::snapshot_path(snap)
-        } else {
-            let path = pull::pull(snap)?;
-            pull::prune_stale(&snapshots);
-            path
-        };
+    let (version, snapshots) = registry::fetch(reg_url, api_key)?;
 
-        let mut snap = snap.clone();
-        snap.url = path.to_str().unwrap().to_string();
-        return Ok((version, snap));
-    }
+    let mut snap = registry::resolve(&snapshots, name)
+        .with_context(|| registry::not_found_message(name, reg_url, api_key.is_some()))?
+        .clone();
 
-    anyhow::bail!("snapshot '{}' not found in registry", name)
+    let path = if pull::is_cached(&snap) {
+        pull::record_pull_origin(&snap, origin);
+        pull::snapshot_path(&snap)
+    } else {
+        let fresh = pull_with_one_retry(&snap, name, reg_url, api_key, snapshots)?;
+        pull::record_pull_origin(&snap, origin);
+        pull::prune_stale(&fresh, origin);
+        pull::snapshot_path(&snap)
+    };
+
+    snap.url = path.to_str().unwrap().to_string();
+    Ok((version, snap))
 }
-
-// fn list_local_snapshots() {
-//     for base in [
-//         std::env::current_exe()
-//             .ok()
-//             .and_then(|p| p.parent().map(|p| p.to_path_buf())),
-//         Some(PathBuf::from(".")),
-//         Some(PathBuf::from("dist")),
-//     ]
-//     .into_iter()
-//     .flatten()
-//     {
-//         if let Ok(entries) = std::fs::read_dir(&base) {
-//             for entry in entries.flatten() {
-//                 let path = entry.path();
-//                 if path.extension().and_then(|e| e.to_str()) == Some("snap") {
-//                     let name = path.file_stem()
-//                         .and_then(|n| n.to_str())
-//                         .unwrap_or("unknown");
-//                     println!(
-//                         "{:<20} {:<12} {:<10} {}",
-//                         name, "dev", "256MB", path.display()
-//                     );
-//                 }
-//             }
-//         }
-//     }
-// }

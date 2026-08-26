@@ -5,8 +5,9 @@ import type { CatalogueOptions } from "./catalogue.js";
 import type { SnapshotStorage } from "./store.js";
 import type { SnapshotEntry } from "./types.js";
 
-export { DEFAULT_REGISTRY_URL, fetchCatalogue, resolveSnapshot } from "./catalogue.js";
-export { resolveRegistryUrl } from "./registry.js";
+export { DEFAULT_REGISTRY_URL, fetchCatalogue, resolveSnapshot, SnapshotAuthError } from "./catalogue.js";
+export { PRIVATE_REGISTRY_URL, PUBLIC_REGISTRY_URL, resolveRegistryUrl } from "./registry.js";
+export { authHeaders, checkApiKeyKind, isBrowser, keyFingerprint, resolveApiKey, sameOrigin } from "./auth.js";
 export { pullSnapshot, evictById } from "./pull.js";
 export { SnapshotStore } from "./store.js";
 export type { CachedFile, SnapshotStorage } from "./store.js";
@@ -39,9 +40,11 @@ async function defaultStore(explicit: SnapshotStorage | null | undefined) {
     if (explicit !== undefined) {
         return explicit;
     }
+
     if (SnapshotStore.available()) {
         return await SnapshotStore.open();
     }
+
     return hostStore === null ? null : await hostStore();
 }
 

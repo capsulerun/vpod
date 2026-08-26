@@ -1,5 +1,11 @@
+import { authHeaders, checkApiKeyKind, resolveApiKey } from "./auth.js";
 import { resolveRegistryUrl } from "./registry.js";
-import { fetchCatalogue, resolveSnapshot, type CatalogueOptions } from "./catalogue.js";
+import {
+    fetchCatalogue,
+    resolveSnapshot,
+    SnapshotAuthError,
+    type CatalogueOptions,
+} from "./catalogue.js";
 import { sha256Hex } from "./digest.js";
 import { SnapshotStore, type SnapshotStorage } from "./store.js";
 import type { PulledSnapshot, SnapshotEntry } from "./types.js";
@@ -19,11 +25,18 @@ export async function pullSnapshot(options: PullOptions = {}): Promise<PulledSna
               ? await SnapshotStore.open()
               : null;
 
+    const apiKey = resolveApiKey(options.apiKey);
+    if (apiKey !== undefined) {
+        checkApiKeyKind(apiKey);
+    }
+    const registryUrl = resolveRegistryUrl(options.registryUrl, apiKey);
+
     const catalogue = await fetchCatalogue(store, options);
     const entry = resolveSnapshot(
         catalogue.snapshots,
         name,
-        resolveRegistryUrl(options.registryUrl),
+        registryUrl,
+        apiKey !== undefined,
     );
 
     if (store !== null) {
@@ -33,12 +46,41 @@ export async function pullSnapshot(options: PullOptions = {}): Promise<PulledSna
         }
     }
 
-    return downloadAndStore(
-        store,
-        entry,
-        resolveRegistryUrl(options.registryUrl),
-        options.onProgress,
-    );
+    try {
+        return await downloadAndStore(store, entry, registryUrl, apiKey, options.onProgress);
+    } catch (thrown: unknown) {
+        if (!(thrown instanceof SnapshotAuthError)) {
+            throw thrown;
+        }
+
+        const refreshed = await fetchCatalogue(store, { ...options, force: true });
+        const refreshedEntry = resolveSnapshot(
+            refreshed.snapshots,
+            name,
+            registryUrl,
+            apiKey !== undefined,
+        );
+
+        try {
+            return await downloadAndStore(
+                store,
+                refreshedEntry,
+                registryUrl,
+                apiKey,
+                options.onProgress,
+            );
+        } catch (again: unknown) {
+            if (again instanceof SnapshotAuthError) {
+                throw new SnapshotAuthError(
+                    `vpod: ${refreshedEntry.id} was refused again after refreshing ` +
+                        `the catalogue from ${registryUrl}. A stale signed URL would ` +
+                        `have been fixed by that refresh, so this is the key or the ` +
+                        `org, not the cache. (${again.message})`,
+                );
+            }
+            throw again;
+        }
+    }
 }
 
 const snapshotFileName = (entry: SnapshotEntry): string => `${entry.id}.snap`;
@@ -91,12 +133,20 @@ async function downloadAndStore(
     store: SnapshotStorage | null,
     entry: SnapshotEntry,
     registryUrl: string,
+    apiKey: string | undefined,
     onProgress?: (loaded: number, total: number) => void,
 ): Promise<PulledSnapshot> {
     const url = resolvedAgainstCatalogue(entry.url, registryUrl);
 
     const startedAt = performance.now();
-    const response = await fetch(url);
+    const response = await fetch(url, { headers: authHeaders(url, registryUrl, apiKey) });
+
+    if (response.status === 401 || response.status === 403) {
+        throw new SnapshotAuthError(
+            `vpod: snapshot ${entry.id} returned ${response.status} from ${url}`,
+        );
+    }
+
     if (!response.ok) {
         throw new Error(
             `vpod: snapshot ${entry.id} returned ${response.status} from ${url}`,

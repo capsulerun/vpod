@@ -5,6 +5,7 @@ import ssl
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -12,14 +13,69 @@ import certifi
 import platformdirs
 
 PUBLIC_REGISTRY_URL = "https://registry.vpod.sh/v1/snapshots.json"
+PRIVATE_REGISTRY_URL = "https://api.vpod.sh/v1/snapshots.json"
+
 
 REGISTRY_URL = os.environ.get("VPOD_REGISTRY", PUBLIC_REGISTRY_URL)
 
 
-def _resolve_registry_url(registry_url: str | None) -> str:
+def _resolve_api_key(api_key: str | None) -> str | None:
+    if api_key:
+        return api_key
+    return os.environ.get("VPOD_API_KEY") or None
+
+
+def _check_api_key_kind(api_key: str) -> None:
+    if api_key.startswith("vpod_pk_"):
+        raise ValueError(
+            "vpod: this is a publishable key (vpod_pk_), and Python is not a "
+            "browser. Publishable keys are protected by an allowlist of "
+            "Origins, and nothing outside a browser sends an Origin the server "
+            "can trust, so the key buys you nothing here. Use a secret key "
+            "(vpod_sk_) instead."
+        )
+    if not api_key.startswith("vpod_sk_"):
+        raise ValueError(
+            "vpod: an API key must start with vpod_sk_ (server side) or "
+            "vpod_pk_ (browser). Got a key starting with "
+            f"{api_key[:8]!r}."
+        )
+
+
+def _resolve_registry_url(registry_url: str | None, api_key: str | None = None) -> str:
     if registry_url:
         return registry_url
-    return os.environ.get("VPOD_REGISTRY") or PUBLIC_REGISTRY_URL
+    from_environment = os.environ.get("VPOD_REGISTRY")
+    if from_environment:
+        return from_environment
+    return PRIVATE_REGISTRY_URL if api_key else PUBLIC_REGISTRY_URL
+
+
+def _key_fingerprint(api_key: str) -> str:
+    """Identifies a key on disk without ever writing the key to disk."""
+    return hashlib.sha256(api_key.encode()).hexdigest()[:12]
+
+
+def _origin_tag(registry_url: str, api_key: str | None) -> str:
+    return registry_url if api_key is None else f"{registry_url}#{_key_fingerprint(api_key)}"
+
+
+def _same_origin(url: str, other: str) -> bool:
+    from urllib.parse import urlsplit
+
+    left, right = urlsplit(url), urlsplit(other)
+    return (left.scheme, left.hostname, left.port) == (
+        right.scheme,
+        right.hostname,
+        right.port,
+    )
+
+
+def _request_headers(url: str, registry_url: str, api_key: str | None) -> dict[str, str]:
+    headers = {"User-Agent": f"vpod-py/{_version()}"}
+    if api_key is not None and _same_origin(url, registry_url):
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
 
 
 def _create_ssl_context():
@@ -32,7 +88,15 @@ def cache_dir() -> Path:
     return base / "vpod" / "snapshots"
 
 
-def pull(name: str = "vsnap-base:latest", registry_url: str | None = None) -> Path:
+class SnapshotAuthError(RuntimeError):
+    """The registry or the blob store refused the key, not the network."""
+
+
+def pull(
+    name: str = "vsnap-base:latest",
+    registry_url: str | None = None,
+    api_key: str | None = None,
+) -> Path:
     """
     Downloads from the registry if not already cached.
     If the cached snapshot is corrupt, force-refreshes the registry and re-downloads.
@@ -43,21 +107,26 @@ def pull(name: str = "vsnap-base:latest", registry_url: str | None = None) -> Pa
         if custom_path.exists():
             return custom_path
 
-    resolved_registry = _resolve_registry_url(registry_url)
-    registry = fetch_registry(resolved_registry)
-    snapshot = resolve_snapshot(registry, name, resolved_registry)
+    api_key = _resolve_api_key(api_key)
+    if api_key is not None:
+        _check_api_key_kind(api_key)
+
+    resolved_registry = _resolve_registry_url(registry_url, api_key)
+    origin = _origin_tag(resolved_registry, api_key)
+    registry = fetch_registry(resolved_registry, api_key)
+    snapshot = resolve_snapshot(registry, name, resolved_registry, api_key is not None)
 
     dest = cache_dir() / f"{snapshot['id']}.snap"
     meta = dest.with_suffix(".meta")
 
     if dest.exists() and meta.exists() and meta.read_text().strip() == snapshot["sha256"]:
         if _validate_snapshot_magic(dest):
-            _record_origin(dest, resolved_registry)
+            _record_origin(dest, origin)
             return dest
 
-        _registry_cache_path(resolved_registry).unlink(missing_ok=True)
-        registry = fetch_registry(resolved_registry)
-        snapshot = resolve_snapshot(registry, name, resolved_registry)
+        _registry_cache_path(resolved_registry, api_key).unlink(missing_ok=True)
+        registry = fetch_registry(resolved_registry, api_key)
+        snapshot = resolve_snapshot(registry, name, resolved_registry, api_key is not None)
         dest = cache_dir() / f"{snapshot['id']}.snap"
         meta = dest.with_suffix(".meta")
         dest.unlink(missing_ok=True)
@@ -68,25 +137,46 @@ def pull(name: str = "vsnap-base:latest", registry_url: str | None = None) -> Pa
     from ._component import prewarm
     prewarm()
 
-    _download_and_decompress(snapshot["url"], dest, snapshot["sha256"])
+    try:
+        _download_and_decompress(
+            snapshot["url"], dest, snapshot["sha256"], resolved_registry, api_key
+        )
+    except SnapshotAuthError:
+        _registry_cache_path(resolved_registry, api_key).unlink(missing_ok=True)
+        registry = fetch_registry(resolved_registry, api_key, force=True)
+        snapshot = resolve_snapshot(registry, name, resolved_registry, api_key is not None)
+        dest = cache_dir() / f"{snapshot['id']}.snap"
+        meta = dest.with_suffix(".meta")
+        try:
+            _download_and_decompress(
+                snapshot["url"], dest, snapshot["sha256"], resolved_registry, api_key
+            )
+        except SnapshotAuthError as refused:
+            raise SnapshotAuthError(
+                f"vpod: {snapshot['id']} was refused again after refreshing the "
+                f"catalogue from {resolved_registry}. A stale signed URL would "
+                f"have been fixed by that refresh, so this is the key or the "
+                f"org, not the cache. ({refused})"
+            ) from refused
+
     meta.write_text(snapshot["sha256"])
-    _record_origin(dest, resolved_registry)
-    _prune_stale_snapshots(registry, resolved_registry)
+    _record_origin(dest, origin)
+    _prune_stale_snapshots(registry, origin)
 
     return dest
 
 
-def _record_origin(dest: Path, registry_url: str) -> None:
+def _record_origin(dest: Path, origin: str) -> None:
     origin_file = dest.with_suffix(".origin")
     if origin_file.exists():
         return
     try:
-        origin_file.write_text(registry_url)
+        origin_file.write_text(origin)
     except OSError as unwritable:
         print(f"vpod: cannot record the origin of {dest.name}: {unwritable}", file=sys.stderr)
 
 
-def _prune_stale_snapshots(registry: list[dict], registry_url: str) -> None:
+def _prune_stale_snapshots(registry: list[dict], current_origin: str) -> None:
     known_ids = {snapshot["id"] for snapshot in registry}
     referenced_by_instances, references_are_complete = _snapshots_referenced_by_instances()
 
@@ -101,10 +191,10 @@ def _prune_stale_snapshots(registry: list[dict], registry_url: str) -> None:
 
             origin_file = snap_file.with_suffix(".origin")
             try:
-                origin = origin_file.read_text().strip()
+                recorded_origin = origin_file.read_text().strip()
             except OSError:
                 continue
-            if origin != registry_url:
+            if recorded_origin != current_origin:
                 continue
 
             print(
@@ -150,17 +240,21 @@ _REGISTRY_CACHE = cache_dir() / "snapshots.json"
 _REGISTRY_VERSION_MARKER = cache_dir() / "snapshots.json.sdkver"
 
 
-def _registry_cache_path(registry_url: str) -> Path:
-    if registry_url == PUBLIC_REGISTRY_URL:
+def _registry_cache_path(registry_url: str, api_key: str | None = None) -> Path:
+    if registry_url == PUBLIC_REGISTRY_URL and api_key is None:
         return _REGISTRY_CACHE
-    digest = hashlib.sha256(registry_url.encode()).hexdigest()[:8]
+    material = registry_url if api_key is None else f"{registry_url}#{_key_fingerprint(api_key)}"
+    digest = hashlib.sha256(material.encode()).hexdigest()[:8]
 
     return cache_dir() / f"snapshots-{digest}.json"
 
 
-def catalog(registry_url: str | None = None) -> list[dict]:
+def catalog(registry_url: str | None = None, api_key: str | None = None) -> list[dict]:
     """Return the list of available snapshots, fetching from the registry if needed."""
-    return fetch_registry(_resolve_registry_url(registry_url))
+    api_key = _resolve_api_key(api_key)
+    if api_key is not None:
+        _check_api_key_kind(api_key)
+    return fetch_registry(_resolve_registry_url(registry_url, api_key), api_key)
 
 
 def _registry_cache_version_matches() -> bool:
@@ -170,11 +264,18 @@ def _registry_cache_version_matches() -> bool:
         return False
 
 
-def fetch_registry(registry_url: str | None = None) -> list[dict]:
-    registry_url = registry_url or REGISTRY_URL
-    cache_path = _registry_cache_path(registry_url)
+def fetch_registry(
+    registry_url: str | None = None,
+    api_key: str | None = None,
+    force: bool = False,
+) -> list[dict]:
+    api_key = _resolve_api_key(api_key)
+    if api_key is not None:
+        _check_api_key_kind(api_key)
+    registry_url = _resolve_registry_url(registry_url, api_key)
+    cache_path = _registry_cache_path(registry_url, api_key)
 
-    if cache_path.exists() and _registry_cache_version_matches():
+    if not force and cache_path.exists() and _registry_cache_version_matches():
         age = time.time() - cache_path.stat().st_mtime
         if age < _REGISTRY_TTL:
             return json.loads(cache_path.read_text())["snapshots"]
@@ -182,7 +283,7 @@ def fetch_registry(registry_url: str | None = None) -> list[dict]:
     try:
         request = urllib.request.Request(
             registry_url,
-            headers={"User-Agent": f"vpod-py/{_version()}"},
+            headers=_request_headers(registry_url, registry_url, api_key),
         )
         context = _create_ssl_context()
 
@@ -193,6 +294,23 @@ def fetch_registry(registry_url: str | None = None) -> list[dict]:
         cache_path.write_bytes(data)
         _REGISTRY_VERSION_MARKER.write_text(_version())
         return json.loads(data)["snapshots"]
+    except urllib.error.HTTPError as http_error:
+        if http_error.code in (401, 403):
+            reason = (
+                "The key may be revoked, or it may belong to a different "
+                "organisation than the snapshot you asked for."
+                if api_key
+                else "No API key was sent. Set VPOD_API_KEY or pass api_key=."
+            )
+            raise SnapshotAuthError(
+                f"vpod: {registry_url} refused the request "
+                f"({http_error.code}). {reason}"
+            ) from http_error
+        if cache_path.exists():
+            return json.loads(cache_path.read_text())["snapshots"]
+        raise ConnectionError(
+            f"Failed to fetch snapshot registry from {registry_url}: {http_error}"
+        ) from http_error
     except Exception as e:
         if cache_path.exists():
             return json.loads(cache_path.read_text())["snapshots"]
@@ -209,7 +327,12 @@ def _version() -> str:
         return "0.0.0"
 
 
-def resolve_snapshot(registry: list[dict], name: str, registry_url: str | None = None) -> dict:
+def resolve_snapshot(
+    registry: list[dict],
+    name: str,
+    registry_url: str | None = None,
+    authenticated: bool = False,
+) -> dict:
     want_name, _, want_tag = name.partition(":")
     want_tag = want_tag or "latest"
 
@@ -222,16 +345,29 @@ def resolve_snapshot(registry: list[dict], name: str, registry_url: str | None =
 
     available = ", ".join(f"{s['name']}:{s['tag']}" for s in registry) or "nothing"
     searched = f" in {registry_url}" if registry_url else ""
-    raise ValueError(f"Snapshot '{name}' not found{searched}. Available: {available}")
+    credentials = (
+        " An API key WAS sent, so this catalogue is what that key can reach."
+        if authenticated
+        else " No API key was sent, so only public snapshots were searched."
+    )
+    raise ValueError(
+        f"Snapshot '{name}' not found{searched}. Available: {available}.{credentials}"
+    )
 
 
-def _download_and_decompress(url: str, dest: Path, expected_sha256: str) -> None:
+def _download_and_decompress(
+    url: str,
+    dest: Path,
+    expected_sha256: str,
+    registry_url: str | None = None,
+    api_key: str | None = None,
+) -> None:
     tmp_compressed = dest.with_suffix(".tmp.dl")
     tmp_raw = dest.with_suffix(".tmp")
     try:
         request = urllib.request.Request(
             url,
-            headers={"User-Agent": f"vpod-py/{_version()}"},
+            headers=_request_headers(url, registry_url or url, api_key),
         )
         context = _create_ssl_context()
         with urllib.request.urlopen(request, timeout=60, context=context) as response:
@@ -247,6 +383,14 @@ def _download_and_decompress(url: str, dest: Path, expected_sha256: str) -> None
         _decompress_file(tmp_compressed, tmp_raw)
         tmp_compressed.unlink()
         shutil.move(tmp_raw, dest)
+    except urllib.error.HTTPError as http_error:
+        tmp_compressed.unlink(missing_ok=True)
+        tmp_raw.unlink(missing_ok=True)
+        if http_error.code in (401, 403):
+            raise SnapshotAuthError(
+                f"vpod: {url} returned {http_error.code}"
+            ) from http_error
+        raise
     except Exception:
         tmp_compressed.unlink(missing_ok=True)
         tmp_raw.unlink(missing_ok=True)
