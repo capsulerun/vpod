@@ -172,11 +172,7 @@ fn run_shell_slice(
     )
 }
 
-fn finish_shell_exec(
-    session: &mut Session,
-    state: repl::ExecState,
-    trim: bool,
-) -> ExecutionResult {
+fn finish_shell_exec(session: &mut Session, state: repl::ExecState, trim: bool) -> ExecutionResult {
     let was_terminal = state.is_terminal();
     let stderr_tail = repl::finish_stderr(&state);
     let stdout = repl::finish_output(&session.bus, None, false, state, trim);
@@ -199,7 +195,11 @@ fn finish_shell_exec(
     stderr.push_str(&String::from_utf8_lossy(
         &session.bus.uart_stderr.drain_tx(),
     ));
-    let stderr = if trim { stderr.trim_end().to_string() } else { stderr };
+    let stderr = if trim {
+        stderr.trim_end().to_string()
+    } else {
+        stderr
+    };
 
     if session.is_shell && timed_out {
         recover_shell(session);
@@ -307,8 +307,7 @@ fn install_prompt_sentinel(bus: &mut MachineBus, hart: &mut Hart, prompt_bytes: 
         return;
     }
 
-    let export =
-        "set -o ignoreeof; export PS2=''; \
+    let export = "set -o ignoreeof; export PS2=''; \
          export PS1='$(__ec $?)'\"$(printf '\\037vpod\\037')\"; export -n PS1\n";
     for byte in export.bytes() {
         bus.uart.push_rx(byte);
