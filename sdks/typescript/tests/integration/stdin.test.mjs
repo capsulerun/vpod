@@ -125,6 +125,75 @@ describe("stdin", { skip: skipReason() ?? false }, () => {
         });
     });
 
+    it("leaves the session usable after a nested shell", async () => {
+
+        await withSandbox(async (sandbox) => {
+            const { readable, writer } = pipe();
+            const nested = sandbox.commands.run("sh", {
+                stdin: readable,
+                tty: true,
+                timeout: 30,
+            });
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            await writer.write("exit\n");
+            assert.equal((await nested).exitCode, 0);
+
+            const after = await sandbox.commands.run("expr 2 + 2", { timeout: 20 });
+            assert.equal(after.stdout, "4");
+            assert.equal(after.exitCode, 0);
+        });
+    });
+
+    it("keeps the prompt out of child processes", async () => {
+        await withSandbox(async (sandbox) => {
+            const child = await sandbox.commands.run(`sh -c 'echo "[$PS1]"'`, {
+                timeout: 20,
+            });
+            assert.ok(!child.stdout.includes("__ec"), child.stdout);
+        });
+    });
+
+    it("ends the input even on a terminal when given a string", async () => {
+        await withSandbox(async (sandbox) => {
+            const result = await sandbox.commands.run("cat", {
+                stdin: "hello\n",
+                tty: true,
+                timeout: 30,
+            });
+            assert.equal(result.exitCode, 0, "a string is finite, so it has to end");
+            assert.ok(result.stdout.includes("hello"));
+        });
+    });
+
+    it("keeps the newline the program wrote in the last chunk", async () => {
+        await withSandbox(async (sandbox) => {
+            const chunks = [];
+            const result = await sandbox.commands.run("/bin/echo hi", {
+                onStdout: (chunk) => chunks.push(chunk),
+                timeout: 20,
+            });
+            assert.deepEqual(chunks, ["hi\n"], "the last chunk used to arrive trimmed");
+            assert.equal(result.stdout, "hi");
+        });
+    });
+
+    it("abandons a stream with a reason the caller can read", async () => {
+        await withSandbox(async (sandbox) => {
+            const { readable, writer } = pipe();
+            const running = sandbox.commands.run("head -1", {
+                stdin: readable,
+                timeout: 30,
+            });
+            await writer.write("kept\n");
+            await running;
+
+            await assert.rejects(
+                () => writer.write("late\n"),
+                (thrown) => thrown instanceof Error && thrown.message.includes("vpod:"),
+            );
+        });
+    });
+
     it("takes an async iterable too", async () => {
         await withSandbox(async (sandbox) => {
             async function* lines() {

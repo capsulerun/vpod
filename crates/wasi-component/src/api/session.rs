@@ -118,7 +118,8 @@ fn begin_shell_exec(session: &mut Session, code: String, timeout_secs: u64, mode
                 "{{\n\
                  stty icanon -echo\n\
                  {code}\n\
-                 }} 2>&1\n"
+                 }} 2>&1; __vpod_rc=$?; stty -icanon min 0 time 0; cat >/dev/null; \
+                 stty icanon -echo; (exit $__vpod_rc)\n"
             ),
         }
     } else {
