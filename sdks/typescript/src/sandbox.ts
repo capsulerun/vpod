@@ -93,6 +93,11 @@ export class Execution {
         return this.exitCode !== null;
     }
 
+    /** How this command's stdin and streams are wired. */
+    get mode(): ExecMode {
+        return this.#mode;
+    }
+
     write(data: string | Uint8Array): void {
         this.#outbox.push(toBytes(data));
     }
@@ -221,7 +226,7 @@ export class Commands {
         const execution = await this.start(command, options);
 
         const feeding =
-            options.stdin === undefined ? null : feedStdin(execution, options.stdin);
+            options.stdin === undefined ? null : feedStdin(execution, options.stdin, execution.mode);
 
         const onAbort = () => execution.interrupt();
         options.signal?.addEventListener("abort", onAbort, { once: true });
@@ -263,10 +268,23 @@ export class Commands {
     #running: Execution | null = null;
 }
 
-function feedStdin(execution: Execution, stdin: Stdin): { stop(): Promise<void> } {
+function feedStdin(
+    execution: Execution,
+    stdin: Stdin,
+    mode: ExecMode,
+): { stop(): Promise<void> } {
     if (typeof stdin === "string" || stdin instanceof Uint8Array) {
         execution.write(stdin);
         return { stop: async () => {} };
+    }
+
+    if (mode !== "terminal") {
+        throw new Error(
+            "streaming stdin needs tty: true. Without it the command reads a staged " +
+                "file, so anything produced after it starts cannot reach it and the " +
+                "command waits for an EOF that never comes. Pass a string or Uint8Array " +
+                "for finite input, or tty: true to stream.",
+        );
     }
 
     let stopped = false;
