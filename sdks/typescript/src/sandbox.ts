@@ -54,9 +54,21 @@ export interface RunOptions {
 
 const encoder = new TextEncoder();
 
+/** Ctrl-D. Canonical mode turns it into a real end-of-file for the foreground command. */
+const STREAM_EOF = new Uint8Array([0x04]);
+
+const isStreaming = (stdin: Stdin): boolean =>
+    typeof stdin !== "string" && !(stdin instanceof Uint8Array);
+
+function modeFor(options: RunOptions): ExecMode {
+    if (options.stdin === undefined) return options.tty ? "terminal" : "closed";
+    return options.tty || isStreaming(options.stdin) ? "terminal" : "piped";
+}
+
 const toBytes = (chunk: string | Uint8Array): Uint8Array =>
     typeof chunk === "string" ? encoder.encode(chunk) : chunk;
 
+/** @internal The handle `run` drives. Not part of the public API. */
 export class Execution {
     #runtime: SandboxRuntime;
     #handle: bigint;
@@ -191,17 +203,11 @@ export class Commands {
         this.#sandbox = sandbox;
     }
 
-    async start(command: string, options: RunOptions = {}): Promise<Execution> {
-        const mode: ExecMode = options.tty
-            ? "terminal"
-            : options.stdin !== undefined
-              ? "piped"
-              : "closed";
-
+    async #start(command: string, options: RunOptions): Promise<Execution> {
         const execution = await this.#sandbox._start(
             command,
             options.timeout ?? DEFAULT_TIMEOUT_SECONDS,
-            mode,
+            modeFor(options),
         );
         this.#running = execution;
         return execution;
@@ -223,10 +229,10 @@ export class Commands {
         }
 
         options.signal?.throwIfAborted();
-        const execution = await this.start(command, options);
+        const execution = await this.#start(command, options);
 
         const feeding =
-            options.stdin === undefined ? null : feedStdin(execution, options.stdin, execution.mode);
+            options.stdin === undefined ? null : feedStdin(execution, options.stdin);
 
         const onAbort = () => execution.interrupt();
         options.signal?.addEventListener("abort", onAbort, { once: true });
@@ -250,7 +256,7 @@ export class Commands {
             }
         } finally {
             options.signal?.removeEventListener("abort", onAbort);
-            await feeding?.stop();
+            feeding?.stop();
         }
 
         options.signal?.throwIfAborted();
@@ -268,30 +274,19 @@ export class Commands {
     #running: Execution | null = null;
 }
 
-function feedStdin(
-    execution: Execution,
-    stdin: Stdin,
-    mode: ExecMode,
-): { stop(): Promise<void> } {
+function feedStdin(execution: Execution, stdin: Stdin): { stop(): void } {
     if (typeof stdin === "string" || stdin instanceof Uint8Array) {
         execution.write(stdin);
-        return { stop: async () => {} };
-    }
-
-    if (mode !== "terminal") {
-        throw new Error(
-            "streaming stdin needs tty: true. Without it the command reads a staged " +
-                "file, so anything produced after it starts cannot reach it and the " +
-                "command waits for an EOF that never comes. Pass a string or Uint8Array " +
-                "for finite input, or tty: true to stream.",
-        );
+        return { stop: () => {} };
     }
 
     let stopped = false;
+    let cancel: (() => void) | null = null;
 
     const pump = (async () => {
         if (typeof (stdin as ReadableStream).getReader === "function") {
             const reader = (stdin as ReadableStream<string | Uint8Array>).getReader();
+            cancel = () => void reader.cancel().catch(() => {});
             try {
                 for (;;) {
                     const { done, value } = await reader.read();
@@ -302,18 +297,24 @@ function feedStdin(
                 reader.releaseLock();
             }
         } else {
-            for await (const chunk of stdin as AsyncIterable<string | Uint8Array>) {
-                if (stopped) break;
-                execution.write(chunk);
+            const iterator = (stdin as AsyncIterable<string | Uint8Array>)[Symbol.asyncIterator]();
+            cancel = () => void iterator.return?.(undefined).catch?.(() => {});
+            for (;;) {
+                const { done, value } = await iterator.next();
+                if (done || stopped) break;
+                if (value !== undefined) execution.write(value);
             }
         }
 
+        if (!stopped && !execution.done) execution.write(STREAM_EOF);
     })();
 
+    pump.catch(() => {});
+
     return {
-        stop: async () => {
+        stop: () => {
             stopped = true;
-            await pump.catch(() => {});
+            cancel?.();
         },
     };
 }
@@ -400,7 +401,7 @@ export class Sandbox {
         corsProxy: string | undefined,
     ): Promise<void> {
         if (runtime.networkBackend !== "none") {
-            return; // Node already has real sockets.
+            return;
         }
 
         if (requested === false) {
