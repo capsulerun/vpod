@@ -205,7 +205,7 @@ fn finish_shell_exec(session: &mut Session, state: repl::ExecState, trim: bool) 
         recover_shell(session);
     }
 
-    if session.is_shell && was_terminal && !session.shell_lost {
+    if session.is_shell && was_terminal && timed_out && !session.shell_lost {
         restore_terminal(session);
     }
 

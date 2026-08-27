@@ -194,6 +194,51 @@ describe("stdin", { skip: skipReason() ?? false }, () => {
         });
     });
 
+    it("does not run input the command never read", async () => {
+        await withSandbox(async (sandbox) => {
+            await sandbox.commands.run("rm -f /tmp/leftover-ran", { timeout: 20 });
+
+            const result = await sandbox.commands.run("head -1", {
+                stdin: "kept\ntouch /tmp/leftover-ran\n",
+                tty: true,
+                timeout: 30,
+            });
+            assert.ok(result.stdout.includes("kept"));
+
+            const verdict = await sandbox.commands.run(
+                "if [ -e /tmp/leftover-ran ]; then echo EXECUTED; else echo clean; fi",
+                { timeout: 20 },
+            );
+            assert.equal(verdict.stdout.trim(), "clean", "leftover input reached the shell");
+        });
+    });
+
+    it("never lets the prompt sentinel reach the caller", async () => {
+        await withSandbox(async (sandbox) => {
+            const result = await sandbox.commands.run("head -2", {
+                stdin: "alpha\nbeta\ngamma\n",
+                tty: true,
+                timeout: 30,
+            });
+            assert.ok(!result.stdout.includes("\u001f"), JSON.stringify(result.stdout));
+
+            const after = await sandbox.commands.run("echo alive", { timeout: 20 });
+            assert.equal(after.stdout, "alive", JSON.stringify(after.stdout));
+        });
+    });
+
+    it("still reports the command's own exit code on a terminal", async () => {
+        await withSandbox(async (sandbox) => {
+            const failed = await sandbox.commands.run("sh -c 'exit 7'", {
+                tty: true,
+                timeout: 20,
+            });
+            assert.equal(failed.exitCode, 7);
+            const ok = await sandbox.commands.run("true", { tty: true, timeout: 20 });
+            assert.equal(ok.exitCode, 0);
+        });
+    });
+
     it("takes an async iterable too", async () => {
         await withSandbox(async (sandbox) => {
             async function* lines() {

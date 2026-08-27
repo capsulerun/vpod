@@ -1048,6 +1048,39 @@ def test_a_streamed_chunk_keeps_the_newline_the_program_wrote():
         assert result.stdout == "hi"
 
 
+def test_input_the_command_never_read_is_not_run_as_a_command():
+    with Sandbox.create() as sbx:
+        sbx.commands.run("rm -f /tmp/leftover-ran", timeout=20)
+
+        result = sbx.commands.run(
+            "head -1", stdin="kept\ntouch /tmp/leftover-ran\n", tty=True, timeout=30
+        )
+        assert "kept" in result.stdout
+
+        verdict = sbx.commands.run(
+            "if [ -e /tmp/leftover-ran ]; then echo EXECUTED; else echo clean; fi",
+            timeout=20,
+        )
+        assert verdict.stdout.strip() == "clean", "leftover input reached the shell"
+
+
+def test_the_prompt_sentinel_never_reaches_the_caller():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run(
+            "head -2", stdin="alpha\nbeta\ngamma\n", tty=True, timeout=30
+        )
+        assert "\x1f" not in result.stdout, repr(result.stdout)
+
+        after = sbx.commands.run("echo alive", timeout=20)
+        assert after.stdout == "alive", repr(after.stdout)
+
+
+def test_a_terminal_command_still_reports_its_own_exit_code():
+    with Sandbox.create() as sbx:
+        assert sbx.commands.run("sh -c 'exit 7'", tty=True, timeout=20).exit_code == 7
+        assert sbx.commands.run("true", tty=True, timeout=20).exit_code == 0
+
+
 def test_terminal_mode_restores_the_shell_for_the_next_command():
     with Sandbox.create() as sbx:
         sbx.commands.run("python3 -c 'input()'", stdin="x\n", tty=True, timeout=30)

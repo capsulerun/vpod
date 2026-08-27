@@ -125,6 +125,12 @@ export class Execution {
         this.#eofPending = true;
     }
 
+    endInputNow(): void {
+        if (!this.#tty || this.#eofSent) return;
+        this.#eofSent = true;
+        this.#outbox.push(STREAM_EOF);
+    }
+
     interrupt(): void {
         this.#interruptRequested = true;
     }
@@ -293,7 +299,7 @@ export class Commands {
 function feedStdin(execution: Execution, stdin: Stdin): { stop(): void } {
     if (typeof stdin === "string" || stdin instanceof Uint8Array) {
         execution.write(stdin);
-        execution.endInput();
+        execution.endInputNow();
         return { stop: () => {} };
     }
 
