@@ -116,7 +116,7 @@ fn begin_shell_exec(session: &mut Session, code: String, timeout_secs: u64, mode
             ExecMode::Piped => format!("{{\n{code}\n}} 2>/dev/ttyS1\n"),
             ExecMode::Terminal => format!(
                 "{{\n\
-                 stty -icanon -echo\n\
+                 stty icanon -echo\n\
                  {code}\n\
                  }} 2>&1\n"
             ),

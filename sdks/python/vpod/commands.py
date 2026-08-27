@@ -9,9 +9,23 @@ SLICE_NANOS = 100_000_000
 
 CLOSED, PIPED, TERMINAL = "closed", "piped", "terminal"
 
+# Ctrl-D equivalent for ending the input
+STREAM_EOF = b"\x04"
+
+
+def as_bytes(chunk) -> bytes:
+    return chunk.encode() if isinstance(chunk, str) else bytes(chunk)
+
+
+def mode_for(stdin, tty: bool) -> str:
+    if stdin is None:
+        return TERMINAL if tty else CLOSED
+    streaming = not isinstance(stdin, (str, bytes, bytearray))
+    return TERMINAL if tty or streaming else PIPED
+
 
 class Execution:
-    """A command in flight."""
+    """A command in flight. Internal: `Commands.run` is the supported entry point."""
 
     def __init__(self, exports, session_id, command, timeout, mode):
         self._exports = exports
@@ -22,6 +36,9 @@ class Execution:
 
         self._pending = command
         self._outbox = queue.Queue()
+        self._source = None
+        self._eof_pending = False
+        self._eof_sent = False
         self._interrupt_requested = threading.Event()
         self._interrupt_sent = False
 
@@ -36,7 +53,6 @@ class Execution:
     def write(self, data) -> None:
         """Queue input for the command's stdin. Safe from any thread."""
         self._outbox.put(data)
-
 
     def interrupt(self) -> None:
         self._interrupt_requested.set()
@@ -108,6 +124,16 @@ class Execution:
 
     def _flush_input(self) -> None:
         buffered = bytearray()
+        closed = self._eof_pending
+        self._eof_pending = False
+
+        if self._source is not None:
+            try:
+                buffered.extend(as_bytes(next(self._source)))
+            except StopIteration:
+                self._source = None
+                closed = True
+
         while True:
             try:
                 item = self._outbox.get_nowait()
@@ -115,10 +141,16 @@ class Execution:
                 break
 
             if item is None:
+                closed = True
                 continue
-            if isinstance(item, str):
-                item = item.encode()
-            buffered.extend(item)
+            buffered.extend(as_bytes(item))
+
+        if closed and self._tty and not self._eof_sent and not self.done:
+            if buffered:
+                self._eof_pending = True
+            else:
+                buffered.extend(STREAM_EOF)
+                self._eof_sent = True
 
         if buffered:
             unwrap_result(self._exports["session-stdin"](self._session_id, bytes(buffered)))
@@ -133,10 +165,7 @@ class Commands:
         self._get_session_id = get_session_id
         self._running = None
 
-    def start(
-        self, command: str, timeout: int = 120, tty: bool = False, stdin_open: bool = False
-    ) -> Execution:
-        mode = TERMINAL if tty else (PIPED if stdin_open else CLOSED)
+    def _start(self, command: str, timeout: int, mode: str) -> Execution:
         execution = Execution(
             self._get_exports(), self._get_session_id(), command, timeout, mode
         )
@@ -152,9 +181,7 @@ class Commands:
         stdin=None,
         tty: bool = False,
     ) -> CommandResult:
-        execution = self.start(
-            command, timeout=timeout, tty=tty, stdin_open=stdin is not None
-        )
+        execution = self._start(command, timeout, mode_for(stdin, tty))
 
         if stdin is not None:
             self._feed(execution, stdin)
@@ -186,16 +213,7 @@ class Commands:
             return
 
         if isinstance(stdin, queue.Queue):
-            if execution._mode != TERMINAL:
-                raise ValueError(
-                    "streaming stdin needs tty=True. Without it the command reads a "
-                    "staged file, so anything queued after it starts cannot reach it "
-                    "and the command waits for an EOF that never comes. Pass str or "
-                    "bytes for finite input, or tty=True to stream."
-                )
             execution._outbox = stdin
             return
 
-        raise TypeError(
-            "stdin must be str, bytes, or a queue.Queue for interactive input"
-        )
+        execution._source = iter(stdin)

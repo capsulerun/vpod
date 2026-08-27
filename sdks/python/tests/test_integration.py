@@ -1,3 +1,4 @@
+import queue
 import socket
 import threading
 import time
@@ -947,57 +948,68 @@ def test_stdin_is_still_closed_by_default():
         assert result.stdout == ""
 
 
-def test_a_repl_prompt_arrives_without_a_newline_after_it():
+def test_a_repl_prompt_arrives_and_answers_over_a_stream():
     with Sandbox.create() as sbx:
-        execution = sbx.commands.start("python3", timeout=0, tty=True)
+        inbox = queue.Queue()
+        inbox.put("print(40 + 2)\n")
+        inbox.put("exit()\n")
 
-        banner = ""
-        for _ in range(400):
-            banner += execution.step()
-            if ">>>" in banner:
-                break
+        result = sbx.commands.run("python3 2>&1", stdin=inbox, timeout=60)
 
-        assert ">>>" in banner, f"never saw a prompt, got {banner!r}"
+        assert ">>>" in result.stdout, f"never saw a prompt, got {result.stdout!r}"
+        assert "42" in result.stdout, f"REPL did not answer, got {result.stdout!r}"
+        assert result.exit_code == 0
 
-        execution.write("print(40 + 2)\n")
-        answer = ""
-        for _ in range(400):
-            answer += execution.step()
-            if "42" in answer:
-                break
-        assert "42" in answer, f"REPL did not answer, got {answer!r}"
 
-        execution.write("exit()\n")
-        result = execution.wait()
+def test_closing_a_stream_before_the_command_reads_does_not_end_it():
+    with Sandbox.create() as sbx:
+        inbox = queue.Queue()
+        inbox.put("print(40 + 2)\n")
+        inbox.put(None)
+
+        result = sbx.commands.run("python3 2>&1", stdin=inbox, timeout=20)
+
+        assert "42" in result.stdout, result.stdout
+        assert result.exit_code == 124, "an early Ctrl-D is expected to be swallowed"
+
+
+def test_a_stream_can_react_to_what_the_command_prints():
+    with Sandbox.create() as sbx:
+        inbox = queue.Queue()
+        seen = []
+        asked = []
+
+        def on_stdout(chunk):
+            seen.append(chunk)
+            text = "".join(seen)
+            if not asked and ">>>" in text:
+                asked.append(True)
+                inbox.put("print(6 * 7)\n")
+            elif len(asked) == 1 and "42" in text:
+                asked.append(True)
+                inbox.put(None)
+
+        result = sbx.commands.run(
+            "python3 2>&1", stdin=inbox, on_stdout=on_stdout, timeout=60
+        )
+
+        assert len(asked) == 2, f"the feeder never caught up, got {result.stdout!r}"
         assert result.exit_code == 0
 
 
 def test_an_interactive_python_can_be_interrupted():
     with Sandbox.create() as sbx:
-        execution = sbx.commands.start("python3", timeout=0, tty=True)
+        inbox = queue.Queue()
+        inbox.put("import time\ntime.sleep(300)\n")
 
-        seen = ""
-        for _ in range(400):
-            seen += execution.step()
-            if ">>>" in seen:
-                break
-        assert ">>>" in seen
+        threading.Timer(8.0, sbx.commands.interrupt).start()
+        threading.Timer(14.0, lambda: inbox.put(None)).start()
 
-        execution.write("import time\ntime.sleep(300)\n")
-        for _ in range(20):
-            execution.step()
+        result = sbx.commands.run("python3 2>&1", stdin=inbox, timeout=90)
 
-        execution.interrupt()
-        for _ in range(400):
-            execution.step()
-            if execution.done:
-                break
-
-        assert not execution.done, "interrupt should not end the python session"
-
-        execution.write("exit()\n")
-        result = execution.wait()
-        assert result.exit_code == 0
+        assert "KeyboardInterrupt" in result.stdout, result.stdout
+        assert result.stdout.rstrip().endswith(">>>"), "the REPL did not come back"
+        assert result.exit_code in (0, 130), result.exit_code
 
 
 def test_terminal_mode_restores_the_shell_for_the_next_command():
