@@ -210,6 +210,7 @@ class Commands:
     def _feed(execution: Execution, stdin) -> None:
         if isinstance(stdin, (str, bytes, bytearray)):
             execution.write(stdin)
+            execution.write(None)
             return
 
         if isinstance(stdin, queue.Queue):

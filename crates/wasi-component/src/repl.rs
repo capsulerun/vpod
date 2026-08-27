@@ -93,7 +93,8 @@ pub fn shell_init(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8]) {
     bus.uart.drain_tx();
 
     let init_cmd = format!(
-        "__ec() {{ printf \"\\x$(printf %02x $1)\" >/dev/ttyS2; }}; export PS2=''; export PS1='$(__ec $?){}'; trap '__ec $?' EXIT\n",
+        "__ec() {{ printf \"\\x$(printf %02x $1)\" >/dev/ttyS2; }}; export PS2=''; \
+         export PS1='$(__ec $?){}'; export -n PS1; trap '__ec $?' EXIT\n",
         String::from_utf8_lossy(prompt)
     );
     for byte in init_cmd.bytes() {
@@ -434,6 +435,7 @@ pub fn finish_output(
     sentinel: Option<&str>,
     data_channel: bool,
     state: ExecState,
+    trim: bool,
 ) -> String {
     let mut output = state.output;
 
@@ -469,7 +471,7 @@ pub fn finish_output(
         cleaned
     };
 
-    if state.tty {
+    if state.tty || !trim {
         filtered
     } else {
         filtered.trim_end().to_string()
@@ -499,7 +501,7 @@ pub fn capture_output(
     ) == SliceOutcome::Yielded
     {}
 
-    finish_output(bus, sentinel, data_channel, state)
+    finish_output(bus, sentinel, data_channel, state, true)
 }
 
 // TODO: evaluate if it's possible to refactor to a solution that filter directly the kernel log on the uart

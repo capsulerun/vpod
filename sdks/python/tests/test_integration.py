@@ -1012,6 +1012,42 @@ def test_an_interactive_python_can_be_interrupted():
         assert result.exit_code in (0, 130), result.exit_code
 
 
+def test_a_nested_shell_leaves_the_session_usable():
+    with Sandbox.create() as sbx:
+        inbox = queue.Queue()
+        threading.Timer(2.0, inbox.put, args=("exit\n",)).start()
+
+        nested = sbx.commands.run("sh", stdin=inbox, tty=True, timeout=30)
+        assert nested.exit_code == 0, nested.stdout
+
+        after = sbx.commands.run("expr 2 + 2", timeout=20)
+        assert after.stdout == "4", after
+        assert after.exit_code == 0
+        assert "__ec" not in after.stdout
+
+
+def test_the_prompt_is_not_exported_to_child_processes():
+    with Sandbox.create() as sbx:
+        child = sbx.commands.run("sh -c 'echo \"[$PS1]\"'", timeout=20)
+        assert "__ec" not in child.stdout, child.stdout
+
+
+def test_a_string_ends_the_input_even_on_a_terminal():
+    with Sandbox.create() as sbx:
+        result = sbx.commands.run("cat", stdin="hello\n", tty=True, timeout=30)
+        assert result.exit_code == 0, "a string is finite, so it has to end with EOF"
+        assert "hello" in result.stdout
+
+
+def test_a_streamed_chunk_keeps_the_newline_the_program_wrote():
+    with Sandbox.create() as sbx:
+        chunks = []
+        result = sbx.commands.run("/bin/echo hi", on_stdout=chunks.append, timeout=20)
+
+        assert chunks == ["hi\n"], "the last chunk used to arrive trimmed"
+        assert result.stdout == "hi"
+
+
 def test_terminal_mode_restores_the_shell_for_the_next_command():
     with Sandbox.create() as sbx:
         sbx.commands.run("python3 -c 'input()'", stdin="x\n", tty=True, timeout=30)
