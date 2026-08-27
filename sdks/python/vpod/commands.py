@@ -186,6 +186,13 @@ class Commands:
             return
 
         if isinstance(stdin, queue.Queue):
+            if execution._mode != TERMINAL:
+                raise ValueError(
+                    "streaming stdin needs tty=True. Without it the command reads a "
+                    "staged file, so anything queued after it starts cannot reach it "
+                    "and the command waits for an EOF that never comes. Pass str or "
+                    "bytes for finite input, or tty=True to stream."
+                )
             execution._outbox = stdin
             return
 

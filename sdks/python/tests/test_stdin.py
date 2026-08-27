@@ -89,13 +89,21 @@ def test_stdin_is_sent_verbatim_with_no_control_bytes(mock_component):
         assert b"\x04" not in sent, "a stray Ctrl-D can kill the session"
 
 
-def test_a_queue_stdin_takes_none_as_eof(mock_component):
+def test_streaming_stdin_without_a_tty_is_refused(mock_component):
     inbox = queue.Queue()
     inbox.put("first\n")
-    inbox.put(None)
 
     with Sandbox.create() as sbx:
-        sbx.commands.run("cat", stdin=inbox)
+        with pytest.raises(ValueError, match="tty=True"):
+            sbx.commands.run("cat", stdin=inbox)
+
+
+def test_streaming_stdin_is_accepted_on_a_tty(mock_component):
+    inbox = queue.Queue()
+    inbox.put("first\n")
+
+    with Sandbox.create() as sbx:
+        sbx.commands.run("cat", stdin=inbox, tty=True, timeout=0)
 
     sent = b"".join(data for _, data in mock_component["stdin_writes"])
     assert sent == b"first\n"
