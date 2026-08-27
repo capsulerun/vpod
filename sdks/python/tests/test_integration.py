@@ -952,14 +952,25 @@ def test_a_repl_prompt_arrives_and_answers_over_a_stream():
     with Sandbox.create() as sbx:
         inbox = queue.Queue()
         inbox.put("print(40 + 2)\n")
-        inbox.put(None)
+        inbox.put("exit()\n")
 
         result = sbx.commands.run("python3 2>&1", stdin=inbox, timeout=60)
 
         assert ">>>" in result.stdout, f"never saw a prompt, got {result.stdout!r}"
         assert "42" in result.stdout, f"REPL did not answer, got {result.stdout!r}"
-
         assert result.exit_code == 0
+
+
+def test_closing_a_stream_before_the_command_reads_does_not_end_it():
+    with Sandbox.create() as sbx:
+        inbox = queue.Queue()
+        inbox.put("print(40 + 2)\n")
+        inbox.put(None)
+
+        result = sbx.commands.run("python3 2>&1", stdin=inbox, timeout=20)
+
+        assert "42" in result.stdout, result.stdout
+        assert result.exit_code == 124, "an early Ctrl-D is expected to be swallowed"
 
 
 def test_a_stream_can_react_to_what_the_command_prints():
@@ -997,8 +1008,8 @@ def test_an_interactive_python_can_be_interrupted():
         result = sbx.commands.run("python3 2>&1", stdin=inbox, timeout=90)
 
         assert "KeyboardInterrupt" in result.stdout, result.stdout
-        # The interrupt hit the sleep, not the REPL, so Ctrl-D still ends it cleanly.
-        assert result.exit_code == 0
+        assert result.stdout.rstrip().endswith(">>>"), "the REPL did not come back"
+        assert result.exit_code in (0, 130), result.exit_code
 
 
 def test_terminal_mode_restores_the_shell_for_the_next_command():

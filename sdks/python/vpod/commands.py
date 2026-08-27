@@ -54,7 +54,6 @@ class Execution:
         """Queue input for the command's stdin. Safe from any thread."""
         self._outbox.put(data)
 
-
     def interrupt(self) -> None:
         self._interrupt_requested.set()
 
@@ -145,7 +144,6 @@ class Execution:
                 closed = True
                 continue
             buffered.extend(as_bytes(item))
-
 
         if closed and self._tty and not self._eof_sent and not self.done:
             if buffered:
