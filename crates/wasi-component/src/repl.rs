@@ -200,6 +200,14 @@ pub fn absorb_stray_prompt(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8])
     }
 }
 
+fn deadline_from(timeout_secs: u64, now: u64) -> u64 {
+    if timeout_secs == 0 {
+        u64::MAX
+    } else {
+        now.saturating_add(timeout_secs.saturating_mul(1_000_000_000))
+    }
+}
+
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum SliceOutcome {
     Finished,
@@ -221,11 +229,7 @@ impl ExecState {
     }
 
     pub fn with_mode(timeout_secs: u64, tty: bool) -> Self {
-        let deadline = if timeout_secs == 0 {
-            u64::MAX
-        } else {
-            monotonic_clock::now() + timeout_secs * 1_000_000_000
-        };
+        let deadline = deadline_from(timeout_secs, monotonic_clock::now());
 
         Self {
             output: Vec::new(),
@@ -689,7 +693,17 @@ mod tests {
 
     #[test]
     fn a_zero_timeout_means_no_deadline() {
-        assert_eq!(ExecState::with_mode(0, true).deadline, u64::MAX);
-        assert!(ExecState::with_mode(30, false).deadline < u64::MAX);
+        // A terminal session ends when the program exits or the caller
+        // interrupts it, never on a clock.
+        assert_eq!(deadline_from(0, 12_345), u64::MAX);
+        assert_eq!(deadline_from(30, 1_000), 1_000 + 30_000_000_000);
+    }
+
+    #[test]
+    fn a_deadline_saturates_rather_than_wrapping() {
+        // Wrapping would put the deadline in the past and time the command out
+        // immediately.
+        assert_eq!(deadline_from(u64::MAX, 1), u64::MAX);
+        assert_eq!(deadline_from(1, u64::MAX), u64::MAX);
     }
 }

@@ -79,24 +79,18 @@ describe("Execution", { skip: stale }, () => {
         assert.deepEqual(runtime.calls.stdin, []);
     });
 
-    it("ends a complete line with one Ctrl-D", async () => {
-        const runtime = fakeRuntime([running, finished]);
-        const execution = new Execution(runtime, 1n, "cat", 120, "piped");
+    it("sends stdin verbatim, with no control bytes", async () => {
+        for (const payload of ["data\n", "no trailing newline"]) {
+            const runtime = fakeRuntime([running, finished]);
+            const execution = new Execution(runtime, 1n, "cat", 120, "piped");
 
-        execution.write("data\n");
-        await execution.step();
+            execution.write(payload);
+            await execution.step();
 
-        assert.equal(runtime.calls.stdin[0].toString("hex"), "646174610a04");
-    });
-
-    it("ends a partial line with two, so none falls through to the shell", async () => {
-        const runtime = fakeRuntime([running, finished]);
-        const execution = new Execution(runtime, 1n, "cat", 120, "piped");
-
-        execution.write("no newline");
-        await execution.step();
-
-        assert.ok(runtime.calls.stdin[0].toString("hex").endsWith("0404"));
+            const sent = Buffer.concat(runtime.calls.stdin);
+            assert.equal(sent.toString(), payload);
+            assert.ok(!sent.includes(0x04), "a stray Ctrl-D can kill the session");
+        }
     });
 
     it("passes tty through and keeps a zero timeout as zero", async () => {
