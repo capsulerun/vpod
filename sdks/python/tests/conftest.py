@@ -25,6 +25,7 @@ def mock_component(request, monkeypatch):
     store = MagicMock()
     sessions = {}
     session_counter = {"id": 0}
+    stdin_writes = []
 
     def fake_execute(snapshot_path, command):
         import subprocess
@@ -35,7 +36,7 @@ def mock_component(request, monkeypatch):
             **{"exit-code": result.returncode},
         )
 
-    def fake_session_start(snapshot_path, command, prompt):
+    def fake_session_start(snapshot_path, command, prompt, mounts=None):
         session_counter["id"] += 1
         sid = session_counter["id"]
         sessions[sid] = {"env": {}, "type": command}
@@ -71,7 +72,7 @@ def mock_component(request, monkeypatch):
     def fake_session_close(sid):
         sessions.pop(sid, None)
 
-    def fake_session_exec_slice(sid, command, timeout=None, slice_nanos=0):
+    def fake_session_exec_slice(sid, command, timeout=None, slice_nanos=0, mode="closed"):
         payload = fake_session_exec(sid, command).payload
         return FakeVariant(
             tag="ok",
@@ -81,12 +82,17 @@ def mock_component(request, monkeypatch):
     def fake_session_interrupt(sid):
         return FakeVariant(tag="ok", payload=None)
 
+    def fake_session_stdin(sid, data):
+        stdin_writes.append((sid, bytes(data)))
+        return FakeVariant(tag="ok", payload=None)
+
     exports = {
         "execute": fake_execute,
         "session-start": fake_session_start,
         "session-exec": fake_session_exec,
         "session-exec-slice": fake_session_exec_slice,
         "session-interrupt": fake_session_interrupt,
+        "session-stdin": fake_session_stdin,
         "session-close": fake_session_close,
     }
 
@@ -95,4 +101,9 @@ def mock_component(request, monkeypatch):
         lambda name="alpine:latest", **kwargs: Path("/fake/snapshot.snap"),
     )
     monkeypatch.setattr("vpod.sandbox.locate_wasm", lambda: Path("/fake/vpod_wasi_lib.wasm"))
-    monkeypatch.setattr("vpod.sandbox.load_component", lambda path, snap=None: (store, exports))
+    monkeypatch.setattr(
+        "vpod.sandbox.load_component",
+        lambda path, snap=None, mounts=None: (store, exports),
+    )
+
+    return {"exports": exports, "stdin_writes": stdin_writes}

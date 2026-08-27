@@ -319,6 +319,17 @@ def run_child(fds, req, argv0, cwd, env):
         os._exit(exit_code & 0xFF)
 
 
+def caller_process_group(conn):
+    try:
+        raw = conn.getsockopt(
+            socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
+        )
+        pid, _uid, _gid = struct.unpack("3i", raw)
+        return os.getpgid(pid)
+    except (OSError, struct.error, AttributeError):
+        return None
+
+
 def handle_connection(conn):
     fds, payload = recv_request(conn)
     argv, cwd, env = parse_payload(payload)
@@ -328,8 +339,16 @@ def handle_connection(conn):
         conn.sendall(b"F")
         return
 
+    pgid = caller_process_group(conn)
+
     child = os.fork()
     if child == 0:
+        if pgid is not None:
+            try:
+                os.setpgid(0, pgid)
+            except OSError:
+                pass
+
         conn.close()
         run_child(fds, req, argv[0] if argv else "python3", cwd, env)
 

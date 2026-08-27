@@ -1,3 +1,4 @@
+import type { ExecMode } from "./sandbox.js";
 import {
     WorkerTransport,
     type NetworkOptions,
@@ -111,6 +112,7 @@ export class SandboxRuntime {
         code: string | null,
         timeoutSeconds: bigint | null,
         sliceNanos: bigint,
+        mode: ExecMode = "closed",
     ): Promise<SliceOutput> {
         return this.#transport.call<SliceOutput>({
             kind: "session-exec-slice",
@@ -118,11 +120,16 @@ export class SandboxRuntime {
             code,
             timeoutSeconds,
             sliceNanos,
+            mode,
         });
     }
 
     sessionInterrupt(handle: bigint): Promise<void> {
         return this.#transport.call<void>({ kind: "session-interrupt", handle });
+    }
+
+    sessionStdin(handle: bigint, data: Uint8Array): Promise<void> {
+        return this.#transport.call<void>({ kind: "session-stdin", handle, data });
     }
 
     sessionClose(handle: bigint): Promise<void> {

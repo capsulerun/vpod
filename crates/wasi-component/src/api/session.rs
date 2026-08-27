@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::exports::vpod::sandbox::executor::{ExecutionResult, SliceOutput};
+use crate::exports::vpod::sandbox::executor::{ExecMode, ExecutionResult, SliceOutput};
 use crate::repl;
 use crate::vm;
 
@@ -15,6 +15,9 @@ const PYRUNNER_SENTINEL: &str = "---VPOD_DONE---";
 const MAX_INLINE_EXEC: usize = 1900;
 const STAGE_CHUNK: usize = 1500;
 const STAGE_PATH: &str = "/tmp/.vpod_cmd";
+const STDIN_PATH: &str = "/tmp/.vpod_stdin";
+
+const STDIN_STAGE_CHUNK: usize = STAGE_CHUNK;
 
 const PYRUNNER_MAX_LINE: usize = 3800;
 const PYRUNNER_STAGE_CHUNK: usize = 2500;
@@ -53,6 +56,10 @@ pub struct Session {
     pub pyrunner_reseeded: bool,
     pub shell_lost: bool,
     pub exec: Option<repl::ExecState>,
+    /// Input written before the command started. Staged to a file rather than
+    /// pushed at the terminal, so EOF belongs to the command instead of leaking
+    /// to the shell behind it.
+    pub staged_stdin: Vec<u8>,
 }
 
 fn recover_shell(session: &mut Session) {
@@ -80,7 +87,7 @@ const SHELL_LOST_MESSAGE: &str = "vpod: the shell did not come back from a timed
      pager for instance. This sandbox cannot run further commands, so create a \
      new one; `code.run` is unaffected.";
 
-fn begin_shell_exec(session: &mut Session, code: String, timeout_secs: u64) {
+fn begin_shell_exec(session: &mut Session, code: String, timeout_secs: u64, mode: ExecMode) {
     if session.exec.take().is_some() {
         recover_shell(session);
     }
@@ -91,8 +98,29 @@ fn begin_shell_exec(session: &mut Session, code: String, timeout_secs: u64) {
         code
     };
 
+    let pending_stdin = std::mem::take(&mut session.staged_stdin);
+    let staged = !pending_stdin.is_empty() && session.is_shell && mode == ExecMode::Piped;
+    if staged {
+        stage_stdin(session, &pending_stdin);
+    }
+
     let cmd = if session.is_shell {
-        format!("{{\n{code}\n}} </dev/null 2>/dev/ttyS1\n")
+        match mode {
+            ExecMode::Closed => format!("{{\n{code}\n}} </dev/null 2>/dev/ttyS1\n"),
+            ExecMode::Piped if staged => format!(
+                "{{\n\
+                 rm -f {STDIN_PATH}\n\
+                 {code}\n\
+                 }} < {STDIN_PATH} 2>/dev/ttyS1\n"
+            ),
+            ExecMode::Piped => format!("{{\n{code}\n}} 2>/dev/ttyS1\n"),
+            ExecMode::Terminal => format!(
+                "{{\n\
+                 stty -icanon -echo\n\
+                 {code}\n\
+                 }} 2>&1\n"
+            ),
+        }
     } else {
         format!("{code}\n")
     };
@@ -101,7 +129,29 @@ fn begin_shell_exec(session: &mut Session, code: String, timeout_secs: u64) {
         session.bus.uart.push_rx(byte);
     }
 
-    session.exec = Some(repl::ExecState::new(timeout_secs));
+    if mode == ExecMode::Terminal {
+        for byte in &pending_stdin {
+            session.bus.uart.push_rx(*byte);
+        }
+    }
+
+    session.exec = Some(repl::ExecState::with_mode(
+        timeout_secs,
+        mode == ExecMode::Terminal,
+    ));
+}
+
+fn restore_terminal(session: &mut Session) {
+    for byte in b"stty icanon -echo\n" {
+        session.bus.uart.push_rx(*byte);
+    }
+
+    let prompt = session.prompt.clone();
+    repl::wait_for_prompt(&mut session.bus, &mut session.hart, &prompt);
+
+    session.bus.uart.drain_tx();
+    session.bus.uart_stderr.drain_tx();
+    session.bus.uart_ctrl.drain_tx();
 }
 
 fn run_shell_slice(
@@ -122,6 +172,7 @@ fn run_shell_slice(
 }
 
 fn finish_shell_exec(session: &mut Session, state: repl::ExecState) -> ExecutionResult {
+    let was_terminal = state.is_terminal();
     let stderr_tail = repl::finish_stderr(&state);
     let stdout = repl::finish_output(&session.bus, None, false, state);
 
@@ -147,6 +198,10 @@ fn finish_shell_exec(session: &mut Session, state: repl::ExecState) -> Execution
 
     if session.is_shell && timed_out {
         recover_shell(session);
+    }
+
+    if session.is_shell && was_terminal && !session.shell_lost {
+        restore_terminal(session);
     }
 
     ExecutionResult {
@@ -178,6 +233,34 @@ fn stage_long_command(session: &mut Session, code: &str) -> String {
         "base64 -d {STAGE_PATH}.b64 > {STAGE_PATH}.sh && rm -f {STAGE_PATH}.b64; \
          sh {STAGE_PATH}.sh"
     )
+}
+
+fn stage_stdin(session: &mut Session, data: &[u8]) {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+    let prompt = session.prompt.clone();
+
+    for (i, chunk) in encoded.as_bytes().chunks(STDIN_STAGE_CHUNK).enumerate() {
+        let chunk = std::str::from_utf8(chunk).unwrap_or_default();
+        let redirect = if i == 0 { ">" } else { ">>" };
+        let upload = format!("printf %s {chunk} {redirect} {STDIN_PATH}.b64\n");
+
+        for byte in upload.bytes() {
+            session.bus.uart.push_rx(byte);
+        }
+        repl::wait_for_prompt(&mut session.bus, &mut session.hart, &prompt);
+        session.bus.uart.drain_tx();
+        session.bus.uart_stderr.drain_tx();
+        session.bus.uart_ctrl.drain_tx();
+    }
+
+    let decode = format!("base64 -d {STDIN_PATH}.b64 > {STDIN_PATH} && rm -f {STDIN_PATH}.b64\n");
+    for byte in decode.bytes() {
+        session.bus.uart.push_rx(byte);
+    }
+    repl::wait_for_prompt(&mut session.bus, &mut session.hart, &prompt);
+    session.bus.uart.drain_tx();
+    session.bus.uart_stderr.drain_tx();
+    session.bus.uart_ctrl.drain_tx();
 }
 
 fn stage_pyrunner_code(session: &mut Session, encoded: &str) -> String {
@@ -219,7 +302,8 @@ fn install_prompt_sentinel(bus: &mut MachineBus, hart: &mut Hart, prompt_bytes: 
         return;
     }
 
-    let export = "export PS2=''; export PS1='$(__ec $?)'\"$(printf '\\037vpod\\037')\"\n";
+    let export =
+        "set -o ignoreeof; export PS2=''; export PS1='$(__ec $?)'\"$(printf '\\037vpod\\037')\"\n";
     for byte in export.bytes() {
         bus.uart.push_rx(byte);
     }
@@ -382,6 +466,7 @@ impl SessionManager {
                 pyrunner_reseeded: false,
                 shell_lost: false,
                 exec: None,
+                staged_stdin: Vec::new(),
             },
         );
 
@@ -473,12 +558,12 @@ impl SessionManager {
                 exit_code,
             })
         } else {
-            begin_shell_exec(session, code, timeout.unwrap_or(30));
+            begin_shell_exec(session, code, timeout.unwrap_or(30), ExecMode::Closed);
 
             let mut state = session
                 .exec
                 .take()
-                .unwrap_or_else(|| repl::ExecState::new(0));
+                .unwrap_or_else(|| repl::ExecState::new(30));
             while run_shell_slice(session, &mut state, u64::MAX) == repl::SliceOutcome::Yielded {}
 
             Ok(finish_shell_exec(session, state))
@@ -491,6 +576,7 @@ impl SessionManager {
         code: Option<String>,
         timeout: Option<u64>,
         slice_nanos: u64,
+        mode: ExecMode,
     ) -> Result<SliceOutput, String> {
         let mut sessions = self.sessions.borrow_mut();
         let session = sessions
@@ -511,7 +597,7 @@ impl SessionManager {
             session.bus.uart_ctrl.drain_tx();
             session.bus.uart_data.drain_tx();
 
-            begin_shell_exec(session, code, timeout.unwrap_or(30));
+            begin_shell_exec(session, code, timeout.unwrap_or(30), mode);
         }
 
         let mut state = match session.exec.take() {
@@ -523,7 +609,8 @@ impl SessionManager {
         state.absorb_stderr(&session.bus.uart_stderr.drain_tx());
 
         if outcome == repl::SliceOutcome::Yielded {
-            let stdout = repl::drain_output(&mut state);
+            let prompt = session.prompt.clone();
+            let stdout = repl::drain_output(&mut state, &prompt);
             let stderr = repl::drain_stderr(&mut state);
             session.exec = Some(state);
 
@@ -541,6 +628,24 @@ impl SessionManager {
             stderr: finished.stderr,
             exit_code: Some(finished.exit_code),
         })
+    }
+
+    pub fn write_stdin(&self, handle: u64, data: Vec<u8>) -> Result<(), String> {
+        let mut sessions = self.sessions.borrow_mut();
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+        if session.exec.is_none() {
+            session.staged_stdin.extend_from_slice(&data);
+            return Ok(());
+        }
+
+        for byte in data {
+            session.bus.uart.push_rx(byte);
+        }
+
+        Ok(())
     }
 
     pub fn interrupt_session(&self, handle: u64) -> Result<(), String> {
@@ -675,6 +780,7 @@ impl SessionManager {
                 pyrunner_reseeded,
                 shell_lost: false,
                 exec: None,
+                staged_stdin: Vec::new(),
             },
         );
 
