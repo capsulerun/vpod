@@ -57,6 +57,10 @@ const encoder = new TextEncoder();
 /** Ctrl-D equivalent for ending the input */
 const STREAM_EOF = new Uint8Array([0x04]);
 
+const STREAM_ABANDONED = new Error(
+    "vpod: the command ended before its input stream did, so the rest was not sent",
+);
+
 const isStreaming = (stdin: Stdin): boolean =>
     typeof stdin !== "string" && !(stdin instanceof Uint8Array);
 
@@ -119,6 +123,12 @@ export class Execution {
     /** @internal Marks the input source closed, so the command sees an end-of-file. */
     endInput(): void {
         this.#eofPending = true;
+    }
+
+    endInputNow(): void {
+        if (!this.#tty || this.#eofSent) return;
+        this.#eofSent = true;
+        this.#outbox.push(STREAM_EOF);
     }
 
     interrupt(): void {
@@ -289,6 +299,7 @@ export class Commands {
 function feedStdin(execution: Execution, stdin: Stdin): { stop(): void } {
     if (typeof stdin === "string" || stdin instanceof Uint8Array) {
         execution.write(stdin);
+        execution.endInputNow();
         return { stop: () => {} };
     }
 
@@ -298,7 +309,7 @@ function feedStdin(execution: Execution, stdin: Stdin): { stop(): void } {
     const pump = (async () => {
         if (typeof (stdin as ReadableStream).getReader === "function") {
             const reader = (stdin as ReadableStream<string | Uint8Array>).getReader();
-            cancel = () => void reader.cancel().catch(() => {});
+            cancel = () => void reader.cancel(STREAM_ABANDONED).catch(() => {});
             try {
                 for (;;) {
                     const { done, value } = await reader.read();
@@ -310,7 +321,7 @@ function feedStdin(execution: Execution, stdin: Stdin): { stop(): void } {
             }
         } else {
             const iterator = (stdin as AsyncIterable<string | Uint8Array>)[Symbol.asyncIterator]();
-            cancel = () => void iterator.return?.(undefined).catch?.(() => {});
+            cancel = () => void iterator.return?.(STREAM_ABANDONED).catch?.(() => {});
             for (;;) {
                 const { done, value } = await iterator.next();
                 if (done || stopped) break;

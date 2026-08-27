@@ -209,7 +209,11 @@ class Commands:
     @staticmethod
     def _feed(execution: Execution, stdin) -> None:
         if isinstance(stdin, (str, bytes, bytearray)):
-            execution.write(stdin)
+            data = as_bytes(stdin)
+            if execution._tty:
+                data += STREAM_EOF
+                execution._eof_sent = True
+            execution.write(data)
             return
 
         if isinstance(stdin, queue.Queue):

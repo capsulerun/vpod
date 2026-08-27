@@ -74,7 +74,8 @@ fn shell_init(bus: &mut MachineBus, hart: &mut Hart) -> bool {
     drain_all(bus);
 
     let init_cmd = format!(
-        "__ec() {{ printf \"\\x$(printf %02x $1)\" >/dev/ttyS2; }}; export PS2=''; export PS1='$(__ec $?){}'; trap '__ec $?' EXIT",
+        "__ec() {{ printf \"\\x$(printf %02x $1)\" >/dev/ttyS2; }}; export PS2=''; \
+         export PS1='$(__ec $?){}'; export -n PS1; trap '__ec $?' EXIT",
         String::from_utf8_lossy(PROMPT)
     );
     push_line(bus, init_cmd.as_bytes());

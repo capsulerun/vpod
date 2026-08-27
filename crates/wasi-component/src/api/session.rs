@@ -118,7 +118,8 @@ fn begin_shell_exec(session: &mut Session, code: String, timeout_secs: u64, mode
                 "{{\n\
                  stty icanon -echo\n\
                  {code}\n\
-                 }} 2>&1\n"
+                 }} 2>&1; __vpod_rc=$?; stty -icanon min 0 time 0; cat >/dev/null; \
+                 stty icanon -echo; (exit $__vpod_rc)\n"
             ),
         }
     } else {
@@ -171,10 +172,10 @@ fn run_shell_slice(
     )
 }
 
-fn finish_shell_exec(session: &mut Session, state: repl::ExecState) -> ExecutionResult {
+fn finish_shell_exec(session: &mut Session, state: repl::ExecState, trim: bool) -> ExecutionResult {
     let was_terminal = state.is_terminal();
     let stderr_tail = repl::finish_stderr(&state);
-    let stdout = repl::finish_output(&session.bus, None, false, state);
+    let stdout = repl::finish_output(&session.bus, None, false, state, trim);
 
     let mut timed_out = false;
     let exit_code = if session.is_shell {
@@ -194,13 +195,17 @@ fn finish_shell_exec(session: &mut Session, state: repl::ExecState) -> Execution
     stderr.push_str(&String::from_utf8_lossy(
         &session.bus.uart_stderr.drain_tx(),
     ));
-    let stderr = stderr.trim_end().to_string();
+    let stderr = if trim {
+        stderr.trim_end().to_string()
+    } else {
+        stderr
+    };
 
     if session.is_shell && timed_out {
         recover_shell(session);
     }
 
-    if session.is_shell && was_terminal && !session.shell_lost {
+    if session.is_shell && was_terminal && timed_out && !session.shell_lost {
         restore_terminal(session);
     }
 
@@ -302,8 +307,8 @@ fn install_prompt_sentinel(bus: &mut MachineBus, hart: &mut Hart, prompt_bytes: 
         return;
     }
 
-    let export =
-        "set -o ignoreeof; export PS2=''; export PS1='$(__ec $?)'\"$(printf '\\037vpod\\037')\"\n";
+    let export = "set -o ignoreeof; export PS2=''; \
+         export PS1='$(__ec $?)'\"$(printf '\\037vpod\\037')\"; export -n PS1\n";
     for byte in export.bytes() {
         bus.uart.push_rx(byte);
     }
@@ -566,7 +571,7 @@ impl SessionManager {
                 .unwrap_or_else(|| repl::ExecState::new(30));
             while run_shell_slice(session, &mut state, u64::MAX) == repl::SliceOutcome::Yielded {}
 
-            Ok(finish_shell_exec(session, state))
+            Ok(finish_shell_exec(session, state, true))
         }
     }
 
@@ -621,7 +626,7 @@ impl SessionManager {
             });
         }
 
-        let finished = finish_shell_exec(session, state);
+        let finished = finish_shell_exec(session, state, false);
 
         Ok(SliceOutput {
             stdout: finished.stdout,
