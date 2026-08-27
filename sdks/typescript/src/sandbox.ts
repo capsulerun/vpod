@@ -54,7 +54,7 @@ export interface RunOptions {
 
 const encoder = new TextEncoder();
 
-/** Ctrl-D. Canonical mode turns it into a real end-of-file for the foreground command. */
+/** Ctrl-D equivalent for ending the input */
 const STREAM_EOF = new Uint8Array([0x04]);
 
 const isStreaming = (stdin: Stdin): boolean =>
@@ -78,6 +78,8 @@ export class Execution {
     #tty: boolean;
 
     #outbox: Uint8Array[] = [];
+    #eofPending = false;
+    #eofSent = false;
     #interruptRequested = false;
     #interruptSent = false;
 
@@ -112,6 +114,11 @@ export class Execution {
 
     write(data: string | Uint8Array): void {
         this.#outbox.push(toBytes(data));
+    }
+
+    /** @internal Marks the input source closed, so the command sees an end-of-file. */
+    endInput(): void {
+        this.#eofPending = true;
     }
 
     interrupt(): void {
@@ -173,13 +180,18 @@ export class Execution {
             : new CommandResult(this.stdout.trimEnd(), this.stderr.trimEnd(), this.exitCode);
     }
 
-    // A terminal keeps its CRLF: a TUI positions the cursor with it.
     #clean(chunk: string): string {
         return this.#tty ? chunk : normalizeLineEndings(chunk);
     }
 
     async #flushInput(): Promise<void> {
-        if (this.#outbox.length === 0) return;
+        if (this.#outbox.length === 0) {
+            if (!this.#eofPending || !this.#tty || this.#eofSent || this.done) return;
+            this.#eofPending = false;
+            this.#eofSent = true;
+            await this.#runtime.sessionStdin(this.#handle, STREAM_EOF);
+            return;
+        }
 
         const pending = this.#outbox;
         this.#outbox = [];
@@ -306,7 +318,7 @@ function feedStdin(execution: Execution, stdin: Stdin): { stop(): void } {
             }
         }
 
-        if (!stopped && !execution.done) execution.write(STREAM_EOF);
+        if (!stopped && !execution.done) execution.endInput();
     })();
 
     pump.catch(() => {});

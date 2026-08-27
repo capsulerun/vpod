@@ -9,7 +9,7 @@ SLICE_NANOS = 100_000_000
 
 CLOSED, PIPED, TERMINAL = "closed", "piped", "terminal"
 
-# Ctrl-D. Canonical mode turns it into a real end-of-file for the foreground command.
+# Ctrl-D equivalent for ending the input
 STREAM_EOF = b"\x04"
 
 
@@ -37,6 +37,7 @@ class Execution:
         self._pending = command
         self._outbox = queue.Queue()
         self._source = None
+        self._eof_pending = False
         self._eof_sent = False
         self._interrupt_requested = threading.Event()
         self._interrupt_sent = False
@@ -124,10 +125,9 @@ class Execution:
 
     def _flush_input(self) -> None:
         buffered = bytearray()
-        closed = False
+        closed = self._eof_pending
+        self._eof_pending = False
 
-        # One chunk per slice, so a generator that produces input over time feeds the
-        # command as it goes instead of being drained before the command starts.
         if self._source is not None:
             try:
                 buffered.extend(as_bytes(next(self._source)))
@@ -146,9 +146,13 @@ class Execution:
                 continue
             buffered.extend(as_bytes(item))
 
+
         if closed and self._tty and not self._eof_sent and not self.done:
-            buffered.extend(STREAM_EOF)
-            self._eof_sent = True
+            if buffered:
+                self._eof_pending = True
+            else:
+                buffered.extend(STREAM_EOF)
+                self._eof_sent = True
 
         if buffered:
             unwrap_result(self._exports["session-stdin"](self._session_id, bytes(buffered)))

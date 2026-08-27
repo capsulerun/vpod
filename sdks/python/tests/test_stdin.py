@@ -120,7 +120,9 @@ def test_a_queue_streams_without_the_caller_asking_for_a_tty(mock_component):
     assert b"\x04" not in _sent(mock_component), "an open queue is not end-of-input"
 
 
-def test_closing_a_queue_sends_end_of_file(mock_component):
+def test_closing_a_queue_sends_end_of_file_on_its_own(mock_component):
+    _hold_open(mock_component, slices=2)
+
     inbox = queue.Queue()
     inbox.put("first\n")
     inbox.put(None)
@@ -128,7 +130,7 @@ def test_closing_a_queue_sends_end_of_file(mock_component):
     with Sandbox.create() as sbx:
         sbx.commands.run("cat", stdin=inbox, timeout=0)
 
-    assert _sent(mock_component) == b"first\n\x04"
+    assert [data for _, data in mock_component["stdin_writes"]] == [b"first\n", b"\x04"]
 
 
 def test_an_iterable_feeds_one_chunk_per_slice_then_ends_the_input(mock_component):
