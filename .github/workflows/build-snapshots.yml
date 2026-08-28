@@ -75,6 +75,9 @@ jobs:
       - name: Build 512MB base snapshot (vsnap-base-512mb)
         run: ./scripts/build-default-snapshot.sh --ram 512
 
+      - name: Build 1024MB base snapshot (vsnap-base-1024mb)
+        run: ./scripts/build-default-snapshot.sh --ram 1024
+
       - name: Build data snapshot (vsnap-data-512mb)
         run: ./scripts/build-data-snapshot.sh
 
