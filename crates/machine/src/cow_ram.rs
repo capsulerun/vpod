@@ -20,7 +20,12 @@ pub struct CowRam {
 
 impl CowRam {
     pub fn new(ram_size: u64) -> Self {
-        Self::from_base(vec![0u8; ram_size as usize + 8], ram_size)
+        let logical_len = ram_size as usize + 8;
+        Self::from_padded(
+            vec![0u8; Self::padded_len(logical_len)],
+            logical_len,
+            ram_size,
+        )
     }
 
     pub fn from_base(bytes: Vec<u8>, ram_size: u64) -> Self {
@@ -28,6 +33,8 @@ impl CowRam {
         let num_pages = len.div_ceil(PAGE_SIZE);
 
         let mut base = bytes;
+
+        base.reserve_exact((num_pages * PAGE_SIZE).saturating_sub(len));
         base.resize(num_pages * PAGE_SIZE, 0);
 
         Self {
@@ -274,5 +281,68 @@ impl CowRam {
         self.base = Arc::new(padded);
         self.pages = vec![None; num_pages];
         self.epoch = next_epoch();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WASM32_ISIZE_MAX: usize = (1usize << 31) - 1;
+
+    #[test]
+    fn new_allocates_page_padded_and_never_grows() {
+        for mb in [1u64, 64, 256, 512, 1024] {
+            let ram = mb * 1024 * 1024;
+            let cow = CowRam::new(ram);
+
+            let allocated = cow.base.len();
+            assert_eq!(
+                allocated % PAGE_SIZE,
+                0,
+                "{mb}MB: base is not page-aligned, so resize would grow it"
+            );
+            assert_eq!(
+                allocated,
+                CowRam::padded_len(ram as usize + 8),
+                "{mb}MB: base is not the size the old resize would have produced"
+            );
+            assert_eq!(cow.len, ram as usize + 8, "{mb}MB: logical len changed");
+            assert_eq!(cow.pages.len(), allocated / PAGE_SIZE, "{mb}MB: page count");
+
+            // What the removed `resize` would have asked for: `max(cap * 2,
+            // required)`. This is the assertion that would have caught the bug.
+            let first_alloc = ram as usize + 8;
+            let would_have_requested = (first_alloc * 2).max(allocated);
+            if mb == 1024 {
+                assert!(
+                    would_have_requested > WASM32_ISIZE_MAX,
+                    "the 1024MB case is supposed to be the one that overflowed"
+                );
+            }
+            assert!(
+                allocated <= WASM32_ISIZE_MAX,
+                "{mb}MB: a single allocation of {allocated} cannot be made on wasm32"
+            );
+        }
+    }
+
+    #[test]
+    fn two_gigabytes_is_out_of_reach_on_wasm32() {
+        let padded = CowRam::padded_len(2048 * 1024 * 1024usize + 8);
+        assert!(
+            padded > WASM32_ISIZE_MAX,
+            "2048MB would fit on wasm32; this test and the ceiling it documents are stale"
+        );
+
+        let ceiling = CowRam::padded_len(1024 * 1024 * 1024usize + 8);
+        assert!(ceiling <= WASM32_ISIZE_MAX, "1024MB must remain reachable");
+    }
+
+    #[test]
+    fn new_is_zeroed_and_addressable() {
+        let cow = CowRam::new(4 * 1024 * 1024);
+        assert_eq!(cow.read_u8(0), 0);
+        assert_eq!(cow.read_u8(4 * 1024 * 1024 - 1), 0);
     }
 }
