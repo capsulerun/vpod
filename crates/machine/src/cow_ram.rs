@@ -28,6 +28,16 @@ impl CowRam {
         )
     }
 
+    pub fn pending_restore(ram_size: u64) -> Self {
+        Self {
+            base: Arc::new(Vec::new()),
+            pages: Vec::new(),
+            len: ram_size as usize + 8,
+            mask: ram_size - 1,
+            epoch: next_epoch(),
+        }
+    }
+
     pub fn from_base(bytes: Vec<u8>, ram_size: u64) -> Self {
         let len = bytes.len();
         let num_pages = len.div_ceil(PAGE_SIZE);
@@ -344,5 +354,35 @@ mod tests {
         let cow = CowRam::new(4 * 1024 * 1024);
         assert_eq!(cow.read_u8(0), 0);
         assert_eq!(cow.read_u8(4 * 1024 * 1024 - 1), 0);
+    }
+}
+
+#[cfg(test)]
+mod pending_restore_tests {
+    use super::*;
+
+    #[test]
+    fn reports_the_same_logical_shape_as_new() {
+        for mb in [256u64, 512, 1024] {
+            let ram = mb * 1024 * 1024;
+            let full = CowRam::new(ram);
+            let pending = CowRam::pending_restore(ram);
+
+            assert_eq!(pending.len(), full.len(), "{mb}MB: logical len");
+            assert_eq!(pending.mask, full.mask, "{mb}MB: mask");
+            assert!(pending.base.is_empty(), "{mb}MB: must allocate nothing");
+        }
+    }
+
+    #[test]
+    fn set_base_makes_it_whole() {
+        let ram = 4 * 1024 * 1024u64;
+        let mut pending = CowRam::pending_restore(ram);
+        pending.set_base(vec![7u8; CowRam::padded_len(ram as usize + 8)]);
+
+        let expected_pages = CowRam::padded_len(ram as usize + 8) / PAGE_SIZE;
+        assert_eq!(pending.pages.len(), expected_pages);
+        assert_eq!(pending.read_u8(0), 7);
+        assert_eq!(pending.read_u8(ram as usize - 1), 7);
     }
 }
