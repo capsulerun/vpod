@@ -29,6 +29,7 @@ fi
 SNAPSHOTS=(
     "dist/alpine-3.23.0-256mb.snap:alpine-3.23.0-256mb"
     "dist/alpine-3.23.0-512mb.snap:vsnap-base-512mb"
+    "dist/alpine-3.23.0-1024mb.snap:vsnap-base-1024mb"
     "dist/vsnap-data-512mb.snap:vsnap-data-512mb"
 )
 
@@ -40,6 +41,7 @@ ALIASES=(
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
     ./scripts/build-default-snapshot.sh
     ./scripts/build-default-snapshot.sh --ram 512
+    ./scripts/build-default-snapshot.sh --ram 1024
     ./scripts/build-data-snapshot.sh
 fi
 
