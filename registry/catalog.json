@@ -1,5 +1,5 @@
 {
-  "_comment": "Catalog of snapshots the registry serves \u2014 the source of truth for snapshots.json. Order matters: the SDK resolves name:latest to the first matching name. url/sha256/size are computed at publish time by build-snapshots.yml (CI) or build-registry-bundle.sh (local).",
+  "_comment": "Public registry",
   "snapshots": [
     {
       "id": "alpine-3.23.0-256mb",
