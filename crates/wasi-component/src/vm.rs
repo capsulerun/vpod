@@ -134,7 +134,24 @@ pub fn _bus_from_base(
 pub fn _load(config: _VmConfig) -> Result<(MachineBus, Hart, u8), String> {
     let ram_size = ram_size_from_filename(config.snapshot).unwrap_or(256 * 1024 * 1024);
 
-    let mut bus = MachineBus::new(ram_size, CowRam::new(ram_size));
+    let logical = ram_size + 8;
+    let needed =
+        logical.div_ceil(machine::cow_ram::PAGE_SIZE as u64) * machine::cow_ram::PAGE_SIZE as u64;
+
+    if needed > isize::MAX as u64 {
+        return Err(format!(
+            "cannot run a {} MB guest on this build: RAM is a single {} byte \
+             allocation and a {}-bit target caps one allocation at {} bytes. \
+             The largest guest this build can restore is {} MB.",
+            ram_size / (1024 * 1024),
+            needed,
+            usize::BITS,
+            isize::MAX,
+            (isize::MAX as u64 / (1024 * 1024)).next_power_of_two() / 2,
+        ));
+    }
+
+    let mut bus = MachineBus::new(ram_size, CowRam::pending_restore(ram_size));
     bus.attach_net();
     bus.attach_fs(vec![]);
     let mut hart = Hart::new(0x1000);
