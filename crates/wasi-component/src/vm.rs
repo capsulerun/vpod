@@ -135,8 +135,8 @@ pub fn _load(config: _VmConfig) -> Result<(MachineBus, Hart, u8), String> {
     let ram_size = ram_size_from_filename(config.snapshot).unwrap_or(256 * 1024 * 1024);
 
     let logical = ram_size + 8;
-    let needed = logical.div_ceil(machine::cow_ram::PAGE_SIZE as u64)
-        * machine::cow_ram::PAGE_SIZE as u64;
+    let needed =
+        logical.div_ceil(machine::cow_ram::PAGE_SIZE as u64) * machine::cow_ram::PAGE_SIZE as u64;
 
     if needed > isize::MAX as u64 {
         return Err(format!(
