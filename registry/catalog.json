@@ -1,5 +1,5 @@
 {
-  "_comment": "Catalog of snapshots the registry serves — the source of truth for snapshots.json. Order matters: the SDK resolves name:latest to the first matching name. url/sha256/size are computed at publish time by build-snapshots.yml (CI) or build-registry-bundle.sh (local).",
+  "_comment": "Catalog of snapshots the registry serves \u2014 the source of truth for snapshots.json. Order matters: the SDK resolves name:latest to the first matching name. url/sha256/size are computed at publish time by build-snapshots.yml (CI) or build-registry-bundle.sh (local).",
   "snapshots": [
     {
       "id": "alpine-3.23.0-256mb",
@@ -21,6 +21,13 @@
       "tag": "1.0.0",
       "memory_label": "512MB",
       "description": "General-purpose vpod snapshot built on Alpine Linux 3.23.0 (riscv64). Same contents as vsnap-base with a 512 MB memory limit, for workloads that need more headroom (web servers, larger installs). Memory limit: 512 MB."
+    },
+    {
+      "id": "vsnap-base-1024mb",
+      "name": "vsnap-base",
+      "tag": "1.0.0",
+      "memory_label": "1024MB",
+      "description": "General-purpose vpod snapshot built on Alpine Linux 3.23.0 (riscv64). Same contents as vsnap-base with a 1024 MB memory limit, the largest a wasm host can restore. Memory limit: 1024 MB."
     },
     {
       "id": "vsnap-data-512mb",
