@@ -86,6 +86,7 @@ jobs:
     name: Python SDK Integration Tests
     runs-on: ubuntu-latest
     needs: build-aot
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repo
@@ -119,6 +120,7 @@ jobs:
     name: TypeScript SDK Tests
     runs-on: ubuntu-latest
     needs: build-aot
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repo
@@ -170,6 +172,15 @@ jobs:
             $VPOD_TEST_CHANNEL/alpine-3.23.0-256mb.snap \
             /tmp/alpine-3.23.0-256mb.snap
 
+      - name: Fetch the larger snapshots
+        run: |
+          ./sdks/typescript/scripts/fetch-test-snapshot.sh \
+            $VPOD_TEST_CHANNEL/vsnap-base-512mb.snap \
+            /tmp/vsnap-base-512mb.snap
+          ./sdks/typescript/scripts/fetch-test-snapshot.sh \
+            $VPOD_TEST_CHANNEL/vsnap-base-1024mb.snap \
+            /tmp/vsnap-base-1024mb.snap
+
       - name: Assert the integration tests will actually run
         working-directory: sdks/typescript
         env:
@@ -180,6 +191,7 @@ jobs:
         working-directory: sdks/typescript
         env:
           VPOD_TEST_SNAPSHOT: /tmp/alpine-3.23.0-256mb.snap
+          VPOD_TEST_SNAPSHOTS_EXTRA: /tmp/vsnap-base-512mb.snap,/tmp/vsnap-base-1024mb.snap
         run: npm run test:integration
 
       - name: Set up the oldest supported Node

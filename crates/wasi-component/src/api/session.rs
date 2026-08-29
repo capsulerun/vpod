@@ -366,14 +366,13 @@ impl SessionManager {
         prompt: String,
         mount_args: Vec<vm::MountArg>,
     ) -> Result<u64, String> {
-        let ram_size = vm::ram_size_from_filename(std::path::Path::new(&snapshot_path))
-            .unwrap_or(256 * 1024 * 1024);
-
         self.ensure_base(&snapshot_path)?;
 
         let cache = self.base_cache.borrow();
         let cached = cache.as_ref().unwrap();
         let flags = cached.flags;
+        let ram_size = cached.base.ram_size();
+
         let (mut bus, mut hart) = vm::_bus_from_base(&cached.base, ram_size, &mount_args, true);
 
         machine::snapshot::restore_devices(
@@ -715,13 +714,11 @@ impl SessionManager {
         _prompt: String,
         mount_args: Vec<vm::MountArg>,
     ) -> Result<u64, String> {
-        let ram_size = vm::ram_size_from_filename(std::path::Path::new(&snapshot_path))
-            .unwrap_or(256 * 1024 * 1024);
-
         self.ensure_base(&snapshot_path)?;
 
         let cache = self.base_cache.borrow();
         let cached = cache.as_ref().unwrap();
+        let ram_size = cached.base.ram_size();
         let (mut bus, mut hart) = vm::_bus_from_base(&cached.base, ram_size, &mount_args, true);
         drop(cache);
 
