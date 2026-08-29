@@ -114,6 +114,11 @@ impl CowRam {
     }
 
     #[inline(always)]
+    pub fn ram_size(&self) -> u64 {
+        self.mask + 1
+    }
+
+    #[inline(always)]
     fn page_ref(&self, page: usize) -> &[u8] {
         match &self.pages[page] {
             Some(p) => p,
@@ -384,5 +389,28 @@ mod pending_restore_tests {
         assert_eq!(pending.pages.len(), expected_pages);
         assert_eq!(pending.read_u8(0), 7);
         assert_eq!(pending.read_u8(ram as usize - 1), 7);
+    }
+}
+
+#[cfg(test)]
+mod ram_size_tests {
+    use super::*;
+
+    #[test]
+    fn every_constructor_reports_the_size_it_was_built_with() {
+        let size = 512 * 1024 * 1024;
+        assert_eq!(CowRam::new(size).ram_size(), size);
+        assert_eq!(CowRam::pending_restore(size).ram_size(), size);
+
+        let logical = size as usize + 8;
+        let padded = vec![0u8; CowRam::padded_len(logical)];
+        assert_eq!(CowRam::from_padded(padded, logical, size).ram_size(), size);
+    }
+
+    #[test]
+    fn a_shared_clone_keeps_the_size() {
+        let size = 1024 * 1024 * 1024;
+        let base = CowRam::pending_restore(size);
+        assert_eq!(base.clone_shared().ram_size(), size);
     }
 }

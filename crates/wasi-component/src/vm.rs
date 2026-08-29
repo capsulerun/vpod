@@ -4,7 +4,7 @@ use machine::machine_bus::MachineBus;
 use machine::snapshot;
 use machine::virtio::fs::Mount;
 use riscv_core::Hart;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone)]
@@ -49,29 +49,6 @@ pub struct _VmConfig<'a> {
     pub capture_tx: bool,
 }
 
-pub fn ram_size_from_filename(snapshot_path: &Path) -> Option<u64> {
-    let stem = snapshot_path.file_stem()?.to_str()?;
-    for part in stem.rsplit('-') {
-        let lower = part.to_ascii_lowercase();
-        if lower.ends_with("mb") {
-            return lower
-                .trim_end_matches("mb")
-                .parse::<u64>()
-                .ok()
-                .map(|mb| mb * 1024 * 1024);
-        }
-
-        if lower.ends_with("gb") {
-            return lower
-                .trim_end_matches("gb")
-                .parse::<u64>()
-                .ok()
-                .map(|gb| gb * 1024 * 1024 * 1024);
-        }
-    }
-    None
-}
-
 enum Compression {
     Lz4,
     Raw,
@@ -85,9 +62,52 @@ fn detect_compression_bytes(data: &[u8]) -> Compression {
     }
 }
 
+pub fn ram_size_from_header(data: &[u8]) -> Option<u64> {
+    let mut header = [0u8; 14];
+
+    let read = match detect_compression_bytes(data) {
+        Compression::Lz4 => FrameDecoder::new(std::io::Cursor::new(data)).read_exact(&mut header),
+        Compression::Raw => (&data[..]).read_exact(&mut header),
+    };
+    read.ok()?;
+
+    if &header[..4] != b"VPOD" {
+        return None;
+    }
+
+    let logical = u64::from_le_bytes(header[6..14].try_into().ok()?);
+    logical.checked_sub(8).filter(|size| size.is_power_of_two())
+}
+
+pub fn check_ram_fits(ram_size: u64) -> Result<(), String> {
+    let logical = ram_size + 8;
+    let needed =
+        logical.div_ceil(machine::cow_ram::PAGE_SIZE as u64) * machine::cow_ram::PAGE_SIZE as u64;
+
+    if needed <= isize::MAX as u64 {
+        return Ok(());
+    }
+
+    Err(format!(
+        "cannot run a {} MB guest on this build: RAM is a single {} byte \
+         allocation and a {}-bit target caps one allocation at {} bytes. \
+         The largest guest this build can restore is {} MB.",
+        ram_size / (1024 * 1024),
+        needed,
+        usize::BITS,
+        isize::MAX,
+        (isize::MAX as u64 / (1024 * 1024)).next_power_of_two() / 2,
+    ))
+}
+
 pub fn _read_base_and_tail(path: &Path) -> Result<(CowRam, Vec<u8>, u8), String> {
     let data =
         std::fs::read(path).map_err(|e| format!("failed to read snapshot {:?}: {e}", path))?;
+
+    if let Some(ram_size) = ram_size_from_header(&data) {
+        check_ram_fits(ram_size)?;
+    }
+
     let compression = detect_compression_bytes(&data);
     let cursor = std::io::Cursor::new(data);
 
@@ -132,24 +152,12 @@ pub fn _bus_from_base(
 }
 
 pub fn _load(config: _VmConfig) -> Result<(MachineBus, Hart, u8), String> {
-    let ram_size = ram_size_from_filename(config.snapshot).unwrap_or(256 * 1024 * 1024);
+    let snapshot_data = std::fs::read(config.snapshot)
+        .map_err(|e| format!("failed to read snapshot {:?}: {e}", config.snapshot))?;
 
-    let logical = ram_size + 8;
-    let needed =
-        logical.div_ceil(machine::cow_ram::PAGE_SIZE as u64) * machine::cow_ram::PAGE_SIZE as u64;
+    let ram_size = ram_size_from_header(&snapshot_data).unwrap_or(256 * 1024 * 1024);
 
-    if needed > isize::MAX as u64 {
-        return Err(format!(
-            "cannot run a {} MB guest on this build: RAM is a single {} byte \
-             allocation and a {}-bit target caps one allocation at {} bytes. \
-             The largest guest this build can restore is {} MB.",
-            ram_size / (1024 * 1024),
-            needed,
-            usize::BITS,
-            isize::MAX,
-            (isize::MAX as u64 / (1024 * 1024)).next_power_of_two() / 2,
-        ));
-    }
+    check_ram_fits(ram_size)?;
 
     let mut bus = MachineBus::new(ram_size, CowRam::pending_restore(ram_size));
     bus.attach_net();
@@ -168,8 +176,6 @@ pub fn _load(config: _VmConfig) -> Result<(MachineBus, Hart, u8), String> {
             .map_err(|e| format!("failed to attach disk: {e}"))?;
     }
 
-    let snapshot_data = std::fs::read(config.snapshot)
-        .map_err(|e| format!("failed to read snapshot {:?}: {e}", config.snapshot))?;
     let compression = detect_compression_bytes(&snapshot_data);
     let snapshot_cursor = std::io::Cursor::new(snapshot_data);
 
@@ -201,4 +207,62 @@ pub fn _load(config: _VmConfig) -> Result<(MachineBus, Hart, u8), String> {
     bus.uart_data.capture_tx.set(true);
 
     Ok((bus, hart, flags))
+}
+
+#[cfg(test)]
+mod header_size_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn header(ram_size: u64) -> Vec<u8> {
+        let mut bytes = b"VPOD".to_vec();
+        bytes.push(1); // version
+        bytes.push(0); // flags
+        bytes.extend_from_slice(&(ram_size + 8).to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 64]); // the RAM that would follow
+        bytes
+    }
+
+    fn lz4(bytes: &[u8]) -> Vec<u8> {
+        let mut encoder = lz4_flex::frame::FrameEncoder::new(Vec::new());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn reads_the_size_out_of_a_raw_snapshot() {
+        for mb in [256u64, 512, 1024] {
+            let size = mb * 1024 * 1024;
+            assert_eq!(ram_size_from_header(&header(size)), Some(size));
+        }
+    }
+
+    #[test]
+    fn reads_the_size_out_of_an_lz4_snapshot() {
+        let size = 1024 * 1024 * 1024;
+        assert_eq!(ram_size_from_header(&lz4(&header(size))), Some(size));
+    }
+
+    #[test]
+    fn a_name_that_says_nothing_still_gets_the_right_size() {
+        for mb in [256u64, 512, 1024] {
+            let size = mb * 1024 * 1024;
+            let snapshot = lz4(&header(size));
+            assert_eq!(ram_size_from_header(&snapshot), Some(size));
+        }
+    }
+
+    #[test]
+    fn rejects_bytes_that_are_not_a_snapshot() {
+        assert_eq!(ram_size_from_header(b"not a snapshot at all, really"), None);
+        assert_eq!(ram_size_from_header(&[]), None);
+        assert_eq!(ram_size_from_header(&lz4(b"still not a snapshot")), None);
+    }
+
+    #[test]
+    fn rejects_a_length_that_is_not_a_power_of_two() {
+        let mut bytes = header(1024 * 1024 * 1024);
+        bytes[6..14].copy_from_slice(&12345u64.to_le_bytes());
+        assert_eq!(ram_size_from_header(&bytes), None);
+    }
 }
