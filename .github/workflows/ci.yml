@@ -220,6 +220,7 @@ jobs:
     name: Browser Integration Tests
     runs-on: ubuntu-latest
     needs: build-aot
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repo
@@ -286,6 +287,33 @@ jobs:
           node dev/run-interrupt.mjs --browser chrome \
             --snapshot-dir /tmp/snapshots \
             --name alpine:3.23.0
+
+      - name: Fetch the larger snapshots
+        run: |
+          ./sdks/typescript/scripts/fetch-test-snapshot.sh \
+            $VPOD_TEST_CHANNEL/vsnap-base-512mb.snap \
+            /tmp/snapshots/vsnap-base-512mb.snap
+          ./sdks/typescript/scripts/fetch-test-snapshot.sh \
+            $VPOD_TEST_CHANNEL/vsnap-base-1024mb.snap \
+            /tmp/snapshots/vsnap-base-1024mb.snap
+          ln /tmp/snapshots/vsnap-base-512mb.snap  /tmp/snapshots/snap_51248a6f0c3b7d19.snap
+          ln /tmp/snapshots/vsnap-base-1024mb.snap /tmp/snapshots/snap_a422ba54177ff2ee.snap
+
+      - name: Guest RAM size, Chrome
+        working-directory: sdks/typescript
+        run: |
+          node dev/run-ram-size.mjs --browser chrome \
+            --snapshot-dir /tmp/snapshots \
+            --pair vsnap-base-512mb=snap_51248a6f0c3b7d19 \
+            --pair vsnap-base-1024mb=snap_a422ba54177ff2ee
+
+      - name: Guest RAM size, Firefox
+        working-directory: sdks/typescript
+        run: |
+          node dev/run-ram-size.mjs --browser firefox \
+            --snapshot-dir /tmp/snapshots \
+            --pair vsnap-base-512mb=snap_51248a6f0c3b7d19 \
+            --pair vsnap-base-1024mb=snap_a422ba54177ff2ee
 
   embed-browser-integration:
     name: Embed Browser Integration Tests
