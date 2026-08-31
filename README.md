@@ -10,7 +10,6 @@
 
 [Live demo](https://browser.vpod.sh) • [Getting Started](#getting-started) • [Documentation](https://docs.vpod.sh/quickstart) • [Issues](https://github.com/capsulerun/vpod/issues/new) • [Contributing](#contributing)
 
-![demo](assets/demo.gif)
 </div>
 
 ## What is a `vpod` ?
