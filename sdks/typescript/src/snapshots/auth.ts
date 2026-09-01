@@ -22,12 +22,13 @@ export function resolveApiKey(explicit: string | undefined): string | undefined 
 
 
 export function isBrowser(): boolean {
-    return (
-        typeof globalThis === "object" &&
+    return ((typeof globalThis === "object" &&
         typeof (globalThis as { document?: unknown }).document === "object" &&
-        (globalThis as { document?: unknown }).document !== null
+        (globalThis as { document?: unknown }).document !== null) ||
+        (typeof (globalThis as any).WorkerGlobalScope !== "undefined" && globalThis instanceof (globalThis as any).WorkerGlobalScope)
     );
 }
+
 
 export function checkApiKeyKind(apiKey: string): void {
     const browser = isBrowser();
