@@ -114,6 +114,17 @@ else
         --setup "i=0; while [ \$i -lt 100 ]; do echo x > /tmp/aot-\$i; i=\$((\$i+1)); done; cat /tmp/aot-* | wc -l; rm -f /tmp/aot-*" \
         --setup "uv venv /tmp/aot-venv && rm -rf /tmp/aot-venv"
 
+    set -- "$@" \
+        --setup "seq 1 40000 | sed 's/\$/ the quick brown fox jumps over the lazy dog/' > /tmp/aot-fix; wc -c /tmp/aot-fix" \
+        --setup "gzip -c /tmp/aot-fix > /tmp/aot-fix.gz; gunzip -c /tmp/aot-fix.gz | wc -c; rm -f /tmp/aot-fix.gz" \
+        --setup "sha256sum /tmp/aot-fix; md5sum /tmp/aot-fix" \
+        --setup "sort /tmp/aot-fix | uniq | wc -l" \
+        --setup "grep -c fox /tmp/aot-fix" \
+        --setup "tar czf /tmp/aot-t.tgz /etc 2>/dev/null; mkdir -p /tmp/aot-x; tar xzf /tmp/aot-t.tgz -C /tmp/aot-x; rm -rf /tmp/aot-x /tmp/aot-t.tgz" \
+        --setup "cat /tmp/aot-fix" \
+        --setup "i=0; while [ \$i -lt 200 ]; do /bin/true; i=\$((\$i+1)); done" \
+        --setup "rm -f /tmp/aot-fix"
+
 
     set -- "$@" \
         --setup "apk update && apk add jq && echo '{\"a\":[1,2,3]}' | jq -c '.a | add' && echo VPOD_AOT_APK_OK"
