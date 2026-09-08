@@ -317,7 +317,9 @@ fi
 
 echo "── Building overlay..."
 rm -rf "$OVERLAY"
-mkdir -p "$OVERLAY/sbin" "$OVERLAY/usr/lib/vpod"
+# Do not create overlay/sbin/: Debian/Ubuntu usr-merge has sbin -> usr/sbin, and a
+# real sbin/ directory in the second cpio replaces that symlink, breaking /sbin/*.
+mkdir -p "$OVERLAY/usr/lib/vpod" "$OVERLAY/usr/sbin"
 
 if [ -d "$ROOTFS/etc/apk" ]; then
     mkdir -p "$OVERLAY/etc/apk"
@@ -459,28 +461,44 @@ while True:
 PYRUNNER_EOF
 fi
 
-cat > "$OVERLAY/sbin/init" << 'INIT_EOF'
+cat > "$OVERLAY/init" << 'INIT_EOF'
 #!/bin/sh
 
 export PATH=/usr/bin:/usr/sbin:/bin:/sbin
 
-mount -t proc     proc     /proc
-mount -t sysfs    sysfs    /sys
-mount -t devtmpfs devtmpfs /dev
-mount -t tmpfs    tmpfs    /tmp
+mount -t proc     proc     /proc     2>/dev/null || true
+mount -t sysfs    sysfs    /sys      2>/dev/null || true
+mount -t devtmpfs devtmpfs /dev      2>/dev/null || true
+mount -t tmpfs    tmpfs    /tmp      2>/dev/null || true
+
+# Console may be missing if devtmpfs mount failed on a non-empty /dev.
+[ -c /dev/ttyS0 ] || mknod -m 622 /dev/ttyS0 c 4 64 2>/dev/null || true
+[ -c /dev/console ] || mknod -m 622 /dev/console c 5 1 2>/dev/null || true
+[ -c /dev/null ] || mknod -m 666 /dev/null c 1 3 2>/dev/null || true
 
 # Container runtime primitives (docker/podman/buildah)
 mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
 echo '+cpu +memory +pids +io' > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
-modprobe overlay 2>/dev/null || true
 
-hostname vpod
+# Load virtio modules. Prefer modprobe; fall back to insmod for images
+# that ship modules but not kmod (e.g. minimal Ubuntu).
+_kver="$(uname -r 2>/dev/null)"
+_mod() {
+    modprobe "$1" 2>/dev/null && return 0
+    _ko="/usr/lib/modules/${_kver}/kernel/$2"
+    [ -f "$_ko" ] || _ko="/lib/modules/${_kver}/kernel/$2"
+    [ -f "$_ko" ] && insmod "$_ko" 2>/dev/null
+}
+_mod overlay   fs/overlayfs/overlay.ko
+_mod virtio_mmio drivers/virtio/virtio_mmio.ko
+_mod virtio_ring drivers/virtio/virtio_ring.ko
+_mod virtio     drivers/virtio/virtio.ko
+_mod virtio_net drivers/net/virtio_net.ko
+_mod virtio_blk drivers/block/virtio_blk.ko
+_mod virtiofs   fs/fuse/virtiofs.ko
+
+hostname vpod 2>/dev/null || true
 ip link set lo up 2>/dev/null || true
-
-modprobe virtio_mmio 2>/dev/null || true
-modprobe virtio_net  2>/dev/null || true
-modprobe virtio_blk  2>/dev/null || true
-modprobe virtiofs    2>/dev/null || true
 
 ip link set eth0 up                       2>/dev/null || true
 ip addr add 10.0.2.15/24 dev eth0         2>/dev/null || true
@@ -509,13 +527,19 @@ export NODE_EXTRA_CA_CERTS=/etc/ssl/vpod/ca-only.pem
 # Enables container/docker runtimes
 export DOCKER_RAMDISK=1
 
-export ENV=''
+# Leave ENV unset: dash sources $ENV for interactive shells.
 unset HISTFILE
-set +o history 2>/dev/null || true
-exec setsid sh -c 'HISTFILE=/dev/null HISTSIZE=0 HOME=/root SSL_CERT_FILE=/etc/ssl/vpod/ca-only.pem exec sh </dev/ttyS0 >/dev/ttyS0 2>&1'
+unset ENV
+# Do not exec setsid here: util-linux setsid exits 2 when it becomes PID 1
+# (Ubuntu/Debian). Attaching the shell directly is enough for the setup console.
+# Do not run `set +o history`: on dash, `set` is a special builtin and an
+# unknown option aborts the shell (exit 2) even with `|| true`.
+exec sh </dev/ttyS0 >/dev/ttyS0 2>&1
 INIT_EOF
-chmod +x "$OVERLAY/sbin/init"
-ln -sf /sbin/init "$OVERLAY/init"
+chmod +x "$OVERLAY/init"
+# usr-merged images resolve /sbin via /usr/sbin; keep a copy there too.
+cp "$OVERLAY/init" "$OVERLAY/usr/sbin/init"
+chmod +x "$OVERLAY/usr/sbin/init"
 
 
 echo "── Packing ${NAME} initrd (image rootfs + modules + overlay)..."
@@ -525,7 +549,8 @@ cat "$PART_MINI" "$PART_OVL" > "$INITRD"
 rm -f "$PART_MINI" "$PART_OVL"
 echo "   Done: $INITRD ($(du -sh "$INITRD" | cut -f1))"
 
-BOOTARGS="root=/dev/ram0 rw console=ttyS0 earlycon init=/sbin/init"
+# rdinit= is what the kernel honors for initramfs; plain init= is ignored once /init exists.
+BOOTARGS="root=/dev/ram0 rw console=ttyS0 earlycon rdinit=/init"
 
 echo "── Booting guest to finalize the snapshot..."
 
