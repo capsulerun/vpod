@@ -679,7 +679,10 @@ mod tests {
     #[test]
     fn draining_the_console_drops_its_interrupt_line() {
         let mut bus = bus_with_one_console_byte();
-        assert!(bus.refresh_external_interrupt(), "queued byte raised no line");
+        assert!(
+            bus.refresh_external_interrupt(),
+            "queued byte raised no line"
+        );
 
         assert_eq!(bus.uart.read_register(REGISTER_RBR), b'x');
 

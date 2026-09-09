@@ -3,8 +3,7 @@
 use crate::block::{self, BlockCache};
 use crate::csr::{
     Csr, MIP_MEIP, MIP_MTIP, MIP_SEIP, MSTATUS_FS, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP,
-    MSTATUS_SIE, MSTATUS_SPIE,
-    MSTATUS_SPP, PrivMode,
+    MSTATUS_SIE, MSTATUS_SPIE, MSTATUS_SPP, PrivMode,
 };
 use crate::decode::{Instruction, sign_extend};
 use crate::extensions as ext;
