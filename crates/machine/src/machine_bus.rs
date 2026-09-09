@@ -127,6 +127,21 @@ impl MachineBus {
             hart.csr.mip &= !MIP_MSIP;
         }
 
+        if let Some(network_device) = &mut self.net {
+            let mask = self.ram_mask;
+            let mut ram = RamView::new(&mut self.ram, mask);
+
+            network_device.poll_rx(&mut ram);
+        }
+
+        if self.refresh_external_interrupt() {
+            hart.csr.mip |= MIP_MEIP | MIP_SEIP;
+        } else {
+            hart.csr.mip &= !(MIP_MEIP | MIP_SEIP);
+        }
+    }
+
+    pub fn refresh_external_interrupt(&mut self) -> bool {
         self.plic.set_irq(UART_IRQ, self.uart.irq_pending.get());
         self.plic
             .set_irq(UART_STDERR_IRQ, self.uart_stderr.irq_pending.get());
@@ -143,12 +158,7 @@ impl MachineBus {
         self.plic
             .set_irq(VIRTIO_CONSOLE_IRQ, self.console.mmio.int_status != 0);
 
-        if let Some(network_device) = &mut self.net {
-            let mask = self.ram_mask;
-            let mut ram = RamView::new(&mut self.ram, mask);
-
-            network_device.poll_rx(&mut ram);
-
+        if let Some(network_device) = &self.net {
             self.plic
                 .set_irq(VIRTIO_NET_IRQ, network_device.mmio.int_status != 0);
         }
@@ -160,11 +170,7 @@ impl MachineBus {
             );
         }
 
-        if self.plic.irq_pending() {
-            hart.csr.mip |= MIP_MEIP | MIP_SEIP;
-        } else {
-            hart.csr.mip &= !(MIP_MEIP | MIP_SEIP);
-        }
+        self.plic.irq_pending()
     }
 
     pub fn net_rx_pending(&self) -> bool {
@@ -303,6 +309,8 @@ impl SystemBus for MachineBus {
         }
 
         if (PLIC_BASE..PLIC_BASE + PLIC_SIZE - 3).contains(&address) {
+            self.refresh_external_interrupt();
+
             return self.plic.read_register(address - PLIC_BASE);
         }
 
@@ -512,6 +520,10 @@ impl SystemBus for MachineBus {
     fn timer_interrupt_pending(&self) -> Option<bool> {
         Some(self.clint.get_interrupt_status().0)
     }
+
+    fn external_interrupt_pending(&mut self) -> Option<bool> {
+        Some(self.refresh_external_interrupt())
+    }
 }
 
 fn kernel_entry_and_offset(kernel: &[u8]) -> (u64, u64) {
@@ -641,4 +653,62 @@ pub fn boot(
     hart.regs.pc = entry_point;
     hart.regs.write(10, 0);
     hart.regs.write(11, dtb_physical_address);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plic::PLIC_CLAIM_COMPLETE_OFFSET;
+
+    const IER_RX_READY: u8 = 1 << 0;
+    const REGISTER_RBR: u8 = 0;
+    const REGISTER_IER: u8 = 1;
+
+    fn bus_with_one_console_byte() -> MachineBus {
+        const RAM_SIZE: u64 = 1 << 20;
+
+        let mut bus = MachineBus::new(RAM_SIZE, CowRam::new(RAM_SIZE));
+
+        bus.uart.write_register(REGISTER_IER, IER_RX_READY);
+        bus.uart.push_rx(b'x');
+        bus.refresh_external_interrupt();
+
+        bus
+    }
+
+    #[test]
+    fn draining_the_console_drops_its_interrupt_line() {
+        let mut bus = bus_with_one_console_byte();
+        assert!(bus.refresh_external_interrupt(), "queued byte raised no line");
+
+        assert_eq!(bus.uart.read_register(REGISTER_RBR), b'x');
+
+        assert!(
+            !bus.refresh_external_interrupt(),
+            "console line still asserted after the guest read the last byte"
+        );
+    }
+
+    #[test]
+    fn claim_does_not_replay_a_line_the_device_dropped() {
+        let mut bus = bus_with_one_console_byte();
+        assert_eq!(bus.uart.read_register(REGISTER_RBR), b'x');
+
+        assert_eq!(
+            bus.read_word(PLIC_BASE + PLIC_CLAIM_COMPLETE_OFFSET),
+            0,
+            "claim returned an interrupt recorded by an earlier poll"
+        );
+    }
+
+    #[test]
+    fn claim_still_reports_a_line_that_is_asserted() {
+        let mut bus = bus_with_one_console_byte();
+
+        assert_eq!(
+            bus.read_word(PLIC_BASE + PLIC_CLAIM_COMPLETE_OFFSET),
+            UART_IRQ,
+            "claim missed an interrupt that is still asserted"
+        );
+    }
 }

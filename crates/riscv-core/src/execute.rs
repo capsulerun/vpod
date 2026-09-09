@@ -2,7 +2,8 @@
 
 use crate::block::{self, BlockCache};
 use crate::csr::{
-    Csr, MIP_MTIP, MSTATUS_FS, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP, MSTATUS_SIE, MSTATUS_SPIE,
+    Csr, MIP_MEIP, MIP_MTIP, MIP_SEIP, MSTATUS_FS, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP,
+    MSTATUS_SIE, MSTATUS_SPIE,
     MSTATUS_SPP, PrivMode,
 };
 use crate::decode::{Instruction, sign_extend};
@@ -137,6 +138,10 @@ fn invalidate_fetch_cache<B: SystemBus>(ctx: &mut ExecContext<B>) {
     ctx.icache_tags.fill(u64::MAX);
 }
 
+/// Interrupt cause numbers for the two external-interrupt lines the PLIC feeds.
+const IRQ_SEI: u64 = 9;
+const IRQ_MEI: u64 = 11;
+
 pub fn run<B: SystemBus>(ctx: &mut ExecContext<B>, max_steps: u64) -> StepResult {
     run_impl::<B, false>(ctx, max_steps)
 }
@@ -155,6 +160,13 @@ fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
         if let Some(irq) = ctx.csr.pending_interrupt(*ctx.priv_mode) {
             if irq == 7 && ctx.bus.timer_interrupt_pending() == Some(false) {
                 ctx.csr.mip &= !MIP_MTIP;
+                continue;
+            }
+
+            if matches!(irq, IRQ_MEI | IRQ_SEI)
+                && ctx.bus.external_interrupt_pending() == Some(false)
+            {
+                ctx.csr.mip &= !(MIP_MEIP | MIP_SEIP);
                 continue;
             }
 
@@ -326,6 +338,10 @@ pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
     if let Some(irq) = ctx.csr.pending_interrupt(*ctx.priv_mode) {
         if irq == 7 && ctx.bus.timer_interrupt_pending() == Some(false) {
             ctx.csr.mip &= !MIP_MTIP;
+        } else if matches!(irq, IRQ_MEI | IRQ_SEI)
+            && ctx.bus.external_interrupt_pending() == Some(false)
+        {
+            ctx.csr.mip &= !(MIP_MEIP | MIP_SEIP);
         } else {
             ctx.fetch_tlb.flush();
             *ctx.is_waiting = false;

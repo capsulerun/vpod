@@ -29,6 +29,10 @@ pub trait SystemBus {
     fn timer_interrupt_pending(&self) -> Option<bool> {
         None
     }
+
+    fn external_interrupt_pending(&mut self) -> Option<bool> {
+        None
+    }
 }
 
 static FLAT_EPOCH_SOURCE: AtomicU64 = AtomicU64::new(1);
