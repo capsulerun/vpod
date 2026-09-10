@@ -82,6 +82,12 @@ fn recover_shell(session: &mut Session) {
     session.shell_lost = !recovered;
 }
 
+const POWERED_OFF_MESSAGE: &str = "vpod: the guest powered itself off, so this sandbox has no machine left \
+     to run on. Create a new sandbox; nothing in this one, `code.run` included, can \
+     run again.";
+
+const POWERED_OFF_NOTE: &str = "vpod: the guest powered off before this command reported an exit status.";
+
 const SHELL_LOST_MESSAGE: &str = "vpod: the shell did not come back from a timed-out command. Something that \
      ignores Ctrl-C was left in the foreground, an interactive python3 or a \
      pager for instance. This sandbox cannot run further commands, so create a \
@@ -195,17 +201,27 @@ fn finish_shell_exec(session: &mut Session, state: repl::ExecState, trim: bool) 
     stderr.push_str(&String::from_utf8_lossy(
         &session.bus.uart_stderr.drain_tx(),
     ));
-    let stderr = if trim {
+    let mut stderr = if trim {
         stderr.trim_end().to_string()
     } else {
         stderr
     };
 
-    if session.is_shell && timed_out {
+    if session.hart.shutdown_requested {
+        if !stderr.is_empty() && !stderr.ends_with('\n') {
+            stderr.push('\n');
+        }
+        stderr.push_str(POWERED_OFF_NOTE);
+    } else if session.is_shell && timed_out {
         recover_shell(session);
     }
 
-    if session.is_shell && was_terminal && timed_out && !session.shell_lost {
+    if session.is_shell
+        && was_terminal
+        && timed_out
+        && !session.shell_lost
+        && !session.hart.shutdown_requested
+    {
         restore_terminal(session);
     }
 
@@ -488,6 +504,10 @@ impl SessionManager {
             .get_mut(&handle)
             .ok_or_else(|| format!("invalid session handle: {handle}"))?;
 
+        if session.hart.shutdown_requested {
+            return Err(POWERED_OFF_MESSAGE.to_string());
+        }
+
         if session.shell_lost {
             return Err(SHELL_LOST_MESSAGE.to_string());
         }
@@ -552,9 +572,17 @@ impl SessionManager {
             };
 
             let stderr_bytes = session.bus.uart_stderr.drain_tx();
-            let stderr = String::from_utf8_lossy(&stderr_bytes)
+            let mut stderr = String::from_utf8_lossy(&stderr_bytes)
                 .trim_end()
                 .to_string();
+
+            if session.hart.shutdown_requested {
+                if !stderr.is_empty() {
+                    stderr.push('\n');
+                }
+
+                stderr.push_str(POWERED_OFF_NOTE);
+            }
 
             Ok(ExecutionResult {
                 stdout,
@@ -586,6 +614,10 @@ impl SessionManager {
         let session = sessions
             .get_mut(&handle)
             .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+        if session.hart.shutdown_requested {
+            return Err(POWERED_OFF_MESSAGE.to_string());
+        }
 
         if session.shell_lost {
             return Err(SHELL_LOST_MESSAGE.to_string());
