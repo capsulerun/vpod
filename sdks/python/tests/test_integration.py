@@ -17,6 +17,25 @@ def test_stateless_command():
         assert "hello" in result.stdout
 
 
+def test_power_off_is_not_reported_as_a_timeout():
+    with Sandbox.create() as sbx:
+        sbx.code.run("print('warm')")
+
+        halted = sbx.code.run("import os\nos.system('poweroff -f')", timeout=30)
+
+        assert "powered off" in (halted.error or "")
+        assert "Timed out" not in (halted.error or "")
+
+
+def test_a_powered_off_sandbox_refuses_further_work():
+    with Sandbox.create() as sbx:
+        sbx.code.run("print('warm')")
+        sbx.code.run("import os\nos.system('poweroff -f')", timeout=30)
+
+        with pytest.raises(RuntimeError, match="powered itself off"):
+            sbx.code.run("print('x')")
+
+
 def test_stateless_exit_code():
     sbx = Sandbox.create()
     result = sbx.commands.run("false")

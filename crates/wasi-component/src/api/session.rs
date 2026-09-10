@@ -56,9 +56,6 @@ pub struct Session {
     pub pyrunner_reseeded: bool,
     pub shell_lost: bool,
     pub exec: Option<repl::ExecState>,
-    /// Input written before the command started. Staged to a file rather than
-    /// pushed at the terminal, so EOF belongs to the command instead of leaking
-    /// to the shell behind it.
     pub staged_stdin: Vec<u8>,
 }
 
@@ -81,6 +78,15 @@ fn recover_shell(session: &mut Session) {
 
     session.shell_lost = !recovered;
 }
+
+pub const EXIT_POWERED_OFF: u32 = 256;
+
+const POWERED_OFF_MESSAGE: &str = "vpod: the guest powered itself off, so this sandbox has no machine left \
+     to run on. Create a new sandbox; nothing in this one, `code.run` included, can \
+     run again.";
+
+const POWERED_OFF_NOTE: &str =
+    "vpod: the guest powered off before this command reported an exit status.";
 
 const SHELL_LOST_MESSAGE: &str = "vpod: the shell did not come back from a timed-out command. Something that \
      ignores Ctrl-C was left in the foreground, an interactive python3 or a \
@@ -182,11 +188,14 @@ fn finish_shell_exec(session: &mut Session, state: repl::ExecState, trim: bool) 
         let ctrl_bytes = repl::drain_ctrl_with_grace(&mut session.bus, &mut session.hart);
         match ctrl_bytes.first() {
             Some(byte) => *byte as u32,
+            None if session.hart.shutdown_requested => EXIT_POWERED_OFF,
             None => {
                 timed_out = true;
                 124
             }
         }
+    } else if session.hart.shutdown_requested {
+        EXIT_POWERED_OFF
     } else {
         0
     };
@@ -195,13 +204,18 @@ fn finish_shell_exec(session: &mut Session, state: repl::ExecState, trim: bool) 
     stderr.push_str(&String::from_utf8_lossy(
         &session.bus.uart_stderr.drain_tx(),
     ));
-    let stderr = if trim {
+    let mut stderr = if trim {
         stderr.trim_end().to_string()
     } else {
         stderr
     };
 
-    if session.is_shell && timed_out {
+    if session.hart.shutdown_requested {
+        if !stderr.is_empty() && !stderr.ends_with('\n') {
+            stderr.push('\n');
+        }
+        stderr.push_str(POWERED_OFF_NOTE);
+    } else if session.is_shell && timed_out {
         recover_shell(session);
     }
 
@@ -488,6 +502,10 @@ impl SessionManager {
             .get_mut(&handle)
             .ok_or_else(|| format!("invalid session handle: {handle}"))?;
 
+        if session.hart.shutdown_requested {
+            return Err(POWERED_OFF_MESSAGE.to_string());
+        }
+
         if session.shell_lost {
             return Err(SHELL_LOST_MESSAGE.to_string());
         }
@@ -545,6 +563,7 @@ impl SessionManager {
             let ctrl_bytes = repl::drain_ctrl_with_grace(&mut session.bus, &mut session.hart);
             let exit_code = match ctrl_bytes.first() {
                 Some(byte) => *byte as u32,
+                None if session.hart.shutdown_requested => EXIT_POWERED_OFF,
                 None => {
                     session.pyrunner_dirty = true;
                     124
@@ -552,9 +571,17 @@ impl SessionManager {
             };
 
             let stderr_bytes = session.bus.uart_stderr.drain_tx();
-            let stderr = String::from_utf8_lossy(&stderr_bytes)
+            let mut stderr = String::from_utf8_lossy(&stderr_bytes)
                 .trim_end()
                 .to_string();
+
+            if session.hart.shutdown_requested {
+                if !stderr.is_empty() {
+                    stderr.push('\n');
+                }
+
+                stderr.push_str(POWERED_OFF_NOTE);
+            }
 
             Ok(ExecutionResult {
                 stdout,
@@ -586,6 +613,10 @@ impl SessionManager {
         let session = sessions
             .get_mut(&handle)
             .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+        if session.hart.shutdown_requested {
+            return Err(POWERED_OFF_MESSAGE.to_string());
+        }
 
         if session.shell_lost {
             return Err(SHELL_LOST_MESSAGE.to_string());

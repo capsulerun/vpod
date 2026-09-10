@@ -218,6 +218,7 @@ pub enum SliceOutcome {
 
 pub struct ExecState {
     output: Vec<u8>,
+    scanned_upto: usize,
     stderr: Vec<u8>,
     ended_at_prompt: bool,
     deadline: u64,
@@ -234,6 +235,7 @@ impl ExecState {
 
         Self {
             output: Vec::new(),
+            scanned_upto: 0,
             stderr: Vec::new(),
             ended_at_prompt: false,
             deadline,
@@ -248,6 +250,34 @@ impl ExecState {
     pub fn absorb_stderr(&mut self, bytes: &[u8]) {
         self.stderr.extend_from_slice(bytes);
     }
+
+    fn saw_sentinel(&mut self, needle: &[u8]) -> bool {
+        let overlap = needle.len().saturating_sub(1);
+        let from = self
+            .scanned_upto
+            .saturating_sub(overlap)
+            .min(self.output.len());
+        let found = contains_subslice(&self.output[from..], needle);
+
+        self.scanned_upto = self.output.len();
+        found
+    }
+
+    fn truncate_output(&mut self, len: usize) {
+        self.output.truncate(len);
+        self.scanned_upto = self.scanned_upto.min(len);
+    }
+}
+
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+
+    haystack.len() >= needle.len()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -314,14 +344,13 @@ pub fn run_slice(
             state.output.extend_from_slice(&tx);
 
             if !data_channel && state.output.ends_with(prompt) {
-                state.output.truncate(state.output.len() - prompt.len());
+                state.truncate_output(state.output.len() - prompt.len());
                 state.ended_at_prompt = true;
                 return SliceOutcome::Finished;
             }
 
             if let Some(s) = sentinel
-                && let Ok(text) = std::str::from_utf8(&state.output)
-                && text.contains(s)
+                && state.saw_sentinel(s.as_bytes())
             {
                 return SliceOutcome::Finished;
             }
@@ -342,7 +371,7 @@ pub fn run_slice(
                     state.output.extend_from_slice(&extra);
 
                     if state.output.ends_with(prompt) {
-                        state.output.truncate(state.output.len() - prompt.len());
+                        state.truncate_output(state.output.len() - prompt.len());
                         state.ended_at_prompt = true;
                         break;
                     }
@@ -365,6 +394,7 @@ pub fn drain_output(state: &mut ExecState, prompt: &[u8]) -> String {
     }
 
     let chunk: Vec<u8> = state.output.drain(..boundary).collect();
+    state.scanned_upto = state.scanned_upto.saturating_sub(boundary);
     let text = String::from_utf8_lossy(&chunk);
 
     if state.tty {
@@ -561,6 +591,69 @@ fn strip_ansi(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn exec_state(output: &[u8]) -> ExecState {
+        ExecState {
+            output: output.to_vec(),
+            scanned_upto: 0,
+            stderr: Vec::new(),
+            ended_at_prompt: false,
+            deadline: 0,
+            tty: false,
+        }
+    }
+
+    #[test]
+    fn finds_a_sentinel_split_across_two_drains() {
+        let mut state = exec_state(b"noise ---VPOD_");
+        assert!(!state.saw_sentinel(b"---VPOD_DONE---"));
+
+        state.output.extend_from_slice(b"DONE--- trailing");
+        assert!(state.saw_sentinel(b"---VPOD_DONE---"));
+    }
+
+    #[test]
+    fn finds_a_sentinel_after_a_byte_that_is_not_utf8() {
+        let mut state = exec_state(b"\xff\xfe---VPOD_DONE---");
+
+        assert!(std::str::from_utf8(&state.output).is_err());
+        assert!(state.saw_sentinel(b"---VPOD_DONE---"));
+    }
+
+    #[test]
+    fn rescans_only_the_bytes_that_arrived() {
+        let mut state = exec_state(b"aaaa");
+        assert!(!state.saw_sentinel(b"xy"));
+        assert_eq!(state.scanned_upto, 4);
+
+        state.output.extend_from_slice(b"bbbb");
+        assert!(!state.saw_sentinel(b"xy"));
+        assert_eq!(state.scanned_upto, 8);
+    }
+
+    #[test]
+    fn a_drain_moves_the_cursor_with_the_buffer() {
+        let mut state = exec_state(b"one\ntwo\n");
+        assert!(!state.saw_sentinel(b"zz"));
+        assert_eq!(state.scanned_upto, 8);
+
+        drain_output(&mut state, b"");
+        assert!(state.output.is_empty());
+        assert_eq!(state.scanned_upto, 0);
+
+        state.output.extend_from_slice(b"zz");
+        assert!(state.saw_sentinel(b"zz"));
+    }
+
+    #[test]
+    fn truncating_the_prompt_pulls_the_cursor_back() {
+        let mut state = exec_state(b"output$ ");
+        assert!(!state.saw_sentinel(b"zz"));
+        assert_eq!(state.scanned_upto, 8);
+
+        state.truncate_output(6);
+        assert_eq!(state.scanned_upto, 6);
+    }
 
     #[test]
     fn never_splits_a_multibyte_character() {
