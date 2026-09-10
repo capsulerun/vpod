@@ -44,51 +44,40 @@ async function exchange(driver, id = 1) {
 const PROXY = "https://browser-proxy.vpod.sh";
 const DIRECT = "https://dl-cdn.alpinelinux.org/alpine/x";
 
+function recordRequests(seen, respond) {
+    return async (url, init) => {
+        if (init?.mode === "no-cors") {
+            return new Response(null, { status: 200 });
+        }
+
+        seen.push(url);
+        return respond(url);
+    };
+}
+
 describe("corsProxy", () => {
-    it("goes direct when the destination allows it", async () => {
+    it("sends the request through the proxy, without trying direct first", async () => {
         const seen = [];
         await asBrowser(() =>
             withFetch(
-                async (url) => {
-                    seen.push(url);
-                    return new Response("ok", { status: 200 });
-                },
+                recordRequests(seen, async () => new Response("ok", { status: 200 })),
                 async () => {
                     await exchange(new FetchDriver({ corsProxy: PROXY }));
                 },
             ),
         );
 
-        assert.deepEqual(seen, [DIRECT], "a working host must not touch the proxy");
+        assert.deepEqual(seen, [`${PROXY}/${DIRECT}`], "a configured proxy is the route");
     });
 
-    it("retries through the proxy when the browser refuses the direct fetch", async () => {
+    it("routes every request the same way, with nothing learned from failures", async () => {
         const seen = [];
         await asBrowser(() =>
             withFetch(
-                async (url) => {
-                    seen.push(url);
+                recordRequests(seen, async (url) => {
                     if (!url.startsWith(PROXY)) throw new TypeError("Failed to fetch");
                     return new Response("ok", { status: 200 });
-                },
-                async () => {
-                    await exchange(new FetchDriver({ corsProxy: PROXY }));
-                },
-            ),
-        );
-
-        assert.deepEqual(seen, [DIRECT, `${PROXY}/${DIRECT}`]);
-    });
-
-    it("remembers the host, so only the first request pays a failure", async () => {
-        const seen = [];
-        await asBrowser(() =>
-            withFetch(
-                async (url) => {
-                    seen.push(url);
-                    if (!url.startsWith(PROXY)) throw new TypeError("Failed to fetch");
-                    return new Response("ok", { status: 200 });
-                },
+                }),
                 async () => {
                     const driver = new FetchDriver({ corsProxy: PROXY });
                     await exchange(driver, 1);
@@ -99,21 +88,35 @@ describe("corsProxy", () => {
         );
 
         assert.deepEqual(seen, [
-            DIRECT,
             `${PROXY}/${DIRECT}`,
             `${PROXY}/${DIRECT}`,
             `${PROXY}/${DIRECT}`,
         ]);
     });
 
-    it("does not retry when no proxy is configured", async () => {
+    it("does not fall back to a direct fetch when the proxy fails", async () => {
         const seen = [];
         await asBrowser(() =>
             withFetch(
-                async (url) => {
-                    seen.push(url);
+                recordRequests(seen, async () => {
                     throw new TypeError("Failed to fetch");
+                }),
+                async () => {
+                    await exchange(new FetchDriver({ corsProxy: PROXY }));
                 },
+            ),
+        );
+
+        assert.deepEqual(seen, [`${PROXY}/${DIRECT}`], "a failing proxy must not leak direct");
+    });
+
+    it("goes direct when no proxy is configured", async () => {
+        const seen = [];
+        await asBrowser(() =>
+            withFetch(
+                recordRequests(seen, async () => {
+                    throw new TypeError("Failed to fetch");
+                }),
                 async () => {
                     await exchange(new FetchDriver());
                 },
@@ -127,17 +130,13 @@ describe("corsProxy", () => {
         const seen = [];
         await asBrowser(() =>
             withFetch(
-                async (url) => {
-                    seen.push(url);
-                    if (!url.startsWith(PROXY)) throw new TypeError("Failed to fetch");
-                    return new Response("ok", { status: 200 });
-                },
+                recordRequests(seen, async () => new Response("ok", { status: 200 })),
                 async () => {
                     await exchange(new FetchDriver({ corsProxy: `${PROXY}/` }));
                 },
             ),
         );
 
-        assert.equal(seen[1], `${PROXY}/${DIRECT}`, "no doubled slash");
+        assert.equal(seen[0], `${PROXY}/${DIRECT}`, "no doubled slash");
     });
 });

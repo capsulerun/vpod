@@ -32,11 +32,17 @@ function connect(driver, { id = 1, capacity = 1 << 16, resolvedHostname, port = 
     };
 }
 
-function stubFetch(handler) {
-    globalThis.fetch = async (url, init) => handler(url, init);
+function stubFetch(thrown, { hostAnswersProbe }) {
+    globalThis.fetch = async (_url, init) => {
+        if (init?.mode === "no-cors") {
+            if (!hostAnswersProbe) throw new TypeError("Failed to fetch");
+
+            return new Response(null, { status: 200 });
+        }
+        throw thrown;
+    };
 }
 
-/** The driver only blames CORS where CORS exists, which under Node it does not. */
 function pretendToBeABrowser() {
     globalThis.WorkerGlobalScope = class WorkerGlobalScope {};
 }
@@ -57,20 +63,16 @@ function collectWarnings() {
     };
 }
 
-async function refuse(driver, host, thrown) {
-    stubFetch(() => {
-        throw thrown;
-    });
-    const connection = connect(driver);
-    connection.send(`VPOD-CONNECT ${host} 443\n`);
+async function refuse(driver, host, thrown, options = {}) {
+    stubFetch(thrown, { hostAnswersProbe: options.hostAnswersProbe ?? false });
+    const connection = connect(driver, { port: options.port ?? 443 });
+    connection.send(`VPOD-CONNECT ${host} ${options.port ?? 443}\n`);
     connection.send("GET / HTTP/1.1\r\nHost: h\r\n\r\n");
     return connection.drainUntilFinished();
 }
 
-async function refusePlaintext(driver, host, thrown) {
-    stubFetch(() => {
-        throw thrown;
-    });
+async function refusePlaintext(driver, host, thrown, options = {}) {
+    stubFetch(thrown, { hostAnswersProbe: options.hostAnswersProbe ?? false });
     const connection = connect(driver, { resolvedHostname: host, port: 80 });
     connection.send("GET / HTTP/1.1\r\nHost: h\r\n\r\n");
     return connection.drainUntilFinished();
@@ -79,10 +81,11 @@ async function refusePlaintext(driver, host, thrown) {
 afterEach(() => {
     delete globalThis.WorkerGlobalScope;
     delete globalThis.location;
+    delete globalThis.navigator;
 });
 
 describe("browser fetch failures", () => {
-    it("names CORS as the likely cause, so a 502 is not mistaken for a dead host", async () => {
+    it("calls it CORS only once a probe shows the host is actually up", async () => {
         pretendToBeABrowser();
         const captured = collectWarnings();
 
@@ -91,16 +94,76 @@ describe("browser fetch failures", () => {
                 new FetchDriver(),
                 "dl-cdn.alpinelinux.org",
                 new TypeError("Failed to fetch"),
+                { hostAnswersProbe: true },
             );
 
-            // reason phrase has to carry the point on its own.
             assert.match(wire, /^HTTP\/1\.1 502 Blocked by browser CORS policy/);
             assert.match(wire, /access-control-allow-origin/);
             assert.match(wire, /dl-cdn\.alpinelinux\.org/);
-            // The original error has to survive; it is the only ground truth.
             assert.match(wire, /Failed to fetch/);
-            // Node is the way out, and saying so saves a support round trip.
             assert.match(wire, /Node/);
+        } finally {
+            captured.restore();
+        }
+    });
+
+    it("calls a host that answers nothing unreachable, not a CORS refusal", async () => {
+        pretendToBeABrowser();
+        const captured = collectWarnings();
+
+        try {
+            const wire = await refuse(
+                new FetchDriver(),
+                "does-not-exist.invalid",
+                new TypeError("Failed to fetch"),
+                { hostAnswersProbe: false },
+            );
+
+            assert.match(wire, /^HTTP\/1\.1 502 Host Unreachable/);
+            assert.doesNotMatch(wire, /access-control-allow-origin/);
+            assert.match(wire, /did not resolve|did not answer/);
+            assert.match(wire, /Failed to fetch/);
+        } finally {
+            captured.restore();
+        }
+    });
+
+    it("blames the browser's port block, which no header or proxy can lift", async () => {
+        pretendToBeABrowser();
+        const captured = collectWarnings();
+
+        try {
+            const wire = await refuse(
+                new FetchDriver({ corsProxy: "https://proxy.example" }),
+                "git.example.com",
+                new TypeError("Failed to fetch"),
+                { port: 22, hostAnswersProbe: true },
+            );
+
+            assert.match(wire, /^HTTP\/1\.1 502 Port Blocked By Browser/);
+            assert.match(wire, /port 22/);
+            assert.doesNotMatch(wire, /access-control-allow-origin/);
+        } finally {
+            captured.restore();
+        }
+    });
+
+    it("says the browser is offline rather than implicating the host", async () => {
+        pretendToBeABrowser();
+        globalThis.navigator = { onLine: false };
+        const captured = collectWarnings();
+
+        try {
+            const wire = await refuse(
+                new FetchDriver(),
+                "example.com",
+                new TypeError("Failed to fetch"),
+                { hostAnswersProbe: false },
+            );
+
+            assert.match(wire, /^HTTP\/1\.1 502 Browser Offline/);
+            assert.doesNotMatch(wire, /access-control-allow-origin/);
+            assert.doesNotMatch(wire, /Host Unreachable/);
         } finally {
             captured.restore();
         }
@@ -116,6 +179,7 @@ describe("browser fetch failures", () => {
                 new FetchDriver(),
                 "browser.vpod.sh",
                 new TypeError("Failed to fetch"),
+                { hostAnswersProbe: true },
             );
 
             assert.match(wire, /^HTTP\/1\.1 502 Blocked as mixed content/);
@@ -137,10 +201,30 @@ describe("browser fetch failures", () => {
                 new FetchDriver(),
                 "example.com",
                 new TypeError("Failed to fetch"),
+                { hostAnswersProbe: true },
             );
 
             assert.match(wire, /^HTTP\/1\.1 502 Blocked by browser CORS policy/);
             assert.match(wire, /access-control-allow-origin/);
+        } finally {
+            captured.restore();
+        }
+    });
+
+    it("names the proxy, not the origin, when the request went through one", async () => {
+        pretendToBeABrowser();
+        const captured = collectWarnings();
+
+        try {
+            const wire = await refuse(
+                new FetchDriver({ corsProxy: "https://proxy.example" }),
+                "example.com",
+                new TypeError("Failed to fetch"),
+                { hostAnswersProbe: true },
+            );
+
+            assert.match(wire, /corsProxy at https:\/\/proxy\.example/);
+            assert.match(wire, /allowlist/);
         } finally {
             captured.restore();
         }
@@ -152,7 +236,9 @@ describe("browser fetch failures", () => {
 
         try {
             const driver = new FetchDriver();
-            await refuse(driver, "example.com", new TypeError("Failed to fetch"));
+            await refuse(driver, "example.com", new TypeError("Failed to fetch"), {
+                hostAnswersProbe: true,
+            });
 
             assert.equal(captured.warnings.length, 1);
             assert.match(captured.warnings[0], /example\.com/);
@@ -169,9 +255,13 @@ describe("browser fetch failures", () => {
         try {
             const driver = new FetchDriver();
             for (let attempt = 0; attempt < 3; attempt++) {
-                await refuse(driver, "example.com", new TypeError("Failed to fetch"));
+                await refuse(driver, "example.com", new TypeError("Failed to fetch"), {
+                    hostAnswersProbe: true,
+                });
             }
-            await refuse(driver, "other.example", new TypeError("Failed to fetch"));
+            await refuse(driver, "other.example", new TypeError("Failed to fetch"), {
+                hostAnswersProbe: true,
+            });
 
             assert.equal(captured.warnings.length, 2);
         } finally {
