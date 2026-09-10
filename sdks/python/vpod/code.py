@@ -1,6 +1,12 @@
 from ._result import unwrap_result
 from .execution import CodeExecution, normalize_line_endings, split_lines
 
+POWERED_OFF_EXIT_CODE = 256
+POWERED_OFF_ERROR = (
+    "The guest powered off, so this sandbox has no machine left to run on. "
+    "Create a new one."
+)
+
 
 
 class Code:
@@ -25,6 +31,15 @@ class Code:
         stderr = result.stderr if hasattr(result, 'stderr') else ""
 
         exit_code = getattr(result, "exit-code", 0)
+
+        if exit_code == POWERED_OFF_EXIT_CODE:
+            halted = self._parse_output(output, stderr)
+            return CodeExecution(
+                text=halted.text,
+                error=POWERED_OFF_ERROR,
+                logs=halted.logs,
+                stderr=halted.stderr,
+            )
 
         if exit_code == 124:
             timed_out = self._parse_output(output, stderr)

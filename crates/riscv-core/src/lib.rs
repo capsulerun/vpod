@@ -42,6 +42,79 @@ mod tests {
         (cpu, mem)
     }
 
+    const SBI_LEGACY_SHUTDOWN: u64 = 0x08;
+    const SBI_SRST: u64 = 0x5352_5354;
+    const SBI_TIME: u64 = 0x5449_4d45;
+
+    const ECALL: u32 = 0x0000_0073;
+
+    fn ecall_with(privilege: PrivMode, extension_id: u64, function_id: u64) -> (StepResult, bool) {
+        let mut memory = FlatMemory::new(1024 * 1024);
+        memory.load_at(0, &ECALL.to_le_bytes());
+
+        let mut cpu = Hart::new(0);
+        cpu.priv_mode = privilege;
+        cpu.csr.mtvec = 0x1000;
+        cpu.regs.write(17, extension_id);
+        cpu.regs.write(16, function_id);
+
+        cpu.run(&mut memory, 1);
+        let requested = cpu.shutdown_requested;
+
+        (cpu.run(&mut memory, 1), requested)
+    }
+
+    #[test]
+    fn legacy_sbi_shutdown_halts_the_hart() {
+        let (result, requested) = ecall_with(PrivMode::S, SBI_LEGACY_SHUTDOWN, 0);
+
+        assert!(requested, "shutdown was not recorded");
+        assert_eq!(
+            result,
+            StepResult::Halt,
+            "run loop did not stop the machine"
+        );
+    }
+
+    #[test]
+    fn srst_system_reset_halts_the_hart() {
+        let (result, requested) = ecall_with(PrivMode::S, SBI_SRST, 0);
+
+        assert!(requested, "shutdown was not recorded");
+        assert_eq!(
+            result,
+            StepResult::Halt,
+            "run loop did not stop the machine"
+        );
+    }
+
+    #[test]
+    fn an_unrelated_sbi_call_does_not_halt_the_hart() {
+        let (result, requested) = ecall_with(PrivMode::S, SBI_TIME, 0);
+
+        assert!(!requested, "an unrelated SBI call was taken for a shutdown");
+        assert_ne!(result, StepResult::Halt);
+    }
+
+    #[test]
+    fn srst_with_another_function_does_not_halt_the_hart() {
+        let (result, requested) = ecall_with(PrivMode::S, SBI_SRST, 1);
+
+        assert!(
+            !requested,
+            "a non-reset SRST function was taken for a shutdown"
+        );
+        assert_ne!(result, StepResult::Halt);
+    }
+
+    #[test]
+    fn user_mode_cannot_shut_the_machine_down() {
+        let (result, requested) = ecall_with(PrivMode::U, SBI_LEGACY_SHUTDOWN, 0);
+
+        assert!(!requested, "an unprivileged ecall powered the machine off");
+        assert_ne!(result, StepResult::Halt);
+    }
+
     #[test]
     fn addi() {
         let (cpu, _) = run(&[0x02a00093, 0x00000073]); // ADDI x1, x0, 42   (x1 = 42) + ECALL

@@ -128,6 +128,7 @@ pub struct ExecContext<'a, B: SystemBus> {
     pub icache_tags: &'a mut Box<[u64; ICACHE_SIZE]>,
     pub icache_data: &'a mut Box<[u32; ICACHE_SIZE]>,
     pub is_waiting: &'a mut bool,
+    pub shutdown_requested: &'a mut bool,
     pub blocks: &'a mut BlockCache,
 }
 
@@ -135,6 +136,15 @@ fn invalidate_fetch_cache<B: SystemBus>(ctx: &mut ExecContext<B>) {
     ctx.fetch_tlb.flush();
 
     ctx.icache_tags.fill(u64::MAX);
+}
+
+const SBI_EXT_LEGACY_SHUTDOWN: u64 = 0x08;
+const SBI_EXT_SRST: u64 = 0x5352_5354;
+const SBI_FID_SYSTEM_RESET: u64 = 0;
+
+fn is_shutdown_ecall(extension_id: u64, function_id: u64) -> bool {
+    extension_id == SBI_EXT_LEGACY_SHUTDOWN
+        || (extension_id == SBI_EXT_SRST && function_id == SBI_FID_SYSTEM_RESET)
 }
 
 pub fn run<B: SystemBus>(ctx: &mut ExecContext<B>, max_steps: u64) -> StepResult {
@@ -149,6 +159,10 @@ fn run_impl<B: SystemBus, const STOP_ON_WFI: bool>(
     ctx: &mut ExecContext<B>,
     max_steps: u64,
 ) -> StepResult {
+    if *ctx.shutdown_requested {
+        return StepResult::Halt;
+    }
+
     let mut remaining = max_steps as i64;
 
     while remaining > 0 {
@@ -323,6 +337,10 @@ fn aot_page_key_hash<B: SystemBus>(
 }
 
 pub fn step<B: SystemBus>(ctx: &mut ExecContext<B>) -> StepResult {
+    if *ctx.shutdown_requested {
+        return StepResult::Halt;
+    }
+
     if let Some(irq) = ctx.csr.pending_interrupt(*ctx.priv_mode) {
         if irq == 7 && ctx.bus.timer_interrupt_pending() == Some(false) {
             ctx.csr.mip &= !MIP_MTIP;
@@ -933,6 +951,12 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                     PrivMode::S => TrapCause::EcallFromSMode,
                     PrivMode::M => TrapCause::EcallFromMMode,
                 };
+
+                if matches!(ctx.priv_mode, PrivMode::S)
+                    && is_shutdown_ecall(ctx.regs.read(17), ctx.regs.read(16))
+                {
+                    *ctx.shutdown_requested = true;
+                }
 
                 take_exception(ctx, cause.mcause_code(), 0);
                 return StepResult::Ok;
