@@ -86,7 +86,8 @@ const POWERED_OFF_MESSAGE: &str = "vpod: the guest powered itself off, so this s
      to run on. Create a new sandbox; nothing in this one, `code.run` included, can \
      run again.";
 
-const POWERED_OFF_NOTE: &str = "vpod: the guest powered off before this command reported an exit status.";
+const POWERED_OFF_NOTE: &str =
+    "vpod: the guest powered off before this command reported an exit status.";
 
 const SHELL_LOST_MESSAGE: &str = "vpod: the shell did not come back from a timed-out command. Something that \
      ignores Ctrl-C was left in the foreground, an interactive python3 or a \
