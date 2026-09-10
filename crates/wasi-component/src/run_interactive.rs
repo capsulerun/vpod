@@ -110,7 +110,19 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
                 );
                 break;
             }
-            StepResult::Halt => break,
+            StepResult::Halt => {
+                pending.extend_from_slice(&bus.uart.drain_tx());
+                flush_pending(&mut pending);
+
+                let stderr_bytes = bus.uart_stderr.drain_tx();
+                if !stderr_bytes.is_empty() {
+                    let stderr = wasi::cli::stderr::get_stderr();
+                    let _ = stderr.write(&stderr_bytes);
+                    let _ = stderr.flush();
+                }
+
+                break;
+            }
         }
     }
 }

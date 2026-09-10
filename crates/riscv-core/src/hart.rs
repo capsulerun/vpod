@@ -20,6 +20,7 @@ pub struct Hart {
     pub icache_tags: Box<[u64; ICACHE_SIZE]>,
     pub icache_data: Box<[u32; ICACHE_SIZE]>,
     pub is_waiting: bool,
+    pub shutdown_requested: bool,
     pub blocks: BlockCache,
 }
 
@@ -36,6 +37,7 @@ impl Hart {
             icache_tags: Box::new([u64::MAX; ICACHE_SIZE]),
             icache_data: Box::new([0u32; ICACHE_SIZE]),
             is_waiting: false,
+            shutdown_requested: false,
             blocks: BlockCache::new(),
         }
     }
@@ -59,6 +61,7 @@ impl Hart {
             icache_data: &mut self.icache_data,
 
             is_waiting: &mut self.is_waiting,
+            shutdown_requested: &mut self.shutdown_requested,
             blocks: &mut self.blocks,
         };
 
@@ -77,6 +80,7 @@ impl Hart {
             icache_tags: &mut self.icache_tags,
             icache_data: &mut self.icache_data,
             is_waiting: &mut self.is_waiting,
+            shutdown_requested: &mut self.shutdown_requested,
             blocks: &mut self.blocks,
         };
 
@@ -95,6 +99,7 @@ impl Hart {
             icache_tags: &mut self.icache_tags,
             icache_data: &mut self.icache_data,
             is_waiting: &mut self.is_waiting,
+            shutdown_requested: &mut self.shutdown_requested,
             blocks: &mut self.blocks,
         };
 
