@@ -16,6 +16,10 @@ const DEFAULT_SNAPSHOT = "vsnap-base:latest";
 const DEFAULT_TIMEOUT_SECONDS = 120;
 const TIMEOUT_EXIT_CODE = 124;
 
+const POWERED_OFF_EXIT_CODE = 256;
+const POWERED_OFF_ERROR =
+    "The guest powered off, so this sandbox has no machine left to run on. Create a new one.";
+
 const PYTHON_PREFIX = String.fromCharCode(0);
 
 export type SnapshotSource =
@@ -352,6 +356,16 @@ export class Code {
     async run(code: string, options: RunOptions = {}): Promise<CodeExecution> {
         const timeout = options.timeout ?? DEFAULT_TIMEOUT_SECONDS;
         const result = await this.#sandbox._exec(PYTHON_PREFIX + code, timeout);
+
+        if (result.exitCode === POWERED_OFF_EXIT_CODE) {
+            const halted = parseCodeOutput(result.stdout, result.stderr ?? "");
+            return new CodeExecution(
+                halted.text,
+                POWERED_OFF_ERROR,
+                halted.logs,
+                halted.stderr,
+            );
+        }
 
         if (result.exitCode === TIMEOUT_EXIT_CODE) {
             const timedOut = parseCodeOutput(result.stdout, result.stderr ?? "");

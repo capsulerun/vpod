@@ -56,9 +56,6 @@ pub struct Session {
     pub pyrunner_reseeded: bool,
     pub shell_lost: bool,
     pub exec: Option<repl::ExecState>,
-    /// Input written before the command started. Staged to a file rather than
-    /// pushed at the terminal, so EOF belongs to the command instead of leaking
-    /// to the shell behind it.
     pub staged_stdin: Vec<u8>,
 }
 
@@ -81,6 +78,8 @@ fn recover_shell(session: &mut Session) {
 
     session.shell_lost = !recovered;
 }
+
+pub const EXIT_POWERED_OFF: u32 = 256;
 
 const POWERED_OFF_MESSAGE: &str = "vpod: the guest powered itself off, so this sandbox has no machine left \
      to run on. Create a new sandbox; nothing in this one, `code.run` included, can \
@@ -189,11 +188,14 @@ fn finish_shell_exec(session: &mut Session, state: repl::ExecState, trim: bool) 
         let ctrl_bytes = repl::drain_ctrl_with_grace(&mut session.bus, &mut session.hart);
         match ctrl_bytes.first() {
             Some(byte) => *byte as u32,
+            None if session.hart.shutdown_requested => EXIT_POWERED_OFF,
             None => {
                 timed_out = true;
                 124
             }
         }
+    } else if session.hart.shutdown_requested {
+        EXIT_POWERED_OFF
     } else {
         0
     };
@@ -217,12 +219,7 @@ fn finish_shell_exec(session: &mut Session, state: repl::ExecState, trim: bool) 
         recover_shell(session);
     }
 
-    if session.is_shell
-        && was_terminal
-        && timed_out
-        && !session.shell_lost
-        && !session.hart.shutdown_requested
-    {
+    if session.is_shell && was_terminal && timed_out && !session.shell_lost {
         restore_terminal(session);
     }
 
@@ -566,6 +563,7 @@ impl SessionManager {
             let ctrl_bytes = repl::drain_ctrl_with_grace(&mut session.bus, &mut session.hart);
             let exit_code = match ctrl_bytes.first() {
                 Some(byte) => *byte as u32,
+                None if session.hart.shutdown_requested => EXIT_POWERED_OFF,
                 None => {
                     session.pyrunner_dirty = true;
                     124
