@@ -42,6 +42,97 @@ mod tests {
         (cpu, mem)
     }
 
+    struct ExternalLine {
+        memory: FlatMemory,
+        asserted: bool,
+    }
+
+    impl SystemBus for ExternalLine {
+        fn read_byte(&mut self, address: u64) -> u8 {
+            self.memory.read_byte(address)
+        }
+
+        fn read_halfword(&mut self, address: u64) -> u16 {
+            self.memory.read_halfword(address)
+        }
+
+        fn read_word(&mut self, address: u64) -> u32 {
+            self.memory.read_word(address)
+        }
+
+        fn read_doubleword(&mut self, address: u64) -> u64 {
+            self.memory.read_doubleword(address)
+        }
+
+        fn write_byte(&mut self, address: u64, value: u8) {
+            self.memory.write_byte(address, value)
+        }
+
+        fn write_halfword(&mut self, address: u64, value: u16) {
+            self.memory.write_halfword(address, value)
+        }
+
+        fn write_word(&mut self, address: u64, value: u32) {
+            self.memory.write_word(address, value)
+        }
+
+        fn write_doubleword(&mut self, address: u64, value: u64) {
+            self.memory.write_doubleword(address, value)
+        }
+
+        fn external_interrupt_pending(&mut self) -> Option<bool> {
+            Some(self.asserted)
+        }
+    }
+
+    const TRAP_VECTOR: u64 = 0x1000;
+
+    fn run_with_external_line(asserted: bool) -> Hart {
+        let nops: Vec<u8> = [0x00000013u32; 4]
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
+
+        let mut memory = FlatMemory::new(1024 * 1024);
+        memory.load_at(0, &nops);
+
+        let mut bus = ExternalLine { memory, asserted };
+        let mut cpu = Hart::new(0);
+
+        cpu.csr.mstatus |= csr::MSTATUS_MIE;
+        cpu.csr.mie |= csr::MIP_MEIP;
+        cpu.csr.mip |= csr::MIP_MEIP;
+        cpu.csr.mtvec = TRAP_VECTOR;
+
+        cpu.run(&mut bus, 4);
+        cpu
+    }
+
+    #[test]
+    fn dropped_external_line_is_cleared_not_trapped() {
+        let cpu = run_with_external_line(false);
+
+        assert_eq!(
+            cpu.csr.mip & csr::MIP_MEIP,
+            0,
+            "stale external interrupt was left pending"
+        );
+        assert_ne!(
+            cpu.regs.pc, TRAP_VECTOR,
+            "hart trapped on a line the device had already dropped"
+        );
+    }
+
+    #[test]
+    fn asserted_external_line_still_traps() {
+        let cpu = run_with_external_line(true);
+
+        assert_eq!(
+            cpu.regs.pc, TRAP_VECTOR,
+            "hart ignored an external interrupt that is still asserted"
+        );
+    }
+
     const SBI_LEGACY_SHUTDOWN: u64 = 0x08;
     const SBI_SRST: u64 = 0x5352_5354;
     const SBI_TIME: u64 = 0x5449_4d45;

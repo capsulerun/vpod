@@ -88,9 +88,14 @@ pub fn run(bus: &mut MachineBus, hart: &mut Hart) {
 
             if idle_ticks > IDLE_THRESHOLD && active_ticks == 0 && !bus.has_pending_io() {
                 flush_pending(&mut pending);
+
+                let before = monotonic_clock::now();
                 let stdin_ready = stdin.subscribe();
                 let timeout = monotonic_clock::subscribe_duration(IDLE_TIMEOUT_NS);
                 poll::poll(&[&stdin_ready, &timeout]);
+
+                bus.clint
+                    .advance_by_nanos(monotonic_clock::now().saturating_sub(before));
 
                 if stdin_ready.ready() {
                     if let Ok(bytes) = stdin.read(64) {
