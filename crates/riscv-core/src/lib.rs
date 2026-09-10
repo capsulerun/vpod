@@ -69,7 +69,11 @@ mod tests {
         let (result, requested) = ecall_with(PrivMode::S, SBI_LEGACY_SHUTDOWN, 0);
 
         assert!(requested, "shutdown was not recorded");
-        assert_eq!(result, StepResult::Halt, "run loop did not stop the machine");
+        assert_eq!(
+            result,
+            StepResult::Halt,
+            "run loop did not stop the machine"
+        );
     }
 
     #[test]
@@ -77,7 +81,11 @@ mod tests {
         let (result, requested) = ecall_with(PrivMode::S, SBI_SRST, 0);
 
         assert!(requested, "shutdown was not recorded");
-        assert_eq!(result, StepResult::Halt, "run loop did not stop the machine");
+        assert_eq!(
+            result,
+            StepResult::Halt,
+            "run loop did not stop the machine"
+        );
     }
 
     #[test]
@@ -92,7 +100,10 @@ mod tests {
     fn srst_with_another_function_does_not_halt_the_hart() {
         let (result, requested) = ecall_with(PrivMode::S, SBI_SRST, 1);
 
-        assert!(!requested, "a non-reset SRST function was taken for a shutdown");
+        assert!(
+            !requested,
+            "a non-reset SRST function was taken for a shutdown"
+        );
         assert_ne!(result, StepResult::Halt);
     }
 
