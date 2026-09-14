@@ -11,7 +11,15 @@ export { authHeaders, checkApiKeyKind, isBrowser, keyFingerprint, resolveApiKey,
 export { pullSnapshot, evictById } from "./pull.js";
 export { SnapshotStore } from "./store.js";
 export type { CachedFile, SnapshotStorage } from "./store.js";
-export type { Catalogue, SnapshotEntry, PulledSnapshot, SnapshotSource } from "./types.js";
+export type { Catalogue, EngineEntry, SnapshotEntry, PulledSnapshot, SnapshotSource } from "./types.js";
+export {
+    coreModulesOf,
+    decompressEngine,
+    downloadEngine,
+    downloadEngineInBackground,
+    readCachedEngine,
+    selectEngine,
+} from "./engine.js";
 export type { CatalogueOptions } from "./catalogue.js";
 export type { PullOptions } from "./pull.js";
 
@@ -36,7 +44,7 @@ export function setHostStore(factory: StoreFactory): void {
     hostStore = factory;
 }
 
-async function defaultStore(explicit: SnapshotStorage | null | undefined) {
+export async function defaultStore(explicit?: SnapshotStorage | null): Promise<SnapshotStorage | null> {
     if (explicit !== undefined) {
         return explicit;
     }
@@ -78,6 +86,7 @@ export async function clear(options: ClearOptions = {}): Promise<number> {
 
     const disposable = (name: string): boolean => {
         if (name.endsWith(".sha256")) return true;
+        if (name.startsWith("engine-")) return true;
         if (name.endsWith(".snap")) return digests.has(name.slice(0, -".snap".length));
         if (name.startsWith("catalogue")) return true;
         if (options.instances !== true) return false;

@@ -9,6 +9,19 @@ import { InstanceStore, type SuspendedInstance } from "./instances.js";
 import type { NetworkCapabilities } from "./net/capabilities.js";
 import { networkAvailability } from "./net/availability.js";
 import { createDefaultTransport } from "./transport/default.js";
+import { buildInfo, bundledEngineInterface, type BundledTier } from "./build-info.js";
+import { checkApiKeyKind, resolveApiKey } from "./snapshots/auth.js";
+import { fetchCatalogue, resolveSnapshot } from "./snapshots/catalogue.js";
+import {
+    announceEngine,
+    coreModulesOf,
+    decompressEngine,
+    downloadEngineInBackground,
+    readCachedEngine,
+    selectEngine,
+} from "./snapshots/engine.js";
+import { defaultStore } from "./snapshots/index.js";
+import { resolveRegistryUrl } from "./snapshots/registry.js";
 
 const DEFAULT_SHELL = "/bin/sh";
 const DEFAULT_PROMPT = "# ";
@@ -27,12 +40,25 @@ export type SnapshotSource =
     | { path: string }
     | { bytes: ArrayBuffer | Uint8Array; name: string };
 
+export type EngineMode = "auto" | "default";
+export type SandboxTier = "image" | BundledTier;
+
 export interface SandboxOptions extends SandboxRuntimeOptions {
     snapshot?: SnapshotSource;
     network?: boolean;
     registryUrl?: string;
     apiKey?: string;
     corsProxy?: string;
+    /**
+     * "auto" runs the snapshot on its own engine when it has one this SDK can use
+     * and it is already cached; "default" always uses the bundled engine.
+     */
+    engine?: EngineMode;
+}
+
+interface ImageEngine {
+    sha256: string;
+    coreModules: Record<string, Uint8Array>;
 }
 
 const SLICE_NANOS = 100_000_000n;
@@ -388,23 +414,122 @@ export class Sandbox {
     readonly #runtime: SandboxRuntime;
     readonly #snapshotPath: string;
     readonly #snapshotId: string;
+    readonly #imageEngineSha256: string | null;
     #sessionHandle: bigint | null = null;
 
-    private constructor(runtime: SandboxRuntime, snapshotPath: string, snapshotId: string) {
+    private constructor(
+        runtime: SandboxRuntime,
+        snapshotPath: string,
+        snapshotId: string,
+        imageEngineSha256: string | null,
+    ) {
         this.#runtime = runtime;
         this.#snapshotPath = snapshotPath;
         this.#snapshotId = snapshotId;
+        this.#imageEngineSha256 = imageEngineSha256;
         this.commands = new Commands(this);
         this.code = new Code(this);
     }
 
-    static async #withTransport(options: SandboxOptions): Promise<SandboxOptions> {
+    static async #withTransport(
+        options: SandboxOptions,
+        coreModules?: Record<string, Uint8Array>,
+    ): Promise<SandboxOptions> {
         if (options.transport !== undefined) {
             return options;
         }
 
-        const transport = await createDefaultTransport();
-        return transport === undefined ? options : { ...options, transport };
+        const transport = await createDefaultTransport({ coreModules });
+        if (transport !== undefined) {
+            return { ...options, transport };
+        }
+        // Views into a downloaded component, so always over a plain ArrayBuffer.
+        return coreModules === undefined
+            ? options
+            : { ...options, coreModules: coreModules as Record<string, BufferSource> };
+    }
+
+    static async #startRuntime(
+        options: SandboxOptions,
+        imageEngine: ImageEngine | null,
+    ): Promise<{ runtime: SandboxRuntime; imageEngine: ImageEngine | null }> {
+        if (imageEngine !== null) {
+            let runtime: SandboxRuntime | undefined;
+            try {
+                runtime = new SandboxRuntime(
+                    await Sandbox.#withTransport(options, imageEngine.coreModules),
+                );
+                await runtime.ready();
+                return { runtime, imageEngine };
+            } catch (thrown: unknown) {
+                runtime?.terminate();
+                console.warn(
+                    `vpod: the snapshot's engine would not start, using the bundled engine. ${String(thrown)}`,
+                );
+            }
+        }
+
+        const runtime = new SandboxRuntime(await Sandbox.#withTransport(options));
+        await runtime.ready();
+        return { runtime, imageEngine: null };
+    }
+
+    static async #cachedImageEngine(
+        options: SandboxOptions,
+        snapshotName: string,
+    ): Promise<ImageEngine | null> {
+        const engineInterface = bundledEngineInterface();
+        if (options.engine === "default" || options.transport !== undefined || engineInterface === null) {
+            return null;
+        }
+
+        try {
+            const store = await defaultStore();
+            if (store === null) {
+                return null;
+            }
+
+            const apiKey = resolveApiKey(options.apiKey);
+            if (apiKey !== undefined) {
+                checkApiKeyKind(apiKey);
+            }
+            const registryUrl = resolveRegistryUrl(options.registryUrl, apiKey);
+            const catalogue = await fetchCatalogue(store, { registryUrl, apiKey });
+            const entry = resolveSnapshot(catalogue.snapshots, snapshotName, registryUrl, apiKey !== undefined);
+
+            const engine = selectEngine(entry, engineInterface);
+            announceEngine(entry, engine, buildInfo.version);
+            if (engine === null) {
+                return null;
+            }
+
+            const cached = await readCachedEngine(store, engine);
+            if (cached === null) {
+                void downloadEngineInBackground(store, entry.id, engine, { registryUrl, apiKey });
+                return null;
+            }
+            return { sha256: engine.sha256, coreModules: coreModulesOf(await decompressEngine(cached)) };
+        } catch (thrown: unknown) {
+            console.warn(`vpod: could not look for the snapshot's own engine. ${String(thrown)}`);
+            return null;
+        }
+    }
+
+    static async #recordedImageEngine(engineSha256: string): Promise<ImageEngine> {
+        const store = await defaultStore();
+        const cached =
+            store === null
+                ? null
+                : await readCachedEngine(store, { sha256: engineSha256 } as Parameters<typeof readCachedEngine>[1]);
+
+        if (cached === null) {
+            throw new Error(
+                `vpod: this instance was suspended on its snapshot's own engine ` +
+                    `(${engineSha256.slice(0, 12)}), which is no longer cached here. Create a ` +
+                    `sandbox on that snapshot once so the engine is downloaded again, then resume.`,
+            );
+        }
+        return { sha256: engineSha256, coreModules: coreModulesOf(await decompressEngine(cached)) };
     }
 
     static async #mount(
@@ -456,22 +581,33 @@ export class Sandbox {
     }
 
     static async create(options: SandboxOptions = {}): Promise<Sandbox> {
-        const runtime = new SandboxRuntime(await Sandbox.#withTransport(options));
-        await runtime.ready();
+        if (options.engine !== undefined && options.engine !== "auto" && options.engine !== "default") {
+            throw new Error(`vpod: engine must be "auto" or "default", got ${JSON.stringify(options.engine)}`);
+        }
+
+        const snapshot = options.snapshot ?? DEFAULT_SNAPSHOT;
+        const cachedEngine =
+            typeof snapshot === "string" ? await Sandbox.#cachedImageEngine(options, snapshot) : null;
+        const { runtime, imageEngine } = await Sandbox.#startRuntime(options, cachedEngine);
 
         await Sandbox.#connectNetwork(runtime, options.network, options.corsProxy);
 
         const mounted = await Sandbox.#mount(
             runtime,
-            options.snapshot ?? DEFAULT_SNAPSHOT,
+            snapshot,
             options.registryUrl,
             options.apiKey,
         );
-        return new Sandbox(runtime, mounted.snapshotPath, mounted.snapshotId);
+        return new Sandbox(runtime, mounted.snapshotPath, mounted.snapshotId, imageEngine?.sha256 ?? null);
     }
 
     get snapshotId(): string {
         return this.#snapshotId;
+    }
+
+    /** The engine this sandbox runs on: "image", "aot", or "base"; null when the build did not record it. */
+    get tier(): SandboxTier | null {
+        return this.#imageEngineSha256 !== null ? "image" : buildInfo.bundledTier;
     }
 
     get network(): NetworkCapabilities {
@@ -580,7 +716,7 @@ export class Sandbox {
     async suspendToOpfs(): Promise<string> {
         const delta = await this.suspend();
         const store = await InstanceStore.open();
-        return store.save(this.#snapshotId, delta);
+        return store.save(this.#snapshotId, delta, this.#imageEngineSha256 ?? undefined);
     }
 
     static async resume(
@@ -592,19 +728,35 @@ export class Sandbox {
                 ? await (await InstanceStore.open()).load(instance)
                 : instance;
 
-        const runtime = new SandboxRuntime(await Sandbox.#withTransport(options));
-        await runtime.ready();
+        const snapshot = options.snapshot ?? resolved.snapshotId;
+        let wanted: ImageEngine | null;
+        if (resolved.engineSha256 !== undefined) {
+            wanted = await Sandbox.#recordedImageEngine(resolved.engineSha256);
+        } else if (typeof instance === "string") {
+            wanted = null;
+        } else {
+            wanted = typeof snapshot === "string" ? await Sandbox.#cachedImageEngine(options, snapshot) : null;
+        }
+
+        const { runtime, imageEngine } = await Sandbox.#startRuntime(options, wanted);
+        if (resolved.engineSha256 !== undefined && imageEngine === null) {
+            runtime.terminate();
+            throw new Error(
+                `vpod: this instance was suspended on its snapshot's own engine, which would not ` +
+                    `start here, and its delta cannot resume on the bundled engine.`,
+            );
+        }
 
         await Sandbox.#connectNetwork(runtime, options.network, options.corsProxy);
 
         const mounted = await Sandbox.#mount(
             runtime,
-            options.snapshot ?? resolved.snapshotId,
+            snapshot,
             options.registryUrl,
             options.apiKey,
         );
 
-        const sandbox = new Sandbox(runtime, mounted.snapshotPath, mounted.snapshotId);
+        const sandbox = new Sandbox(runtime, mounted.snapshotPath, mounted.snapshotId, imageEngine?.sha256 ?? null);
         const delta = resolved.delta.slice();
         sandbox.#sessionHandle = await runtime.sessionResume(
             mounted.snapshotPath,

@@ -142,8 +142,28 @@ function assertNotStale(tier, componentPath) {
     );
 }
 
+function engineInterfaceOf(componentPath) {
+    const result = spawnSync(
+        "python3",
+        [join(pythonSdkWasmDir, "_engine_interface.py"), componentPath],
+        { encoding: "utf8" },
+    );
+
+    if (result.status !== 0 || !result.stdout.startsWith("v1:")) {
+        console.warn(
+            "[build] could not fingerprint the bundled engine (needs python3), so this build " +
+                `will never use a snapshot's own engine. ${result.stderr ?? result.error ?? ""}`.trim(),
+        );
+        return null;
+    }
+    return result.stdout.trim();
+}
+
+let buildDefinitions = {};
+
 async function bundle() {
     await esbuild.build({
+        define: buildDefinitions,
         entryPoints: [
             "src/index.ts",
             "src/worker/entry.ts",
@@ -177,7 +197,7 @@ async function bundleEmbed(componentPath) {
         format: "esm",
         platform: "browser",
         target: ["es2022"],
-        // The one artifact a consumer cannot re-minify: it is used verbatim as a blob.
+        define: buildDefinitions,
         minify: true,
         logLevel: "warning",
     };
@@ -293,6 +313,7 @@ async function bundleNode() {
             "src/node/host-resolver.ts",
         ],
         absWorkingDir: packageRoot,
+        define: buildDefinitions,
         outdir: "dist/node",
         outbase: "src/node",
         bundle: true,
@@ -422,6 +443,16 @@ async function main() {
     mkdirSync(componentDir, { recursive: true });
 
     console.log(`[build] tier: ${tier} (${relative(packageRoot, componentPath)})`);
+    const packageVersion = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).version;
+    const engineInterface = engineInterfaceOf(componentPath);
+    buildDefinitions = {
+        __VPOD_BUILD_INFO__: JSON.stringify({
+            version: packageVersion,
+            bundledTier: tier,
+            engineInterface,
+        }),
+    };
+    console.log(`[build] engine interface: ${engineInterface ?? "unknown"}`);
     await bundle();
     transpile(componentPath);
 
@@ -438,6 +469,7 @@ async function main() {
         source: relative(packageRoot, componentPath),
         componentBytes: statSync(componentPath).size,
         coreWasmBytes: statSync(join(componentDir, "vpod.core.wasm")).size,
+        engineInterface,
         builtAt: new Date().toISOString(),
     };
     writeFileSync(

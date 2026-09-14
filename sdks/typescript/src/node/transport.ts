@@ -40,6 +40,7 @@ interface Executor {
 export interface NodeTransportOptions {
     componentUrl?: string | URL;
     cacheDirectory?: string;
+    coreModules?: Record<string, Uint8Array>;
 }
 
 export class NodeDispatcher {
@@ -219,8 +220,12 @@ export async function loadNodeDispatcher(
     const module = (await import(String(componentUrl))) as ComponentModule<{
         executor: Executor;
     }>;
+    const supplied = options.coreModules ?? {};
     const { executor } = await module.instantiate(
-        (name) => loadCoreModule(name, new URL(String(componentUrl))),
+        (name) =>
+            supplied[name] !== undefined
+                ? WebAssembly.compile(supplied[name] as BufferSource)
+                : loadCoreModule(name, new URL(String(componentUrl))),
         componentImports,
     );
     const loadMilliseconds = performance.now() - startedAt;

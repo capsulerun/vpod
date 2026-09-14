@@ -7,12 +7,14 @@ export interface InstanceRecord {
     snapshotId: string;
     savedAt: number;
     byteLength: number;
+    engineSha256?: string;
 }
 
 export interface SuspendedInstance {
     id: string;
     snapshotId: string;
     delta: Uint8Array;
+    engineSha256?: string;
 }
 
 export class InstanceStore {
@@ -37,12 +39,18 @@ export class InstanceStore {
         return new InstanceStore(await SnapshotStore.open());
     }
 
-    async save(snapshotId: string, delta: Uint8Array): Promise<string> {
+    async save(snapshotId: string, delta: Uint8Array, engineSha256?: string): Promise<string> {
         const id = crypto.randomUUID();
         await this.#store.write(`${id}.delta`, delta);
 
         const manifest = await this.list();
-        manifest.push({ id, snapshotId, savedAt: Date.now(), byteLength: delta.byteLength });
+        manifest.push({
+            id,
+            snapshotId,
+            savedAt: Date.now(),
+            byteLength: delta.byteLength,
+            ...(engineSha256 === undefined ? {} : { engineSha256 }),
+        });
         await this.#writeManifest(manifest);
 
         return id;
@@ -64,7 +72,7 @@ export class InstanceStore {
             );
         }
 
-        return { id, snapshotId: record.snapshotId, delta };
+        return { id, snapshotId: record.snapshotId, delta, engineSha256: record.engineSha256 };
     }
 
     async list(): Promise<InstanceRecord[]> {

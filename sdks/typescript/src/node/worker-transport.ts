@@ -36,8 +36,10 @@ class NodeWorkerTransport implements ExecutorTransport {
             this.#rejectReady = reject;
         });
 
+        const coreModules = options.coreModules;
         this.#worker = new Worker(workerUrl, {
-            workerData: { cacheDirectory: options.cacheDirectory, componentUrl: undefined },
+            workerData: { cacheDirectory: options.cacheDirectory, componentUrl: undefined, coreModules },
+            transferList: [...new Set(Object.values(coreModules ?? {}).map((bytes) => bytes.buffer))] as never,
         });
 
         this.#worker.on("message", (message: Reply) => this.#receive(message));

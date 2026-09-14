@@ -16,7 +16,7 @@ import { setHostStore } from "../snapshots/index.js";
 import { createNodeWorkerTransport } from "./worker-transport.js";
 import { FileSnapshotStore } from "./store.js";
 
-setDefaultTransportFactory(() => createNodeWorkerTransport());
+setDefaultTransportFactory((options) => createNodeWorkerTransport(options));
 setHostStore(async () => new FileSnapshotStore());
 
 export {

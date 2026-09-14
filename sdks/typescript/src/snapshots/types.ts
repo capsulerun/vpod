@@ -1,3 +1,12 @@
+/** A snapshot's own engine: a whole engine component built from a trace of that snapshot. */
+export interface EngineEntry {
+    vpod_version: string;
+    interface: string;
+    url: string;
+    sha256: string;
+    size: number;
+}
+
 export interface SnapshotEntry {
     id: string;
     name: string;
@@ -7,6 +16,7 @@ export interface SnapshotEntry {
     url: string;
     sha256: string;
     size: number;
+    engines?: EngineEntry[];
 }
 
 export interface Catalogue {
