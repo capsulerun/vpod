@@ -168,6 +168,24 @@ fn cwasm_cache_path(version: &str) -> PathBuf {
         .join(format!("component-{version}-{hash}.cwasm"))
 }
 
+fn is_cli_cwasm_name(name: &str) -> bool {
+    let Some(stem) = name
+        .strip_prefix("component-")
+        .and_then(|rest| rest.strip_suffix(".cwasm"))
+    else {
+        return false;
+    };
+    let Some((version_and_tier, hash)) = stem.rsplit_once('-') else {
+        return false;
+    };
+    let is_hash = hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit());
+    let written_by_python_sdk = matches!(
+        version_and_tier.rsplit_once('-').map(|(_, tier)| tier),
+        Some("base" | "aot")
+    );
+    is_hash && !written_by_python_sdk
+}
+
 fn prune_stale_cwasm(active_cache: &Path) {
     let Some(parent) = active_cache.parent() else {
         return;
@@ -182,7 +200,7 @@ fn prune_stale_cwasm(active_cache: &Path) {
         .filter_map(|entry| {
             let path = entry.path();
             let name = path.file_name()?.to_str()?;
-            if !name.starts_with("component-") || !name.ends_with(".cwasm") {
+            if !is_cli_cwasm_name(name) {
                 return None;
             }
             let modified = entry.metadata().ok()?.modified().ok()?;
@@ -396,5 +414,37 @@ fn handle_result(result: anyhow::Result<Result<(), ()>>) -> Result<()> {
             }
             Err(e.context("component run failed"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_cli_cwasm_name;
+
+    #[test]
+    fn recognises_its_own_compile_cache() {
+        assert!(is_cli_cwasm_name("component-0.8.3-c33262116cd6920b.cwasm"));
+        assert!(is_cli_cwasm_name(
+            "component-0.8.0-rc.1-ec3e2972caf52263.cwasm"
+        ));
+    }
+
+    #[test]
+    fn leaves_the_python_sdk_compile_cache_alone() {
+        assert!(!is_cli_cwasm_name(
+            "component-0.8.3-aot-3f2a9c01d4e5b6a7.cwasm"
+        ));
+        assert!(!is_cli_cwasm_name(
+            "component-0.8.3-base-3f2a9c01d4e5b6a7.cwasm"
+        ));
+    }
+
+    #[test]
+    fn leaves_anything_else_alone() {
+        assert!(!is_cli_cwasm_name("component-0.8.3-notahash.cwasm"));
+        assert!(!is_cli_cwasm_name(
+            "component-0.8.3-c33262116cd6920b.cwasm.tmp"
+        ));
+        assert!(!is_cli_cwasm_name("snapshots"));
     }
 }

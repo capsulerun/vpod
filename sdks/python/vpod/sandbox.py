@@ -5,9 +5,16 @@ from os.path import abspath
 from pathlib import Path
 from typing import Optional
 
-from . import snapshots
+from . import engines, snapshots
 from .snapshots import cache_dir
-from ._component import _maybe_upgrade_tier, active_tier, load_component, locate_wasm
+from ._component import (
+    _maybe_upgrade_tier,
+    _note_degraded,
+    active_tier,
+    load_component,
+    load_image_component,
+    locate_wasm,
+)
 from ._result import unwrap_result as _unwrap_result
 from .code import Code
 from .commands import Commands
@@ -46,20 +53,40 @@ class Sandbox:
         mounts: dict[str, str] | None = None,
         registry_url: str | None = None,
         api_key: str | None = None,
+        engine: str = "auto",
     ):
-        snapshot_path = snapshots.pull(snapshot, registry_url=registry_url, api_key=api_key)
-        wasm_path = locate_wasm()
+        if engine not in engines.ENGINE_MODES:
+            raise ValueError(f"engine must be one of {engines.ENGINE_MODES}, got {engine!r}")
+
+        pulled = snapshots._pull(snapshot, registry_url, api_key, engine_mode=engine)
+        snapshot_path = pulled.path
 
         self._snapshot_path = "snap/" + snapshot_path.name
         self._snapshot_file = snapshot_path
         self._mounts = _parse_mounts(mounts) if mounts else []
-
-        mount_dirs = [m["host_path"] for m in self._mounts]
-        self._store, self._exports = load_component(wasm_path, snapshot_path, mount_dirs or None)
         self._shell_session_id: Optional[int] = None
         self._in_context = False
-        self._tier = active_tier()
         self._migrating = False
+        self._image_engine: dict | None = None
+
+        mount_dirs = [m["host_path"] for m in self._mounts] or None
+        chosen = None
+        if engine == "auto" and pulled.entry is not None:
+            chosen = engines.select(pulled.entry, engines.bundled_interface())
+            engines.announce(pulled.entry, chosen)
+
+        started_on_image_engine = chosen is not None and self._start_on_image_engine(
+            chosen, snapshot_path, mount_dirs
+        )
+        if not started_on_image_engine:
+            if chosen is not None:
+                engines.prepare_in_background(
+                    pulled.entry["id"], chosen, pulled.registry_url, pulled.api_key
+                )
+            self._store, self._exports = load_component(
+                locate_wasm(), snapshot_path, mount_dirs, upgrade_to_aot=chosen is None
+            )
+            self._tier = active_tier()
 
         self.commands = Commands(
             lambda: self._exports,
@@ -73,6 +100,21 @@ class Sandbox:
             self._get_code_session_id,
         )
 
+    def _start_on_image_engine(self, chosen: dict, snapshot_path: Path, mount_dirs) -> bool:
+        """Start on the snapshot's own engine if it is compiled and loads."""
+        cwasm_path = engines.compiled_path(chosen)
+        if cwasm_path is None:
+            return False
+        try:
+            self._store, self._exports = load_image_component(cwasm_path, snapshot_path, mount_dirs)
+        except Exception as failure:
+            _note_degraded("the snapshot's engine would not load, using the bundled engine", failure)
+            cwasm_path.unlink(missing_ok=True)
+            return False
+        self._tier = "image"
+        self._image_engine = chosen
+        return True
+
     @classmethod
     def create(
         cls,
@@ -80,8 +122,14 @@ class Sandbox:
         mounts: dict[str, str] | None = None,
         registry_url: str | None = None,
         api_key: str | None = None,
+        engine: str = "auto",
     ) -> "Sandbox":
-        return cls(snapshot, mounts=mounts, registry_url=registry_url, api_key=api_key)
+        return cls(snapshot, mounts=mounts, registry_url=registry_url, api_key=api_key, engine=engine)
+
+    @property
+    def tier(self) -> str | None:
+        """The engine this sandbox runs on: "image", "aot", or "base"."""
+        return self._tier
 
     def _mount_entries(self) -> list:
         mount_entries = []
@@ -196,6 +244,7 @@ class Sandbox:
             "snapshot_sha256": self._snapshot_sha256(),
             "mounts": self._mounts,
             "state": "SUSPENDED",
+            "engine": self._image_engine,
         }))
 
         self._shell_session_id = None
@@ -231,11 +280,24 @@ class Sandbox:
                     f"got {current_hash[:12]}…). The delta is no longer valid."
                 )
 
-        wasm_path = locate_wasm()
-
         saved_mounts = _parse_mounts(mounts) if mounts else meta.get("mounts", [])
         mount_dirs = [m["host_path"] for m in saved_mounts]
-        store, exports = load_component(wasm_path, snapshot_path, mount_dirs or None)
+
+        image_engine = meta.get("engine")
+        if image_engine:
+            cwasm_path = engines.compiled_path(image_engine)
+            if cwasm_path is None:
+                raise RuntimeError(
+                    f"Instance {instance_id} was suspended on its snapshot's own engine "
+                    f"(vpod {image_engine.get('vpod_version')}), which is no longer "
+                    f"compiled on this machine. Start a sandbox on that snapshot once so "
+                    f"the engine is prepared again, then resume."
+                )
+            store, exports = load_image_component(cwasm_path, snapshot_path, mount_dirs or None)
+            tier = "image"
+        else:
+            store, exports = load_component(locate_wasm(), snapshot_path, mount_dirs or None)
+            tier = active_tier()
 
         mount_entries = []
         for i, m in enumerate(saved_mounts):
@@ -254,7 +316,8 @@ class Sandbox:
         instance = cls.__new__(cls)
         instance._snapshot_path = snap_rel
         instance._snapshot_file = snapshot_path
-        instance._tier = active_tier()
+        instance._tier = tier
+        instance._image_engine = image_engine or None
         instance._migrating = False
         instance._mounts = saved_mounts
         instance._store = store
