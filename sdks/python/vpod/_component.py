@@ -41,6 +41,11 @@ _cwasm_path_cache = {}
 _active_tier = None
 _load_lock = threading.RLock()
 
+_image_engine = None
+_image_linker = None
+_image_components = {}
+_image_instance_cache = {}
+
 
 def _first_existing(candidates) -> Path | None:
     for candidate in candidates:
@@ -194,9 +199,7 @@ def _compile_aot_in_thread(wasm_path: Path) -> None:
                 _prune_stale_cwasm(cache_path)
             retire_base_cwasm()
         except Exception as failure:
-            # Not fatal — the base tier keeps working — but it is several times
-            # slower, forever, and swallowing this made that indistinguishable
-            # from a healthy install.
+
             _note_degraded("AOT compilation failed, staying on the slower tier", failure)
             print(f"vpod: {degradations[-1]}", file=sys.stderr)
 
@@ -211,9 +214,26 @@ def prewarm() -> None:
     _precompile_in_background(aot_path, parallel=True)
 
 
+def _is_sdk_cwasm_name(name: str) -> bool:
+    """Whether a compile cache in the shared data directory is one this SDK wrote.
+
+    The vpod CLI writes `component-{version}-{hash}.cwasm` into the same
+    directory. Pruning by the `component-` prefix alone deleted each other's
+    caches, so the next start of the other tool paid a full recompile.
+    """
+    if not (name.startswith("component-") and name.endswith(".cwasm")):
+        return False
+    parts = name.removesuffix(".cwasm").rsplit("-", 2)
+    if len(parts) != 3:
+        return False
+    _, tier, digest = parts
+    is_digest = len(digest) == 16 and all(c in "0123456789abcdef" for c in digest)
+    return tier in ("base", "aot") and is_digest
+
+
 def _prune_stale_cwasm(active_cache_path: Path) -> None:
     caches = sorted(
-        active_cache_path.parent.glob("component-*.cwasm"),
+        (p for p in active_cache_path.parent.glob("component-*.cwasm") if _is_sdk_cwasm_name(p.name)),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -234,7 +254,7 @@ def retire_base_cwasm() -> None:
         pass
 
 
-def _select_component(engine: Engine, wasm_path: Path) -> Component:
+def _select_component(engine: Engine, wasm_path: Path, upgrade_to_aot: bool = True) -> Component:
     """Pick a tier and load it, preferring speed-now over speed-later."""
     global _active_tier
 
@@ -248,14 +268,14 @@ def _select_component(engine: Engine, wasm_path: Path) -> Component:
     blocking = os.environ.get("VPOD_AOT_BLOCKING") == "1"
 
     if is_aot and not blocking:
-        _precompile_in_background(wasm_path, fallback=True)
-
         base = _load_cached(engine, base_path)
         if base is None:
             base = _compile_and_cache(engine, base_path)
         _active_tier = "base"
 
-        _compile_aot_in_thread(wasm_path)
+        if upgrade_to_aot:
+            _precompile_in_background(wasm_path, fallback=True)
+            _compile_aot_in_thread(wasm_path)
         return base
 
     _active_tier = _tier_of(wasm_path)
@@ -293,7 +313,14 @@ def active_tier() -> str | None:
     return _active_tier
 
 
-def _get_or_load_component(wasm_path: Path):
+def _new_linker(engine: Engine) -> Linker:
+    linker = Linker(engine)
+    linker.add_wasip2()
+    wasmtime_component_linker_add_wasi_http(linker.ptr())
+    return linker
+
+
+def _get_or_load_component(wasm_path: Path, upgrade_to_aot: bool = True):
     global _engine, _component, _linker
 
     with _load_lock:
@@ -301,15 +328,29 @@ def _get_or_load_component(wasm_path: Path):
             _engine = Engine()
 
         if _component is None:
-            _component = _select_component(_engine, wasm_path)
+            _component = _select_component(_engine, wasm_path, upgrade_to_aot)
 
         if _linker is None:
-            _linker = Linker(_engine)
-            _linker.add_wasip2()
-
-            wasmtime_component_linker_add_wasi_http(_linker.ptr())
+            _linker = _new_linker(_engine)
 
         return _engine, _component, _linker
+
+
+def _get_or_load_image_component(cwasm_path: Path):
+    """An image engine's compiled component. Raises if it cannot be loaded."""
+    global _image_engine, _image_linker
+
+    with _load_lock:
+        if _image_engine is None:
+            _image_engine = Engine()
+            _image_linker = _new_linker(_image_engine)
+
+        component = _image_components.get(cwasm_path)
+        if component is None:
+            component = Component.deserialize_file(_image_engine, str(cwasm_path))
+            _image_components[cwasm_path] = component
+
+        return _image_engine, component, _image_linker
 
 
 def _resolve_exports(store, instance):
@@ -355,7 +396,12 @@ def _instance_key(snap_dir: str, mount_dirs: list[str] | None) -> str:
     return "|".join(parts)
 
 
-def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list[str] | None = None):
+def load_component(
+    wasm_path: Path,
+    snapshot_path: Path = None,
+    mount_dirs: list[str] | None = None,
+    upgrade_to_aot: bool = True,
+):
     from . import snapshots as _snapshots
     snap_dir = str(_snapshots.cache_dir()) if snapshot_path is None else str(snapshot_path.parent)
 
@@ -366,8 +412,25 @@ def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list
     if key in _instance_cache:
         return _instance_cache[key]
 
-    engine, component, linker = _get_or_load_component(wasm_path)
+    engine, component, linker = _get_or_load_component(wasm_path, upgrade_to_aot)
+    _instance_cache[key] = _instantiate(engine, component, linker, snap_dir, mount_dirs)
+    return _instance_cache[key]
 
+
+def load_image_component(cwasm_path: Path, snapshot_path: Path, mount_dirs: list[str] | None = None):
+    """Instantiate a snapshot's own engine. Raises if the compiled engine will not load."""
+    snap_dir = str(snapshot_path.parent)
+    key = f"{cwasm_path}|{_instance_key(snap_dir, mount_dirs)}"
+
+    if key in _image_instance_cache:
+        return _image_instance_cache[key]
+
+    engine, component, linker = _get_or_load_image_component(cwasm_path)
+    _image_instance_cache[key] = _instantiate(engine, component, linker, snap_dir, mount_dirs)
+    return _image_instance_cache[key]
+
+
+def _instantiate(engine: Engine, component, linker: Linker, snap_dir: str, mount_dirs: list[str] | None):
     store = Store(engine)
     wasi = WasiConfig()
     wasi.inherit_stdout()
@@ -391,7 +454,5 @@ def load_component(wasm_path: Path, snapshot_path: Path = None, mount_dirs: list
 
     instance = linker.instantiate(store, component)
     exports = _resolve_exports(store, instance)
-
-    _instance_cache[key] = (store, exports)
 
     return store, exports

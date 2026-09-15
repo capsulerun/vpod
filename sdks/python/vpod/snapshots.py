@@ -7,6 +7,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 import certifi
@@ -92,6 +93,14 @@ class SnapshotAuthError(RuntimeError):
     """The registry or the blob store refused the key, not the network."""
 
 
+@dataclass(frozen=True)
+class PulledSnapshot:
+    path: Path
+    entry: dict | None
+    registry_url: str | None
+    api_key: str | None
+
+
 def pull(
     name: str = "vsnap-base:latest",
     registry_url: str | None = None,
@@ -101,11 +110,21 @@ def pull(
     Downloads from the registry if not already cached.
     If the cached snapshot is corrupt, force-refreshes the registry and re-downloads.
     """
+    return _pull(name, registry_url, api_key).path
+
+
+def _pull(
+    name: str = "vsnap-base:latest",
+    registry_url: str | None = None,
+    api_key: str | None = None,
+    engine_mode: str = "default",
+) -> PulledSnapshot:
+    """`pull`, keeping the catalogue entry so the caller can look at its engines."""
     override_path = os.environ.get("VPOD_SNAPSHOT")
     if override_path:
         custom_path = Path(override_path)
         if custom_path.exists():
-            return custom_path
+            return PulledSnapshot(custom_path, None, None, None)
 
     api_key = _resolve_api_key(api_key)
     if api_key is not None:
@@ -122,7 +141,9 @@ def pull(
     if dest.exists() and meta.exists() and meta.read_text().strip() == snapshot["sha256"]:
         if _validate_snapshot_magic(dest):
             _record_origin(dest, origin)
-            return dest
+            from . import engines
+            engines.prune(registry, origin)
+            return PulledSnapshot(dest, snapshot, resolved_registry, api_key)
 
         _registry_cache_path(resolved_registry, api_key).unlink(missing_ok=True)
         registry = fetch_registry(resolved_registry, api_key)
@@ -134,8 +155,9 @@ def pull(
 
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    from ._component import prewarm
-    prewarm()
+    if not _will_use_image_engine(snapshot, engine_mode):
+        from ._component import prewarm
+        prewarm()
 
     try:
         _download_and_decompress(
@@ -163,7 +185,15 @@ def pull(
     _record_origin(dest, origin)
     _prune_stale_snapshots(registry, origin)
 
-    return dest
+    return PulledSnapshot(dest, snapshot, resolved_registry, api_key)
+
+
+def _will_use_image_engine(snapshot: dict, engine_mode: str) -> bool:
+    """Whether compiling the bundled AOT engine now would only be thrown away."""
+    if engine_mode != "auto" or not snapshot.get("engines"):
+        return False
+    from . import engines
+    return engines.select(snapshot, engines.bundled_interface()) is not None
 
 
 def _record_origin(dest: Path, origin: str) -> None:
@@ -208,6 +238,9 @@ def _prune_stale_snapshots(registry: list[dict], current_origin: str) -> None:
 
     for leftover in list(cache_dir().glob("*.tmp")) + list(cache_dir().glob("*.tmp.dl")):
         leftover.unlink(missing_ok=True)
+
+    from . import engines
+    engines.prune(registry, current_origin)
 
 
 def _snapshots_referenced_by_instances() -> tuple[set[str], bool]:
@@ -361,6 +394,7 @@ def _download_and_decompress(
     expected_sha256: str,
     registry_url: str | None = None,
     api_key: str | None = None,
+    decompress: bool = True,
 ) -> None:
     tmp_compressed = dest.with_suffix(".tmp.dl")
     tmp_raw = dest.with_suffix(".tmp")
@@ -380,9 +414,12 @@ def _download_and_decompress(
                 f"Checksum mismatch: expected {expected_sha256}, got {actual_sha256}"
             )
 
-        _decompress_file(tmp_compressed, tmp_raw)
-        tmp_compressed.unlink()
-        shutil.move(tmp_raw, dest)
+        if decompress:
+            _decompress_file(tmp_compressed, tmp_raw)
+            tmp_compressed.unlink()
+            shutil.move(tmp_raw, dest)
+        else:
+            shutil.move(tmp_compressed, dest)
     except urllib.error.HTTPError as http_error:
         tmp_compressed.unlink(missing_ok=True)
         tmp_raw.unlink(missing_ok=True)

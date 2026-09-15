@@ -12,6 +12,7 @@ import pytest
 from vpod import snapshots
 
 _REAL_PULL = snapshots.pull
+_REAL_PULL_WITH_ENTRY = snapshots._pull
 
 
 # --- the rules, with no network at all --------------------------------------
@@ -183,6 +184,7 @@ def registry_server(tmp_path, monkeypatch):
     import vpod._component
     monkeypatch.setattr(vpod._component, "prewarm", lambda *a, **k: None)
     monkeypatch.setattr(snapshots, "pull", _REAL_PULL)
+    monkeypatch.setattr(snapshots, "_pull", _REAL_PULL_WITH_ENTRY)
 
     yield f"http://127.0.0.1:{server.server_port}/catalogue"
     server.shutdown()
