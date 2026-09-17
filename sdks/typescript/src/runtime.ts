@@ -161,8 +161,8 @@ export class SandboxRuntime {
         return this.#transport.call<void>({ kind: "session-trace-start", handle, options });
     }
 
-    sessionTraceDrain(handle: bigint, maxBytes: number): Promise<Uint8Array> {
-        return this.#transport.call<Uint8Array>({ kind: "session-trace-drain", handle, maxBytes });
+    sessionTraceDrain(handle: bigint, maxBytes: number): Promise<string> {
+        return this.#transport.call<string>({ kind: "session-trace-drain", handle, maxBytes });
     }
 
     sessionTraceStop(handle: bigint): Promise<void> {

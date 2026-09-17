@@ -57,6 +57,7 @@ class FileActivity:
     renamed_to: Optional[str] = None
     renamed_from: Optional[str] = None
     denied: bool = False
+    processes: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -75,6 +76,7 @@ class NetworkActivity:
     bytes_out: int = 0
     bytes_in: int = 0
     failed: bool = True
+    processes: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -99,7 +101,10 @@ class Trace:
 
     @property
     def complete(self) -> bool:
-        return not any(event["kind"] == "trace.dropped" for event in self._events)
+        return not any(
+            event["kind"] == "trace.dropped" or event.get("pid", 0) is None
+            for event in self._events
+        )
 
     def to_jsonl(self) -> str:
         return "".join(
@@ -109,12 +114,17 @@ class Trace:
 
     def files(self, internal: bool = False, noise: bool = False) -> list[FileActivity]:
         activities: dict[str, FileActivity] = {}
+        touching: dict[str, set[int]] = {}
+        current: dict = {}
 
         def activity(path) -> Optional[FileActivity]:
             if not isinstance(path, str):
                 return None
             if path not in activities:
                 activities[path] = FileActivity(path)
+                touching[path] = set()
+            if (pid := current.get("pid")) is not None:
+                touching[path].add(pid)
             return activities[path]
 
         def mark_denied(path, result) -> None:
@@ -125,6 +135,7 @@ class Trace:
             if event.get("internal") and not internal:
                 continue
             kind = event["kind"]
+            current["pid"] = event.get("pid")
 
             if kind in ("file.open", "mount.open"):
                 succeeded = event["result"] >= 0 if kind == "file.open" else event["result"] == 0
@@ -171,10 +182,14 @@ class Trace:
                     entry.read |= bytes_read > 0
                     entry.written |= bytes_written > 0
 
+        for path, entry in activities.items():
+            entry.processes = sorted(touching[path])
+
         return [entry for entry in activities.values() if noise or not _is_noise(entry)]
 
     def network(self, internal: bool = False) -> list[NetworkActivity]:
         activities: dict[tuple[str, int], NetworkActivity] = {}
+        touching: dict[tuple[str, int], set[int]] = {}
 
         def activity(event) -> Optional[NetworkActivity]:
             address, port = event.get("address"), event.get("port")
@@ -186,9 +201,12 @@ class Trace:
                 activities[key] = NetworkActivity(
                     host=None, address=address, port=port, protocol=None
                 )
+                touching[key] = set()
 
             entry = activities[key]
             entry.host = entry.host or event.get("host")
+            if (pid := event.get("pid")) is not None:
+                touching[key].add(pid)
             return entry
 
         for event in self._events:
@@ -216,29 +234,68 @@ class Trace:
                 entry.host = entry.host or urlsplit(event["url"]).hostname
                 entry.requests.append(HttpRequest(event["method"], event["url"]))
 
+        for key, entry in activities.items():
+            entry.processes = sorted(touching[key])
+
         return list(activities.values())
 
     def processes(self, internal: bool = False) -> list[ProcessNode]:
-        nodes: list[tuple[ProcessNode, bool]] = []
-        running_by_task: dict[str, ProcessNode] = {}
+        parents = self._parents()
+        roots: list[ProcessNode] = []
+        latest: dict[int, ProcessNode] = {}
 
         for event in self._events:
             kind = event["kind"]
+            pid = event.get("pid")
+
             if kind == "process.exec" and "result" not in event:
+                if event.get("internal") and not internal:
+                    continue
                 node = ProcessNode(
-                    pid=None,
+                    pid=pid,
                     path=event.get("path"),
                     argv=list(event.get("argv", [])),
                     exit_code=None,
                     started_at=event["guest_ns"],
                 )
 
-                nodes.append((node, bool(event.get("internal"))))
-                running_by_task[event["task"]] = node
-            elif kind == "process.exit" and event["task"] in running_by_task:
-                running_by_task.pop(event["task"]).exit_code = event["code"]
+                program = _closest_program(pid, parents, latest)
+                (roots if program is None else program.children).append(node)
+                if pid is not None:
+                    latest[pid] = node
+            elif kind == "process.exit" and pid in latest and latest[pid].exit_code is None:
+                latest[pid].exit_code = event["code"]
 
-        return [node for node, is_internal in nodes if internal or not is_internal]
+        return roots
+
+    def _parents(self) -> dict[int, int]:
+        parents: dict[int, int] = {}
+        for event in self._events:
+            kind = event["kind"]
+            if kind == "process.fork" and not event.get("thread"):
+                if event.get("pid") is not None:
+                    parents.setdefault(event["child_pid"], event["pid"])
+            elif kind == "process.exec" and event.get("ppid") is not None:
+                parents.setdefault(event["pid"], event["ppid"])
+        return parents
+
+
+def _closest_program(
+    pid: Optional[int], parents: dict[int, int], latest: dict[int, ProcessNode]
+) -> Optional[ProcessNode]:
+    if pid is None:
+        return None
+    if (node := latest.get(pid)) is not None:
+        return node
+
+    seen = {pid}
+    ancestor = parents.get(pid)
+    while ancestor is not None and ancestor not in seen:
+        if (node := latest.get(ancestor)) is not None:
+            return node
+        seen.add(ancestor)
+        ancestor = parents.get(ancestor)
+    return None
 
 
 def _is_noise(entry: FileActivity) -> bool:
@@ -329,13 +386,11 @@ class TraceRecorder:
             if session_id is None:
                 return
 
-            drained = bytes(
-                unwrap_result(exports["session-trace-drain"](session_id, DRAIN_ALL_BYTES))
-            )
+            drained = unwrap_result(exports["session-trace-drain"](session_id, DRAIN_ALL_BYTES))
             if not drained:
                 return
 
-            events = [json.loads(line) for line in drained.decode().splitlines() if line]
+            events = [json.loads(line) for line in drained.splitlines() if line]
             with self._lock:
                 self._events.extend(events)
                 watchers = list(self._watchers)

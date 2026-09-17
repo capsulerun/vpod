@@ -46,6 +46,6 @@ interface executor {
     session-resume: func(snapshot-path: string, delta-path: string, command: string, prompt: string, mounts: list<mount-entry>) -> result<u64, string>;
 
     session-trace-start: func(handle: u64, options: trace-options) -> result<_, string>;
-    session-trace-drain: func(handle: u64, max-bytes: u32) -> result<list<u8>, string>;
+    session-trace-drain: func(handle: u64, max-bytes: u32) -> result<string, string>;
     session-trace-stop: func(handle: u64) -> result<_, string>;
 }

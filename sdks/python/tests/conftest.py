@@ -86,11 +86,12 @@ def mock_component(request, monkeypatch):
             "wall_ms": 0,
             "kind": "process.exec",
             "task": f"{sid:x}",
+            "pid": 700 + session["seq"],
             "path": "/bin/sh",
             "argv": ["sh", "-c", command],
         }
         session["seq"] += 1
-        session["pending"].append((json.dumps(event) + "\n").encode())
+        session["pending"].append(json.dumps(event) + "\n")
 
     def fake_session_trace_start(sid, options):
         traced_sessions[sid] = {"options": options, "pending": [], "seq": 0}
@@ -101,7 +102,7 @@ def mock_component(request, monkeypatch):
         if session is None:
             return FakeVariant(tag="err", payload="tracing is not enabled for this session")
         pending, session["pending"] = session["pending"], []
-        return FakeVariant(tag="ok", payload=b"".join(pending))
+        return FakeVariant(tag="ok", payload="".join(pending))
 
     def fake_session_trace_stop(sid):
         traced_sessions.pop(sid, None)

@@ -34,6 +34,7 @@ export interface FileActivity {
     renamedTo: string | null;
     renamedFrom: string | null;
     denied: boolean;
+    processes: number[];
 }
 
 export interface HttpRequest {
@@ -50,6 +51,7 @@ export interface NetworkActivity {
     bytesOut: number;
     bytesIn: number;
     failed: boolean;
+    processes: number[];
 }
 
 export interface ProcessNode {
@@ -118,6 +120,26 @@ function hostOf(url: string): string | null {
     }
 }
 
+function closestProgram(
+    pid: number | null,
+    parents: Map<number, number>,
+    latest: Map<number, ProcessNode>,
+): ProcessNode | null {
+    if (pid === null) return null;
+    const own = latest.get(pid);
+    if (own !== undefined) return own;
+
+    const seen = new Set<number>([pid]);
+    let ancestor = parents.get(pid);
+    while (ancestor !== undefined && !seen.has(ancestor)) {
+        const node = latest.get(ancestor);
+        if (node !== undefined) return node;
+        seen.add(ancestor);
+        ancestor = parents.get(ancestor);
+    }
+    return null;
+}
+
 function isNoise(entry: FileActivity): boolean {
     const path = entry.path;
     if (NOISE_DIRECTORIES.includes(path) || NOISE_PREFIXES.some((prefix) => path.startsWith(prefix))) {
@@ -146,7 +168,9 @@ export class Trace {
     }
 
     get complete(): boolean {
-        return !this.#events.some((event) => event.kind === "trace.dropped");
+        return !this.#events.some(
+            (event) => event.kind === "trace.dropped" || ("pid" in event && event.pid === null),
+        );
     }
 
     toJSONL(): string {
@@ -155,6 +179,8 @@ export class Trace {
 
     files(options: { internal?: boolean; noise?: boolean } = {}): FileActivity[] {
         const activities = new Map<string, FileActivity>();
+        const touching = new Map<string, Set<number>>();
+        let touchedBy: number | null = null;
 
         const activity = (path: unknown): FileActivity | null => {
             if (typeof path !== "string") return null;
@@ -169,9 +195,12 @@ export class Trace {
                     renamedTo: null,
                     renamedFrom: null,
                     denied: false,
+                    processes: [],
                 };
                 activities.set(path, entry);
+                touching.set(path, new Set());
             }
+            if (touchedBy !== null) touching.get(path)?.add(touchedBy);
             return entry;
         };
 
@@ -184,6 +213,7 @@ export class Trace {
         for (const event of this.#events) {
             if (event.internal === true && !options.internal) continue;
             const result = event.result as number;
+            touchedBy = typeof event.pid === "number" ? event.pid : null;
 
             switch (event.kind) {
                 case "file.open":
@@ -263,18 +293,23 @@ export class Trace {
             }
         }
 
+        for (const [path, entry] of activities) {
+            entry.processes = [...(touching.get(path) ?? [])].sort((first, second) => first - second);
+        }
+
         return [...activities.values()].filter((entry) => options.noise || !isNoise(entry));
     }
 
     network(options: { internal?: boolean } = {}): NetworkActivity[] {
         const activities = new Map<string, NetworkActivity>();
+        const touching = new Map<string, Set<number>>();
 
         for (const event of this.#events) {
             if (event.internal === true && !options.internal) continue;
             if (!["net.connect", "net.flow", "net.udp", "net.http"].includes(event.kind)) continue;
             if (typeof event.address !== "string" || typeof event.port !== "number") continue;
 
-            const key = `${event.address} ${event.port}`;
+            const key = `${event.address} ${event.port}`;
             let entry = activities.get(key);
             if (entry === undefined) {
                 entry = {
@@ -286,10 +321,13 @@ export class Trace {
                     bytesOut: 0,
                     bytesIn: 0,
                     failed: true,
+                    processes: [],
                 };
                 activities.set(key, entry);
+                touching.set(key, new Set());
             }
             entry.host ??= text(event.host);
+            if (typeof event.pid === "number") touching.get(key)?.add(event.pid);
 
             switch (event.kind) {
                 case "net.connect":
@@ -313,36 +351,61 @@ export class Trace {
             }
         }
 
+        for (const [key, entry] of activities) {
+            entry.processes = [...(touching.get(key) ?? [])].sort((first, second) => first - second);
+        }
+
         return [...activities.values()];
     }
 
     processes(options: { internal?: boolean } = {}): ProcessNode[] {
-        const nodes: { node: ProcessNode; internal: boolean }[] = [];
-        const runningByTask = new Map<string, ProcessNode>();
+        const parents = this.#parents();
+        const roots: ProcessNode[] = [];
+        const latest = new Map<number, ProcessNode>();
 
         for (const event of this.#events) {
+            const pid = typeof event.pid === "number" ? event.pid : null;
+
             if (event.kind === "process.exec" && !("result" in event)) {
+                if (event.internal === true && !options.internal) continue;
                 const node: ProcessNode = {
-                    pid: null,
+                    pid,
                     path: text(event.path),
                     argv: Array.isArray(event.argv) ? event.argv.map(String) : [],
                     exitCode: null,
                     startedAt: event.guest_ns,
                     children: [],
                 };
-                nodes.push({ node, internal: event.internal === true });
-                runningByTask.set(String(event.task), node);
-            } else if (event.kind === "process.exit") {
-                const task = String(event.task);
-                const node = runningByTask.get(task);
-                if (node !== undefined) {
+                const program = closestProgram(pid, parents, latest);
+                (program === null ? roots : program.children).push(node);
+                if (pid !== null) latest.set(pid, node);
+            } else if (event.kind === "process.exit" && pid !== null) {
+                const node = latest.get(pid);
+                if (node !== undefined && node.exitCode === null) {
                     node.exitCode = event.code as number;
-                    runningByTask.delete(task);
                 }
             }
         }
 
-        return nodes.filter((entry) => options.internal || !entry.internal).map((entry) => entry.node);
+        return roots;
+    }
+
+    #parents(): Map<number, number> {
+        const parents = new Map<number, number>();
+
+        for (const event of this.#events) {
+            if (event.kind === "process.fork" && event.thread !== true) {
+                if (typeof event.pid === "number" && typeof event.child_pid === "number") {
+                    if (!parents.has(event.child_pid)) parents.set(event.child_pid, event.pid);
+                }
+            } else if (event.kind === "process.exec" && typeof event.ppid === "number") {
+                if (typeof event.pid === "number" && !parents.has(event.pid)) {
+                    parents.set(event.pid, event.ppid);
+                }
+            }
+        }
+
+        return parents;
     }
 }
 
@@ -370,8 +433,7 @@ class Watcher {
 
 export class TraceRecorder {
     readonly #options: WireTraceOptions | null;
-    readonly #drainSession: (maxBytes: number) => Promise<Uint8Array | null>;
-    readonly #decoder = new TextDecoder();
+    readonly #drainSession: (maxBytes: number) => Promise<string | null>;
     #events: TraceEvent[] = [];
     #watchers = new Set<Watcher>();
     #closed = false;
@@ -379,7 +441,7 @@ export class TraceRecorder {
     /** @internal */
     constructor(
         options: WireTraceOptions | null,
-        drainSession: (maxBytes: number) => Promise<Uint8Array | null>,
+        drainSession: (maxBytes: number) => Promise<string | null>,
     ) {
         this.#options = options;
         this.#drainSession = drainSession;
@@ -441,10 +503,9 @@ export class TraceRecorder {
     async _drain(): Promise<void> {
         if (!this.enabled) return;
         const drained = await this.#drainSession(DRAIN_ALL_BYTES);
-        if (drained === null || drained.byteLength === 0) return;
+        if (drained === null || drained.length === 0) return;
 
-        const events = this.#decoder
-            .decode(drained)
+        const events = drained
             .split("\n")
             .filter((line) => line.length > 0)
             .map((line) => JSON.parse(line) as TraceEvent);

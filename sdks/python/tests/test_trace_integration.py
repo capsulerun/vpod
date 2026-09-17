@@ -5,19 +5,63 @@ from vpod import Sandbox
 pytestmark = pytest.mark.integration
 
 
+def programs(nodes):
+    for node in nodes:
+        yield node
+        yield from programs(node.children)
+
+
 def test_a_shell_script_records_the_commands_it_runs_and_the_files_it_writes():
     script = "mkdir -p /tmp/traced && echo hi > /tmp/traced/out.txt && cat /tmp/traced/out.txt"
     with Sandbox.create(trace=True) as sbx:
         result = sbx.commands.run(f"sh -c '{script}'")
         assert result.success
 
-        commands = [node.argv for node in result.trace.processes()]
+        commands = [node.argv for node in programs(result.trace.processes())]
         assert commands[0] == ["sh", "-c", script]
         assert any(argv[0] == "cat" for argv in commands), commands
 
         written = [file.path for file in result.trace.files() if file.written]
         assert "/tmp/traced/out.txt" in written, written
         assert result.trace.complete
+
+
+def test_a_command_says_which_program_started_which_and_under_what_pid():
+    script = "mkdir -p /tmp/tree && cd /tmp/tree && cat /etc/hostname > host.txt"
+    with Sandbox.create(trace=True) as sbx:
+        result = sbx.commands.run(f"sh -c '{script}'")
+        assert result.success
+        assert result.trace.complete
+
+        roots = result.trace.processes()
+        assert len(roots) == 1, [node.argv for node in roots]
+        assert roots[0].argv == ["sh", "-c", script]
+        assert isinstance(roots[0].pid, int)
+
+        children = {node.argv[0]: node for node in roots[0].children}
+        assert {"mkdir", "cat"} <= set(children), list(children)
+        assert children["cat"].exit_code == 0
+        assert children["mkdir"].pid != roots[0].pid
+
+
+def test_a_relative_path_is_recorded_where_the_file_actually_is():
+    script = "mkdir -p /tmp/rel && cd /tmp/rel && cat /etc/hostname > copy.txt"
+    with Sandbox.create(trace=True) as sbx:
+        result = sbx.commands.run(f"sh -c '{script}'")
+        assert result.success
+
+        written = {file.path: file for file in result.trace.files() if file.written}
+        assert "/tmp/rel/copy.txt" in written, list(written)
+        assert written["/tmp/rel/copy.txt"].processes
+
+
+def test_code_run_resolves_paths_against_the_interpreters_own_directory():
+    with Sandbox.create(trace=True) as sbx:
+        execution = sbx.code.run("open('rel_from_code.txt', 'w').write('x')")
+        assert execution.success, execution.error
+
+        written = [file.path for file in execution.trace.files() if file.written]
+        assert any(path.endswith("/rel_from_code.txt") for path in written), written
 
 
 def test_code_run_activity_belongs_to_the_user_not_to_vpod():

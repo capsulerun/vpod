@@ -54,7 +54,7 @@ export interface Executor {
         mounts: never[],
     ): bigint;
     sessionTraceStart?(handle: bigint, options: WireTraceOptions): void;
-    sessionTraceDrain?(handle: bigint, maxBytes: number): Uint8Array;
+    sessionTraceDrain?(handle: bigint, maxBytes: number): string;
     sessionTraceStop?(handle: bigint): void;
 }
 

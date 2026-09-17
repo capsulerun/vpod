@@ -5,6 +5,13 @@ import { describe, it } from "node:test";
 
 import { createTestSandbox, loadSdk, locateSnapshot, skipReason } from "../helpers.mjs";
 
+function* programs(nodes) {
+    for (const node of nodes) {
+        yield node;
+        yield* programs(node.children);
+    }
+}
+
 async function withTracedSandbox(body) {
     const sandbox = await createTestSandbox({ trace: true });
     try {
@@ -22,7 +29,7 @@ describe("trace", { skip: skipReason() ?? false }, () => {
             );
             assert.equal(result.exitCode, 0);
 
-            const commands = result.trace.processes().map((process) => process.argv);
+            const commands = [...programs(result.trace.processes())].map((process) => process.argv);
             assert.deepEqual(commands[0], [
                 "sh",
                 "-c",
@@ -33,6 +40,29 @@ describe("trace", { skip: skipReason() ?? false }, () => {
             const written = result.trace.files().filter((file) => file.written).map((file) => file.path);
             assert.ok(written.includes("/tmp/traced/out.txt"), JSON.stringify(written));
             assert.equal(result.trace.complete, true);
+        });
+    });
+
+    it("says which program started which, and where relative paths landed", async () => {
+        await withTracedSandbox(async (sandbox) => {
+            const script = "mkdir -p /tmp/tree && cd /tmp/tree && cat /etc/hostname > host.txt";
+            const result = await sandbox.commands.run(`sh -c '${script}'`);
+            assert.equal(result.exitCode, 0);
+            assert.equal(result.trace.complete, true);
+
+            const roots = result.trace.processes();
+            assert.equal(roots.length, 1, JSON.stringify(roots.map((node) => node.argv)));
+            assert.deepEqual(roots[0].argv, ["sh", "-c", script]);
+            assert.equal(typeof roots[0].pid, "number");
+
+            const children = new Map(roots[0].children.map((node) => [node.argv[0], node]));
+            assert.ok(children.has("mkdir") && children.has("cat"), JSON.stringify([...children.keys()]));
+            assert.equal(children.get("cat").exitCode, 0);
+
+            const written = result.trace.files().filter((file) => file.written);
+            const copy = written.find((file) => file.path === "/tmp/tree/host.txt");
+            assert.ok(copy, JSON.stringify(written.map((file) => file.path)));
+            assert.ok(copy.processes.length > 0);
         });
     });
 
