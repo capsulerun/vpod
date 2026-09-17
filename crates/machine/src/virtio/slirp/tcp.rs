@@ -12,6 +12,7 @@ use super::frames::{
     ACK, Endpoints, FIN, PSH, RST, SYN, eth_src, ip_dst, ip_payload, ip_src, make_tcp_frame, u16be,
     would_block,
 };
+use crate::trace::{HttpObserver, Tracer, format_address};
 use crate::virtio::https_gateway::HttpsGateway;
 
 const HTTPS_PORT: u16 = 443;
@@ -79,6 +80,53 @@ pub(super) enum TcpState {
     Closed,
 }
 
+pub(super) struct FlowTrace {
+    tracer: Tracer,
+    address: [u8; 4],
+    port: u16,
+    host: Option<String>,
+    opened_guest_ns: u64,
+    bytes_out: u64,
+    bytes_in: u64,
+    failed: bool,
+    http: Option<HttpObserver>,
+}
+
+impl FlowTrace {
+    fn new(tracer: &Tracer, address: [u8; 4], port: u16, plaintext: bool) -> Self {
+        Self {
+            tracer: tracer.clone(),
+            address,
+            port,
+            host: tracer.name_of(address),
+            opened_guest_ns: tracer.guest_ns(),
+            bytes_out: 0,
+            bytes_in: 0,
+            failed: false,
+            http: plaintext.then(|| HttpObserver::new(tracer.clone(), "http", address, port)),
+        }
+    }
+}
+
+impl Drop for FlowTrace {
+    fn drop(&mut self) {
+        let duration_ns = self.tracer.guest_ns().saturating_sub(self.opened_guest_ns);
+        self.tracer.record(
+            "net.flow",
+            &[
+                ("protocol", "tcp".into()),
+                ("address", format_address(self.address).into()),
+                ("port", self.port.into()),
+                ("host", self.host.clone().into()),
+                ("bytes_out", self.bytes_out.into()),
+                ("bytes_in", self.bytes_in.into()),
+                ("duration_ns", duration_ns.into()),
+                ("failed", self.failed.into()),
+            ],
+        );
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct TcpKey {
     pub src_port: u16,
@@ -110,6 +158,8 @@ pub(super) struct TcpConn {
     wnd_shift: u8,
 
     ooo_buf: BTreeMap<u32, Vec<u8>>,
+
+    trace: Option<FlowTrace>,
 }
 
 impl TcpConn {
@@ -125,9 +175,14 @@ impl TcpConn {
         self.snd_nxt.wrapping_sub(self.snd_una)
     }
 
-    /// Both directions, plus whatever the guest is owed. `Finished` once the
-    /// connection can be dropped.
     pub(super) fn service(&mut self, frames: &mut Vec<Vec<u8>>) -> Serviced {
+        if let (Some(trace), Transport::Https(gateway)) = (&mut self.trace, &self.transport)
+            && let Some(server_name) = gateway.server_name()
+            && trace.host.as_deref() != Some(server_name)
+        {
+            trace.host = Some(server_name.to_string());
+        }
+
         match self.state {
             TcpState::Established => {
                 let mut serviced = Serviced::Alive;
@@ -156,7 +211,6 @@ impl TcpConn {
         }
     }
 
-    /// False once the upstream can no longer be written to.
     fn forward_guest_writes(&mut self) -> bool {
         while !self.write_buf.is_empty() {
             let (front, back) = self.write_buf.as_slices();
@@ -164,18 +218,25 @@ impl TcpConn {
 
             match self.transport.write(pending) {
                 Ok(written) => {
+                    if let Some(trace) = &mut self.trace {
+                        trace.bytes_out += written as u64;
+                        if let Some(http) = &mut trace.http {
+                            http.observe(&pending[..written]);
+                        }
+                    }
                     self.write_buf.drain(..written);
                 }
                 Err(e) if would_block(&e) => return true,
-                Err(_) => return false,
+                Err(_) => {
+                    self.mark_failed();
+                    return false;
+                }
             }
         }
 
         true
     }
 
-    /// Held until the guest's own writes have drained, because shutting the
-    /// write side down discards whatever is still queued.
     fn forward_half_close(&mut self) {
         if self.guest_finished_writing && self.write_buf.is_empty() {
             self.guest_finished_writing = false;
@@ -183,7 +244,6 @@ impl TcpConn {
         }
     }
 
-    /// False once the upstream failed, after telling the guest.
     fn read_upstream(&mut self, frames: &mut Vec<Vec<u8>>) -> bool {
         let mut buf = [0u8; 16384];
 
@@ -197,6 +257,9 @@ impl TcpConn {
                     return true;
                 }
                 Ok(n) => {
+                    if let Some(trace) = &mut self.trace {
+                        trace.bytes_in += n as u64;
+                    }
                     self.snd_buf.extend(&buf[..n]);
                     if self.snd_buf.len() >= MAX_SND_BUF {
                         return true;
@@ -204,10 +267,17 @@ impl TcpConn {
                 }
                 Err(e) if would_block(&e) => return true,
                 Err(_) => {
+                    self.mark_failed();
                     frames.push(self.frame(RST | ACK, &[]));
                     return false;
                 }
             }
+        }
+    }
+
+    fn mark_failed(&mut self) {
+        if let Some(trace) = &mut self.trace {
+            trace.failed = true;
         }
     }
 
@@ -232,8 +302,6 @@ impl TcpConn {
         self.fin_sent = true;
     }
 
-    /// The FIN owed to the guest, once the reply ahead of it has been sent and
-    /// acknowledged.
     fn send_fin_if_due(&mut self, frames: &mut Vec<Vec<u8>>) {
         if self.fin_sent || !self.snd_buf.is_empty() || self.in_flight() != 0 {
             return;
@@ -247,9 +315,6 @@ impl TcpConn {
         self.rcv_wnd = (window as u32) << self.wnd_shift;
     }
 
-    /// Only our own FIN being acknowledged closes the connection. A guest
-    /// acknowledging the last of the reply must not, or the FIN it is still
-    /// owed never goes out.
     fn on_guest_ack(&mut self, ack: u32) {
         if (ack.wrapping_sub(self.snd_una) as i32) > 0 {
             self.snd_una = ack;
@@ -281,8 +346,6 @@ impl TcpConn {
         }
     }
 
-    /// The guest will not write again. This says nothing about the FIN we owe
-    /// it, which may still be queued behind a reply.
     fn on_guest_fin(&mut self) {
         self.rcv_nxt = self.rcv_nxt.wrapping_add(1);
 
@@ -424,6 +487,14 @@ impl SlirpBackend {
         }
 
         let Some(transport) = self.connect(&to_guest) else {
+            if let Some(tracer) = self
+                .tracer
+                .as_ref()
+                .filter(|tracer| tracer.traces_network())
+            {
+                let mut refused = FlowTrace::new(tracer, to_guest.src_ip, to_guest.src_port, false);
+                refused.failed = true;
+            }
             self.rx_pending.push_back(make_tcp_frame(
                 &to_guest,
                 0,
@@ -433,6 +504,15 @@ impl SlirpBackend {
             ));
             return;
         };
+
+        let trace = self
+            .tracer
+            .as_ref()
+            .filter(|tracer| tracer.traces_network())
+            .map(|tracer| {
+                let plaintext = matches!(transport, Transport::Raw(_));
+                FlowTrace::new(tracer, to_guest.src_ip, to_guest.src_port, plaintext)
+            });
 
         let wnd_shift = parse_wnd_scale(payload, tcp_hlen);
         let isn_host = generate_isn(&to_guest);
@@ -461,18 +541,25 @@ impl SlirpBackend {
                 rcv_wnd: (window as u32) << wnd_shift,
                 wnd_shift,
                 ooo_buf: BTreeMap::new(),
+                trace,
             },
         );
     }
 
-    /// `:443` goes through the gateway, which terminates the guest's TLS.
-    /// Everything else is an ordinary outbound socket.
     fn connect(&self, to_guest: &Endpoints) -> Option<Transport> {
         let host_ip = to_guest.src_ip;
         let host_port = to_guest.src_port;
 
         if let Some(ctx) = self.tls.as_ref().filter(|_| host_port == HTTPS_PORT) {
-            return Some(Transport::Https(Box::new(HttpsGateway::new(ctx, host_ip))));
+            let mut gateway = HttpsGateway::new(ctx, host_ip);
+            if let Some(tracer) = self
+                .tracer
+                .as_ref()
+                .filter(|tracer| tracer.traces_network())
+            {
+                gateway.observe_http(tracer.clone());
+            }
+            return Some(Transport::Https(Box::new(gateway)));
         }
 
         let address = SocketAddrV4::new(Ipv4Addr::from(host_ip), host_port);

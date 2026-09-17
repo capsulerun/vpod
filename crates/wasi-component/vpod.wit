@@ -25,6 +25,14 @@ interface executor {
 
     enum exec-mode { closed, piped, terminal }
 
+    record trace-options {
+        processes: bool,
+        files: bool,
+        network: bool,
+        mounts: bool,
+        buffer-bytes: u32,
+    }
+
     session-start: func(snapshot-path: string, command: string, prompt: string, mounts: list<mount-entry>) -> result<u64, string>;
     session-exec: func(handle: u64, code: string, timeout: option<u64>) -> result<execution-result, string>;
     session-close: func(handle: u64);
@@ -36,4 +44,8 @@ interface executor {
 
     session-suspend: func(handle: u64, delta-path: string) -> result<u64, string>;
     session-resume: func(snapshot-path: string, delta-path: string, command: string, prompt: string, mounts: list<mount-entry>) -> result<u64, string>;
+
+    session-trace-start: func(handle: u64, options: trace-options) -> result<_, string>;
+    session-trace-drain: func(handle: u64, max-bytes: u32) -> result<list<u8>, string>;
+    session-trace-stop: func(handle: u64) -> result<_, string>;
 }

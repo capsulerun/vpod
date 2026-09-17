@@ -3,11 +3,14 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::exports::vpod::sandbox::executor::{ExecMode, ExecutionResult, SliceOutput};
+use crate::exports::vpod::sandbox::executor::{
+    ExecMode, ExecutionResult, SliceOutput, TraceOptions as WitTraceOptions,
+};
 use crate::repl;
 use crate::vm;
 
 use machine::machine_bus::MachineBus;
+use machine::trace::{DEFAULT_BUFFER_BYTES, TraceOptions};
 use riscv_core::Hart;
 
 const PYRUNNER_SENTINEL: &str = "---VPOD_DONE---";
@@ -818,6 +821,49 @@ impl SessionManager {
         );
 
         Ok(id)
+    }
+
+    pub fn trace_start(&self, handle: u64, options: WitTraceOptions) -> Result<(), String> {
+        let mut sessions = self.sessions.borrow_mut();
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+        session.bus.start_trace(TraceOptions {
+            network: options.network,
+            mounts: options.mounts,
+            buffer_bytes: if options.buffer_bytes == 0 {
+                DEFAULT_BUFFER_BYTES
+            } else {
+                options.buffer_bytes as usize
+            },
+        });
+
+        Ok(())
+    }
+
+    pub fn trace_drain(&self, handle: u64, max_bytes: u32) -> Result<Vec<u8>, String> {
+        let sessions = self.sessions.borrow();
+        let session = sessions
+            .get(&handle)
+            .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+        let tracer = session
+            .bus
+            .tracer()
+            .ok_or_else(|| "tracing is not enabled for this session".to_string())?;
+
+        Ok(tracer.drain(max_bytes as usize))
+    }
+
+    pub fn trace_stop(&self, handle: u64) -> Result<(), String> {
+        let mut sessions = self.sessions.borrow_mut();
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+        session.bus.stop_trace();
+        Ok(())
     }
 }
 

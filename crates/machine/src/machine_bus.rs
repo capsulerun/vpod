@@ -4,6 +4,7 @@ use crate::clint::{CLINT_BASE, CLINT_SIZE, Clint, TIMER_FREQUENCY};
 use crate::cow_ram::CowRam;
 use crate::dtb;
 use crate::plic::{PLIC_BASE, PLIC_SIZE, Plic};
+use crate::trace::{TraceOptions, Tracer};
 use crate::uart::Uart;
 use crate::virtio::RamView;
 use crate::virtio::blk::VirtioBlk;
@@ -36,6 +37,7 @@ pub struct MachineBus {
     pub console: VirtioConsole,
     pub net: Option<VirtioNet<SlirpBackend>>,
     pub fs_devices: Vec<VirtioFs>,
+    tracer: Option<Tracer>,
 }
 
 impl MachineBus {
@@ -59,6 +61,7 @@ impl MachineBus {
             console: VirtioConsole::new(),
             net: None,
             fs_devices: Vec::new(),
+            tracer: None,
         }
     }
 
@@ -90,6 +93,40 @@ impl MachineBus {
                 }
             })
             .collect();
+    }
+
+    pub fn start_trace(&mut self, options: TraceOptions) {
+        let tracer = Tracer::new(options);
+        tracer.set_guest_ns(self.guest_ns());
+        self.attach_tracer(Some(tracer));
+    }
+
+    pub fn stop_trace(&mut self) {
+        self.attach_tracer(None);
+    }
+
+    pub fn tracer(&self) -> Option<&Tracer> {
+        self.tracer.as_ref()
+    }
+
+    fn attach_tracer(&mut self, tracer: Option<Tracer>) {
+        if let Some(network_device) = &mut self.net {
+            network_device.backend_mut().set_tracer(tracer.clone());
+        }
+        for fs_device in &mut self.fs_devices {
+            fs_device.set_tracer(tracer.clone());
+        }
+        self.tracer = tracer;
+    }
+
+    fn guest_ns(&self) -> u64 {
+        self.clint.mtime() * (1_000_000_000 / TIMER_FREQUENCY)
+    }
+
+    fn sync_trace_clock(&self) {
+        if let Some(tracer) = &self.tracer {
+            tracer.set_guest_ns(self.guest_ns());
+        }
     }
 
     pub fn ram_size(&self) -> u64 {
@@ -126,6 +163,8 @@ impl MachineBus {
         } else {
             hart.csr.mip &= !MIP_MSIP;
         }
+
+        self.sync_trace_clock();
 
         if let Some(network_device) = &mut self.net {
             let mask = self.ram_mask;
@@ -438,6 +477,8 @@ impl SystemBus for MachineBus {
             };
 
             if let Some(queue_index) = notify_queue_index {
+                self.sync_trace_clock();
+
                 let mask = self.ram_mask;
                 let mut ram = RamView::new(&mut self.ram, mask);
 

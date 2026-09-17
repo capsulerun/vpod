@@ -37,6 +37,10 @@ impl<B: NetworkBackend> VirtioNet<B> {
         }
     }
 
+    pub fn backend_mut(&mut self) -> &mut B {
+        &mut self.backend
+    }
+
     pub fn rx_pending(&self) -> bool {
         !self.rx_hold.is_empty() || self.backend.has_rx()
     }

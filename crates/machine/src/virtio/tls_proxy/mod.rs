@@ -28,6 +28,7 @@ use x509_cert::spki::SubjectPublicKeyInfoOwned;
 use x509_cert::time::{Time, Validity};
 
 use super::upstream::{Upstream, UpstreamMode, UpstreamStatus};
+use crate::trace::HttpObserver;
 
 #[cfg(test)]
 mod testutil;
@@ -238,6 +239,7 @@ pub struct TlsProxy {
     upstream_closed: bool,
     close_notified: bool,
     timing: Option<Timing>,
+    http: Option<HttpObserver>,
 }
 
 pub(crate) struct Timing {
@@ -308,7 +310,16 @@ impl TlsProxy {
             upstream_closed: false,
             close_notified: false,
             timing,
+            http: None,
         })
+    }
+
+    pub(crate) fn observe_http(&mut self, http: HttpObserver) {
+        self.http = Some(http);
+    }
+
+    pub fn server_name(&self) -> Option<&str> {
+        self.server.server_name()
     }
 
     pub fn failed(&self) -> bool {
@@ -375,6 +386,9 @@ impl TlsProxy {
             && !self.server.is_handshaking()
             && let Some(sni) = self.server.server_name().map(|s| s.to_string())
         {
+            if let Some(http) = &mut self.http {
+                http.set_default_host(&sni);
+            }
             self.connect_upstream(&sni);
 
             if let (Some(t), true) = (&mut self.timing, self.upstream.is_some())
@@ -392,6 +406,10 @@ impl TlsProxy {
                 match self.server.reader().read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
+                        if let Some(http) = &mut self.http {
+                            http.observe(&buf[..n]);
+                        }
+
                         if upstream.send_plaintext(&buf[..n]).is_err() {
                             self.failed = true;
                             return;
@@ -548,6 +566,7 @@ impl TlsProxy {
             upstream_closed: false,
             close_notified: false,
             timing: None,
+            http: None,
         }
     }
 }

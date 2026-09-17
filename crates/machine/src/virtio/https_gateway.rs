@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use super::tls_proxy::{Timing, TlsContext, TlsProxy};
 use super::upstream::{PREAMBLE_PREFIX, Upstream, UpstreamMode, UpstreamStatus};
+use crate::trace::{HttpObserver, Tracer};
 
 const PREAMBLE_MAX: usize = 280;
 
@@ -23,6 +24,7 @@ pub struct HttpsGateway {
     upstream_config: Arc<ClientConfig>,
     dst_ip: [u8; 4],
     timing: Option<Timing>,
+    tracer: Option<Tracer>,
 }
 
 impl HttpsGateway {
@@ -33,6 +35,19 @@ impl HttpsGateway {
             upstream_config: ctx.upstream_config(),
             dst_ip,
             timing: Timing::new(),
+            tracer: None,
+        }
+    }
+
+    pub fn observe_http(&mut self, tracer: Tracer) {
+        self.tracer = Some(tracer);
+    }
+
+    pub fn server_name(&self) -> Option<&str> {
+        match &self.state {
+            GatewayState::Tls(proxy) => proxy.server_name(),
+            GatewayState::Plain(bridge) => Some(&bridge.host),
+            _ => None,
         }
     }
 
@@ -44,6 +59,7 @@ impl HttpsGateway {
             upstream_config,
             dst_ip,
             timing: None,
+            tracer: None,
         }
     }
 
@@ -115,6 +131,9 @@ impl HttpsGateway {
 
             match TlsProxy::with_timing(&self.ctx, self.dst_ip, self.timing.take()) {
                 Ok(mut proxy) => {
+                    if let Some(tracer) = self.tracer.take() {
+                        proxy.observe_http(HttpObserver::new(tracer, "https", self.dst_ip, 443));
+                    }
                     proxy.push_from_guest(&buffered);
                     self.state = GatewayState::Tls(Box::new(proxy));
                 }
@@ -162,9 +181,16 @@ impl HttpsGateway {
             self.timing.take(),
         ) {
             Ok(mut bridge) => {
+                if let Some(tracer) = self.tracer.take() {
+                    let mut http = HttpObserver::new(tracer, "https", self.dst_ip, port);
+                    http.set_default_host(&host);
+                    bridge.http = Some(http);
+                }
+
                 if !remainder.is_empty() {
                     bridge.push_from_guest(remainder);
                 }
+
                 self.state = GatewayState::Plain(Box::new(bridge));
             }
             Err(e) => {
@@ -188,6 +214,8 @@ fn parse_preamble(line: &[u8]) -> Option<(String, u16)> {
 
 struct PlainBridge {
     upstream: Upstream,
+    host: String,
+    http: Option<HttpObserver>,
     to_guest: VecDeque<u8>,
     failed: bool,
     upstream_closed: bool,
@@ -210,6 +238,8 @@ impl PlainBridge {
 
         let bridge = Self {
             upstream,
+            host: host.to_string(),
+            http: None,
             to_guest: VecDeque::new(),
             failed: false,
             upstream_closed: false,
@@ -225,6 +255,10 @@ impl PlainBridge {
     }
 
     fn push_from_guest(&mut self, bytes: &[u8]) {
+        if let Some(http) = &mut self.http {
+            http.observe(bytes);
+        }
+
         if self.upstream.send_plaintext(bytes).is_err() {
             self.failed = true;
             return;

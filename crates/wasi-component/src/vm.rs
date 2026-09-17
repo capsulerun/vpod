@@ -140,6 +140,7 @@ pub fn _bus_from_base(
                 tag: format!("vfs{}", i),
                 writable: m.writable,
             }]);
+            fs.set_guest_root(&m.guest_path);
         }
     }
 
@@ -198,6 +199,7 @@ pub fn _load(config: _VmConfig) -> Result<(MachineBus, Hart, u8), String> {
                 tag: format!("vfs{}", i),
                 writable: m.writable,
             }]);
+            fs.set_guest_root(&m.guest_path);
         }
     }
 
