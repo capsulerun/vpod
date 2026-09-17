@@ -14,6 +14,7 @@ import { componentImports } from "./component-imports.js";
 import type { ComponentModule, CoreModuleLoader } from "./component-imports.js";
 import type { DriverCommand } from "../net/driver-protocol.js";
 import type { ExecutionResult, WorkerCall } from "./protocol.js";
+import type { WireTraceOptions } from "../trace.js";
 
 async function announceHostTerminatedTls(): Promise<void> {
     const cli = (await import("../shims/cli.js")) as unknown as {
@@ -52,6 +53,9 @@ export interface Executor {
         prompt: string,
         mounts: never[],
     ): bigint;
+    sessionTraceStart?(handle: bigint, options: WireTraceOptions): void;
+    sessionTraceDrain?(handle: bigint, maxBytes: number): Uint8Array;
+    sessionTraceStop?(handle: bigint): void;
 }
 
 const sharedComponents = new Map<string, Promise<{ executor: Executor }>>();
@@ -251,6 +255,20 @@ export class Dispatcher {
                     removeGuestFile(path);
                 }
             }
+
+            case "trace-supported":
+                return typeof this.#requireExecutor().sessionTraceStart === "function";
+
+            case "session-trace-start":
+                this.#requireExecutor().sessionTraceStart!(call.handle, call.options);
+                return null;
+
+            case "session-trace-drain":
+                return this.#requireExecutor().sessionTraceDrain!(call.handle, call.maxBytes);
+
+            case "session-trace-stop":
+                this.#requireExecutor().sessionTraceStop!(call.handle);
+                return null;
 
             case "enable-network": {
                 await announceHostTerminatedTls();

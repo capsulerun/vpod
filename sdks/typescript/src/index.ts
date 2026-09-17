@@ -13,6 +13,17 @@ export {
     normalizeLineEndings,
 } from "./execution.js";
 
+export { Trace, TraceRecorder } from "./trace.js";
+export type {
+    FileActivity,
+    HttpRequest,
+    NetworkActivity,
+    ProcessNode,
+    TraceEvent,
+    TraceSetting,
+    TraceSources,
+} from "./trace.js";
+
 export { SandboxRuntime } from "./runtime.js";
 export type { SandboxRuntimeOptions, StorageQuota } from "./runtime.js";
 
