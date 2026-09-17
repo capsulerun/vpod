@@ -28,8 +28,9 @@ const PYRUNNER_STAGE_CHUNK: usize = 2500;
 const SHELL_PROMPT_SENTINEL: &[u8] = b"\x1fvpod\x1f";
 
 const WORKING_DIRECTORY_MARKER: &str = "vpod-cwd ";
-const WORKING_DIRECTORY_TIMEOUT_SECONDS: u64 = 15;
-const WORKING_DIRECTORY_PROBE: &str = "( for p in /proc/[0-9]*; do \
+const TRACE_START_TIMEOUT_SECONDS: u64 = 15;
+const TRACE_START_COMMAND: &str = "echo 2 > /proc/sys/kernel/io_uring_disabled 2>/dev/null; \
+     ( for p in /proc/[0-9]*; do \
      cd -P \"$p/cwd\" 2>/dev/null && echo \"vpod-cwd ${p#/proc/} $PWD\"; \
      done ) 2>/dev/null\n";
 
@@ -157,13 +158,13 @@ fn begin_shell_exec(session: &mut Session, code: String, timeout_secs: u64, mode
     ));
 }
 
-fn learn_working_directories(session: &mut Session) {
+fn prepare_tracing(session: &mut Session) {
     if !session.is_shell || session.shell_lost || session.exec.is_some() {
         return;
     }
 
     session.bus.uart.drain_tx();
-    for byte in WORKING_DIRECTORY_PROBE.bytes() {
+    for byte in TRACE_START_COMMAND.bytes() {
         session.bus.uart.push_rx(byte);
     }
 
@@ -172,7 +173,7 @@ fn learn_working_directories(session: &mut Session) {
         &mut session.bus,
         &mut session.hart,
         &prompt,
-        WORKING_DIRECTORY_TIMEOUT_SECONDS,
+        TRACE_START_TIMEOUT_SECONDS,
         true,
         None,
         false,
@@ -890,7 +891,7 @@ impl SessionManager {
 
         if session.bus.traces_syscalls() {
             session.bus.set_trace_quiet(true);
-            learn_working_directories(session);
+            prepare_tracing(session);
             session.bus.set_trace_quiet(false);
         }
 

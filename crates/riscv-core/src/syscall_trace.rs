@@ -26,6 +26,8 @@ const SYS_CLONE: u64 = 220;
 const SYS_EXECVE: u64 = 221;
 const SYS_RENAMEAT2: u64 = 276;
 const SYS_EXECVEAT: u64 = 281;
+const SYS_IO_URING_SETUP: u64 = 425;
+const SYS_IO_URING_ENTER: u64 = 426;
 const SYS_CLONE3: u64 = 435;
 const SYS_CLOSE_RANGE: u64 = 436;
 const SYS_OPENAT2: u64 = 437;
@@ -82,6 +84,7 @@ pub enum SyscallKind {
     Identity {
         group: bool,
     },
+    RingUse,
     Open {
         directory_fd: i32,
         path: GuestString,
@@ -192,6 +195,7 @@ pub fn decode_entry<B: SystemBus>(
         SYS_CLONE3 => SyscallKind::Clone {
             thread: memory.u64(ctx.bus, args[0]).unwrap_or(0) & CLONE_THREAD != 0,
         },
+        SYS_IO_URING_SETUP | SYS_IO_URING_ENTER => SyscallKind::RingUse,
         SYS_SET_TID_ADDRESS | SYS_GETTID => SyscallKind::Identity { group: false },
         SYS_GETPID => SyscallKind::Identity { group: true },
         SYS_OPENAT | SYS_OPENAT2 => {

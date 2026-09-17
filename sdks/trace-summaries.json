@@ -119,21 +119,11 @@
         {"host": null, "address": "10.0.2.2", "port": 8080, "protocol": "tcp", "requests": [], "bytes_out": 0, "bytes_in": 0, "failed": false, "processes": [700]}
       ],
       "processes": [
-        {"pid": 563, "path": "/bin/sh", "argv": ["sh", "-c", "cd /app && make"], "exit_code": null, "started_at": 2000, "children": [
-          {"pid": 563, "path": "/usr/bin/make", "argv": ["make"], "exit_code": 2, "started_at": 13000, "children": [
-            {"pid": 564, "path": "/usr/bin/cc", "argv": ["cc", "-o", "build/out", "main.c"], "exit_code": 1, "started_at": 14000, "children": []},
-            {"pid": 566, "path": "/bin/echo", "argv": ["echo", "done"], "exit_code": 0, "started_at": 15400, "children": []}
-          ]}
-        ]},
+        {"pid": 563, "path": "/bin/sh", "argv": ["sh", "-c", "cd /app && make"], "exit_code": null, "started_at": 2000, "children": [{"pid": 563, "path": "/usr/bin/make", "argv": ["make"], "exit_code": 2, "started_at": 13000, "children": [{"pid": 564, "path": "/usr/bin/cc", "argv": ["cc", "-o", "build/out", "main.c"], "exit_code": 1, "started_at": 14000, "children": []}, {"pid": 566, "path": "/bin/echo", "argv": ["echo", "done"], "exit_code": 0, "started_at": 15400, "children": []}]}]},
         {"pid": 571, "path": "/usr/bin/python3", "argv": ["python3", "-c", "print(1)"], "exit_code": null, "started_at": 17000, "children": []}
       ],
       "processes_including_internal": [
-        {"pid": 563, "path": "/bin/sh", "argv": ["sh", "-c", "cd /app && make"], "exit_code": null, "started_at": 2000, "children": [
-          {"pid": 563, "path": "/usr/bin/make", "argv": ["make"], "exit_code": 2, "started_at": 13000, "children": [
-            {"pid": 564, "path": "/usr/bin/cc", "argv": ["cc", "-o", "build/out", "main.c"], "exit_code": 1, "started_at": 14000, "children": []},
-            {"pid": 566, "path": "/bin/echo", "argv": ["echo", "done"], "exit_code": 0, "started_at": 15400, "children": []}
-          ]}
-        ]},
+        {"pid": 563, "path": "/bin/sh", "argv": ["sh", "-c", "cd /app && make"], "exit_code": null, "started_at": 2000, "children": [{"pid": 563, "path": "/usr/bin/make", "argv": ["make"], "exit_code": 2, "started_at": 13000, "children": [{"pid": 564, "path": "/usr/bin/cc", "argv": ["cc", "-o", "build/out", "main.c"], "exit_code": 1, "started_at": 14000, "children": []}, {"pid": 566, "path": "/bin/echo", "argv": ["echo", "done"], "exit_code": 0, "started_at": 15400, "children": []}]}]},
         {"pid": 570, "path": "/usr/lib/vpod/vpod-seed-entropy", "argv": ["vpod-seed-entropy", "ab12"], "exit_code": 0, "started_at": 12000, "children": []},
         {"pid": 571, "path": "/usr/bin/python3", "argv": ["python3", "-c", "print(1)"], "exit_code": null, "started_at": 17000, "children": []}
       ]
@@ -179,6 +169,29 @@
       ],
       "processes_including_internal": [
         {"pid": null, "path": "/bin/sh", "argv": ["sh", "-c", "cat data/notes.txt"], "exit_code": null, "started_at": 1000, "children": []}
+      ]
+    },
+    {
+      "name": "a guest that got behind the tracer with io_uring",
+      "events": [
+        {"v": 1, "seq": 0, "guest_ns": 1000, "wall_ms": 1, "kind": "process.exec", "task": "a1", "pid": 601, "ppid": 1, "path": "/usr/bin/node", "argv": ["node", "build.js"]},
+        {"v": 1, "seq": 1, "guest_ns": 2000, "wall_ms": 1, "kind": "trace.blind", "task": "a1", "pid": 601, "reason": "io-uring"},
+        {"v": 1, "seq": 2, "guest_ns": 3000, "wall_ms": 1, "kind": "file.open", "task": "a1", "pid": 601, "path": "/app/out.js", "access": "write", "create": true, "truncate": true, "result": 3}
+      ],
+      "complete": false,
+      "files": [
+        {"path": "/app/out.js", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [601]}
+      ],
+      "files_including_internal_and_noise": [
+        {"path": "/app/out.js", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [601]}
+      ],
+      "network": [],
+      "network_including_internal": [],
+      "processes": [
+        {"pid": 601, "path": "/usr/bin/node", "argv": ["node", "build.js"], "exit_code": null, "started_at": 1000, "children": []}
+      ],
+      "processes_including_internal": [
+        {"pid": 601, "path": "/usr/bin/node", "argv": ["node", "build.js"], "exit_code": null, "started_at": 1000, "children": []}
       ]
     }
   ]

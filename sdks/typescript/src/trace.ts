@@ -169,7 +169,10 @@ export class Trace {
 
     get complete(): boolean {
         return !this.#events.some(
-            (event) => event.kind === "trace.dropped" || ("pid" in event && event.pid === null),
+            (event) =>
+                event.kind === "trace.dropped" ||
+                event.kind === "trace.blind" ||
+                ("pid" in event && event.pid === null),
         );
     }
 

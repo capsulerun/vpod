@@ -102,7 +102,8 @@ class Trace:
     @property
     def complete(self) -> bool:
         return not any(
-            event["kind"] == "trace.dropped" or event.get("pid", 0) is None
+            event["kind"] in ("trace.dropped", "trace.blind")
+            or event.get("pid", 0) is None
             for event in self._events
         )
 

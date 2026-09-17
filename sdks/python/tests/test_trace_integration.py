@@ -95,6 +95,36 @@ def test_vpod_plumbing_is_hidden_unless_asked_for():
         assert "/dev/ttyS1" in [file.path for file in trace.files(internal=True, noise=True)]
 
 
+SETUP_A_RING = (
+    'python3 -c "import ctypes; libc = ctypes.CDLL(None, use_errno=True); '
+    "libc.syscall.restype = ctypes.c_long; "
+    "print(libc.syscall(ctypes.c_long(425), ctypes.c_long(4), "
+    'ctypes.create_string_buffer(120)))"'
+)
+
+
+def test_tracing_closes_the_io_uring_blind_spot():
+    reader = "cat /proc/sys/kernel/io_uring_disabled"
+
+    with Sandbox.create(trace=True) as sbx:
+        assert sbx.commands.run(reader).stdout.strip() == "2"
+
+    with Sandbox.create() as sbx:
+        assert sbx.commands.run(reader).stdout.strip() == "0"
+
+
+def test_a_guest_that_turns_io_uring_back_on_is_reported_not_hidden():
+    with Sandbox.create(trace=True) as sbx:
+        result = sbx.commands.run(
+            f"echo 0 > /proc/sys/kernel/io_uring_disabled; {SETUP_A_RING}"
+        )
+        assert result.success, result.stderr
+        assert not result.stdout.strip().startswith("-1"), result.stdout
+
+        assert any(event["kind"] == "trace.blind" for event in result.trace.events)
+        assert not result.trace.complete
+
+
 def test_a_resumed_sandbox_starts_a_fresh_trace():
     with Sandbox.create(trace=True) as sbx:
         sbx.commands.run("touch /tmp/before-suspend")

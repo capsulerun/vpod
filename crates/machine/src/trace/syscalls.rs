@@ -102,6 +102,7 @@ pub struct SyscallTracer {
     trace_files: bool,
     trace_network: bool,
     quiet: bool,
+    reported_blind: bool,
     identities: Identities,
     processes: Processes,
     pending: HashMap<u64, Pending>,
@@ -130,6 +131,7 @@ impl SyscallTracer {
             trace_network: tracer.traces_network(),
             tracer,
             quiet: false,
+            reported_blind: false,
             identities: Identities::default(),
             processes: Processes::default(),
             pending: HashMap::new(),
@@ -232,6 +234,15 @@ impl SyscallTracer {
                 if value > 0 {
                     self.observe_identity(task, value as u32, bus, satp);
                 }
+            }
+            SyscallKind::RingUse => {
+                if !succeeded || self.reported_blind {
+                    return;
+                }
+                self.reported_blind = true;
+                let mut fields = identity_fields(owner, task);
+                fields.push(("reason", "io-uring".into()));
+                self.record("trace.blind", fields, false);
             }
             SyscallKind::Clone { thread } => {
                 if value <= 0 {
@@ -1470,6 +1481,24 @@ mod tests {
         assert_eq!(events[0]["pid"], 1);
         assert_eq!(events[0]["child_pid"], 742);
         assert_eq!(events[0]["thread"], false);
+    }
+
+    #[test]
+    fn a_ring_the_tracer_cannot_see_through_is_reported_once() {
+        let mut guest = Guest::new();
+        guest.calibrate();
+
+        guest.call(SHELL, SyscallKind::RingUse, -1); // refused, nothing was hidden
+        assert!(guest.events().is_empty());
+
+        guest.call(SHELL, SyscallKind::RingUse, 3);
+        guest.call(SHELL, SyscallKind::RingUse, 4);
+
+        let events = guest.events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["kind"], "trace.blind");
+        assert_eq!(events[0]["reason"], "io-uring");
+        assert_eq!(events[0]["pid"], 1);
     }
 
     #[test]
