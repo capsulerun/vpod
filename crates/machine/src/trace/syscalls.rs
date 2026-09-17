@@ -105,8 +105,11 @@ impl SyscallTracer {
         argv_truncated: bool,
         outcome: ExecOutcome,
     ) {
+        let runs_vpod_plumbing = matches!(&path, GuestString::Value(text) if text.starts_with(VPOD_HELPER_PREFIX))
+            || handles_only_staging_files(&argv);
+
         if let ExecOutcome::Succeeded = outcome {
-            if matches!(&path, GuestString::Value(text) if text.starts_with(VPOD_HELPER_PREFIX)) {
+            if runs_vpod_plumbing {
                 self.internal_tasks.insert(task);
             } else {
                 self.internal_tasks.remove(&task);
@@ -117,6 +120,7 @@ impl SyscallTracer {
             return;
         }
 
+        let internal = runs_vpod_plumbing || self.internal_tasks.contains(&task);
         let mut fields = task_fields(task);
         push_guest_string(&mut fields, PATH_KEYS, path);
         fields.push(("argv", argv.into()));
@@ -128,7 +132,7 @@ impl SyscallTracer {
             ExecOutcome::Failed(value) => fields.push(("result", Value::from(value as i32))),
             ExecOutcome::Unknown => fields.push(("result", Value::Null)),
         }
-        self.record("process.exec", fields, self.internal_tasks.contains(&task));
+        self.record("process.exec", fields, internal);
     }
 
     fn emit_exit(&mut self, task: u64, code: i32) {
@@ -307,6 +311,21 @@ impl SyscallTracer {
 
 fn task_fields(task: u64) -> Vec<(&'static str, Value)> {
     vec![("task", Value::from(format!("{task:x}")))]
+}
+
+fn handles_only_staging_files(argv: &[String]) -> bool {
+    let Some((program, arguments)) = argv.split_first() else {
+        return false;
+    };
+    let program = program.rsplit('/').next().unwrap_or(program);
+    let mut operands = arguments
+        .iter()
+        .filter(|argument| !argument.starts_with('-'))
+        .peekable();
+
+    matches!(program, "base64" | "rm")
+        && operands.peek().is_some()
+        && operands.all(|operand| operand.starts_with(VPOD_STAGING_PREFIX))
 }
 
 fn is_vpod_plumbing(path: &GuestString) -> bool {
@@ -548,6 +567,36 @@ mod tests {
         assert_eq!(events[0]["internal"], true);
         assert_eq!(events[1]["internal"], true);
         assert!(events[2].get("internal").is_none());
+    }
+
+    #[test]
+    fn staging_a_long_command_is_internal_but_running_it_is_not() {
+        let (tracer, mut syscalls) = traced();
+
+        succeed_exec(
+            &mut syscalls,
+            "/bin/base64",
+            &["base64", "-d", "/tmp/.vpod_cmd.b64"],
+        );
+        succeed_exec(
+            &mut syscalls,
+            "/bin/rm",
+            &["rm", "-f", "/tmp/.vpod_cmd.b64"],
+        );
+        succeed_exec(&mut syscalls, "/bin/sh", &["sh", "/tmp/.vpod_cmd.sh"]);
+        succeed_exec(
+            &mut syscalls,
+            "/bin/rm",
+            &["rm", "-f", "/tmp/.vpod_cmd.b64", "/tmp/notes.txt"],
+        );
+        succeed_exec(&mut syscalls, "/bin/rm", &["rm", "-f"]);
+
+        let events = drained(&tracer);
+        assert_eq!(events[0]["internal"], true);
+        assert_eq!(events[1]["internal"], true);
+        assert!(events[2].get("internal").is_none());
+        assert!(events[3].get("internal").is_none());
+        assert!(events[4].get("internal").is_none());
     }
 
     #[test]
