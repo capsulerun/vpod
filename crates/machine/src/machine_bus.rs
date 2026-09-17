@@ -4,7 +4,7 @@ use crate::clint::{CLINT_BASE, CLINT_SIZE, Clint, TIMER_FREQUENCY};
 use crate::cow_ram::CowRam;
 use crate::dtb;
 use crate::plic::{PLIC_BASE, PLIC_SIZE, Plic};
-use crate::trace::{TraceOptions, Tracer};
+use crate::trace::{SyscallTracer, TraceOptions, Tracer};
 use crate::uart::Uart;
 use crate::virtio::RamView;
 use crate::virtio::blk::VirtioBlk;
@@ -38,6 +38,7 @@ pub struct MachineBus {
     pub net: Option<VirtioNet<SlirpBackend>>,
     pub fs_devices: Vec<VirtioFs>,
     tracer: Option<Tracer>,
+    syscall_tracer: Option<SyscallTracer>,
 }
 
 impl MachineBus {
@@ -62,6 +63,7 @@ impl MachineBus {
             net: None,
             fs_devices: Vec::new(),
             tracer: None,
+            syscall_tracer: None,
         }
     }
 
@@ -113,9 +115,17 @@ impl MachineBus {
         if let Some(network_device) = &mut self.net {
             network_device.backend_mut().set_tracer(tracer.clone());
         }
+
         for fs_device in &mut self.fs_devices {
             fs_device.set_tracer(tracer.clone());
         }
+
+        self.syscall_tracer = tracer
+            .clone()
+            .filter(|tracer| {
+                tracer.traces_processes() || tracer.traces_files() || tracer.traces_network()
+            })
+            .map(SyscallTracer::new);
         self.tracer = tracer;
     }
 
@@ -564,6 +574,23 @@ impl SystemBus for MachineBus {
 
     fn external_interrupt_pending(&mut self) -> Option<bool> {
         Some(self.refresh_external_interrupt())
+    }
+
+    #[inline]
+    fn syscall_trace_enabled(&self) -> bool {
+        self.syscall_tracer.is_some()
+    }
+
+    fn on_syscall_entry(&mut self, entry: riscv_core::SyscallEntry) {
+        if let Some(syscall_tracer) = &mut self.syscall_tracer {
+            syscall_tracer.on_entry(entry);
+        }
+    }
+
+    fn on_syscall_return(&mut self, task: u64, return_pc: u64, value: i64) {
+        if let Some(syscall_tracer) = &mut self.syscall_tracer {
+            syscall_tracer.on_return(task, return_pc, value);
+        }
     }
 }
 

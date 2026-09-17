@@ -972,6 +972,13 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                     *ctx.shutdown_requested = true;
                 }
 
+                if matches!(ctx.priv_mode, PrivMode::U)
+                    && ctx.bus.syscall_trace_enabled()
+                    && let Some(entry) = crate::syscall_trace::decode_entry(ctx, pc)
+                {
+                    ctx.bus.on_syscall_entry(entry);
+                }
+
                 take_exception(ctx, cause.mcause_code(), 0);
                 return StepResult::Ok;
             }
@@ -994,6 +1001,14 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
 
                 ctx.csr.mstatus |= MSTATUS_SPIE;
                 *ctx.priv_mode = PrivMode::from_bits(spp);
+
+                if spp == 0 && ctx.bus.syscall_trace_enabled() {
+                    let task = ctx.csr.sscratch;
+                    let return_pc = ctx.csr.sepc;
+                    let value = ctx.regs.read(10) as i64; // a0
+                    ctx.bus.on_syscall_return(task, return_pc, value);
+                }
+
                 ctx.regs.pc = ctx.csr.sepc;
                 return StepResult::Ok;
             }

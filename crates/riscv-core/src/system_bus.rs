@@ -1,6 +1,8 @@
 // External communication linking the hart to RAM and peripherals (disk, network).
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::syscall_trace::SyscallEntry;
+
 pub trait SystemBus {
     fn read_byte(&mut self, address: u64) -> u8;
     fn read_halfword(&mut self, address: u64) -> u16;
@@ -32,6 +34,18 @@ pub trait SystemBus {
 
     fn external_interrupt_pending(&mut self) -> Option<bool> {
         None
+    }
+
+    fn syscall_trace_enabled(&self) -> bool {
+        false
+    }
+
+    fn on_syscall_entry(&mut self, entry: SyscallEntry) {
+        let _ = entry;
+    }
+
+    fn on_syscall_return(&mut self, task: u64, return_pc: u64, value: i64) {
+        let _ = (task, return_pc, value);
     }
 }
 

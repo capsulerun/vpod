@@ -830,6 +830,8 @@ impl SessionManager {
             .ok_or_else(|| format!("invalid session handle: {handle}"))?;
 
         session.bus.start_trace(TraceOptions {
+            processes: options.processes,
+            files: options.files,
             network: options.network,
             mounts: options.mounts,
             buffer_bytes: if options.buffer_bytes == 0 {

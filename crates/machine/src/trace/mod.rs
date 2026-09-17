@@ -1,4 +1,5 @@
 mod http;
+mod syscalls;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -7,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 pub use http::{HttpObserver, HttpRequest, HttpRequests};
+pub use syscalls::SyscallTracer;
 
 pub const SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
@@ -15,6 +17,8 @@ const MAX_REMEMBERED_NAMES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TraceOptions {
+    pub processes: bool,
+    pub files: bool,
     pub network: bool,
     pub mounts: bool,
     pub buffer_bytes: usize,
@@ -23,6 +27,8 @@ pub struct TraceOptions {
 impl Default for TraceOptions {
     fn default() -> Self {
         Self {
+            processes: true,
+            files: true,
             network: true,
             mounts: true,
             buffer_bytes: DEFAULT_BUFFER_BYTES,
@@ -62,6 +68,14 @@ impl Tracer {
 
     pub fn options(&self) -> TraceOptions {
         self.options
+    }
+
+    pub fn traces_processes(&self) -> bool {
+        self.options.processes
+    }
+
+    pub fn traces_files(&self) -> bool {
+        self.options.files
     }
 
     pub fn traces_network(&self) -> bool {
