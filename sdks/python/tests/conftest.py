@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -26,6 +28,7 @@ def mock_component(request, monkeypatch):
     sessions = {}
     session_counter = {"id": 0}
     stdin_writes = []
+    traced_sessions = {}
 
     def fake_execute(snapshot_path, command):
         import subprocess
@@ -72,7 +75,40 @@ def mock_component(request, monkeypatch):
     def fake_session_close(sid):
         sessions.pop(sid, None)
 
+    def record_exec(sid, command):
+        session = traced_sessions.get(sid)
+        if session is None or command is None:
+            return
+        event = {
+            "v": 1,
+            "seq": session["seq"],
+            "guest_ns": session["seq"],
+            "wall_ms": 0,
+            "kind": "process.exec",
+            "task": f"{sid:x}",
+            "path": "/bin/sh",
+            "argv": ["sh", "-c", command],
+        }
+        session["seq"] += 1
+        session["pending"].append((json.dumps(event) + "\n").encode())
+
+    def fake_session_trace_start(sid, options):
+        traced_sessions[sid] = {"options": options, "pending": [], "seq": 0}
+        return FakeVariant(tag="ok", payload=None)
+
+    def fake_session_trace_drain(sid, max_bytes):
+        session = traced_sessions.get(sid)
+        if session is None:
+            return FakeVariant(tag="err", payload="tracing is not enabled for this session")
+        pending, session["pending"] = session["pending"], []
+        return FakeVariant(tag="ok", payload=b"".join(pending))
+
+    def fake_session_trace_stop(sid):
+        traced_sessions.pop(sid, None)
+        return FakeVariant(tag="ok", payload=None)
+
     def fake_session_exec_slice(sid, command, timeout=None, slice_nanos=0, mode="closed"):
+        record_exec(sid, command)
         payload = fake_session_exec(sid, command).payload
         return FakeVariant(
             tag="ok",
@@ -94,6 +130,9 @@ def mock_component(request, monkeypatch):
         "session-interrupt": fake_session_interrupt,
         "session-stdin": fake_session_stdin,
         "session-close": fake_session_close,
+        "session-trace-start": fake_session_trace_start,
+        "session-trace-drain": fake_session_trace_drain,
+        "session-trace-stop": fake_session_trace_stop,
     }
 
     from vpod.snapshots import PulledSnapshot
@@ -114,4 +153,4 @@ def mock_component(request, monkeypatch):
         lambda path, snap=None, mounts=None, **kwargs: (store, exports),
     )
 
-    return {"exports": exports, "stdin_writes": stdin_writes}
+    return {"exports": exports, "stdin_writes": stdin_writes, "traced_sessions": traced_sessions}
