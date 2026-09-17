@@ -38,7 +38,7 @@ pub struct MachineBus {
     pub net: Option<VirtioNet<SlirpBackend>>,
     pub fs_devices: Vec<VirtioFs>,
     tracer: Option<Tracer>,
-    syscall_tracer: Option<SyscallTracer>,
+    syscall_tracer: Option<Box<SyscallTracer>>,
 }
 
 impl MachineBus {
@@ -125,7 +125,7 @@ impl MachineBus {
             .filter(|tracer| {
                 tracer.traces_processes() || tracer.traces_files() || tracer.traces_network()
             })
-            .map(SyscallTracer::new);
+            .map(|tracer| Box::new(SyscallTracer::new(tracer)));
         self.tracer = tracer;
     }
 
