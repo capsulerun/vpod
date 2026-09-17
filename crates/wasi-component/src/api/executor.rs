@@ -89,7 +89,7 @@ impl Guest for Executor {
         SESSION_MANAGER.trace_start(handle, options)
     }
 
-    fn session_trace_drain(handle: u64, max_bytes: u32) -> Result<Vec<u8>, String> {
+    fn session_trace_drain(handle: u64, max_bytes: u32) -> Result<String, String> {
         SESSION_MANAGER.trace_drain(handle, max_bytes)
     }
 

@@ -1,4 +1,6 @@
 mod http;
+mod identity;
+mod processes;
 mod syscalls;
 
 use std::collections::{HashMap, VecDeque};
@@ -143,6 +145,12 @@ impl Tracer {
         }
 
         drained
+    }
+
+    pub fn drain_text(&self, max_bytes: usize) -> String {
+        let drained = self.drain(max_bytes);
+        String::from_utf8(drained)
+            .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
     }
 
     pub fn remember_name(&self, address: [u8; 4], name: &str) {

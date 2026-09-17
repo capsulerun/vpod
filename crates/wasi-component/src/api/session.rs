@@ -27,6 +27,12 @@ const PYRUNNER_STAGE_CHUNK: usize = 2500;
 
 const SHELL_PROMPT_SENTINEL: &[u8] = b"\x1fvpod\x1f";
 
+const WORKING_DIRECTORY_MARKER: &str = "vpod-cwd ";
+const WORKING_DIRECTORY_TIMEOUT_SECONDS: u64 = 15;
+const WORKING_DIRECTORY_PROBE: &str = "( for p in /proc/[0-9]*; do \
+     cd -P \"$p/cwd\" 2>/dev/null && echo \"vpod-cwd ${p#/proc/} $PWD\"; \
+     done ) 2>/dev/null\n";
+
 const AOT_MISMATCH_PROBE_THRESHOLD: u64 = 64;
 
 fn warn_if_aot_mismatch(hart: &Hart) {
@@ -149,6 +155,47 @@ fn begin_shell_exec(session: &mut Session, code: String, timeout_secs: u64, mode
         timeout_secs,
         mode == ExecMode::Terminal,
     ));
+}
+
+fn learn_working_directories(session: &mut Session) {
+    if !session.is_shell || session.shell_lost || session.exec.is_some() {
+        return;
+    }
+
+    session.bus.uart.drain_tx();
+    for byte in WORKING_DIRECTORY_PROBE.bytes() {
+        session.bus.uart.push_rx(byte);
+    }
+
+    let prompt = session.prompt.clone();
+    let output = repl::capture_output(
+        &mut session.bus,
+        &mut session.hart,
+        &prompt,
+        WORKING_DIRECTORY_TIMEOUT_SECONDS,
+        true,
+        None,
+        false,
+    );
+    repl::drain_ctrl_with_grace(&mut session.bus, &mut session.hart);
+    session.bus.uart.drain_tx();
+    session.bus.uart_stderr.drain_tx();
+
+    for line in output.lines() {
+        let Some(reported) = line.trim().strip_prefix(WORKING_DIRECTORY_MARKER) else {
+            continue;
+        };
+        let Some((process_id, path)) = reported.split_once(' ') else {
+            continue;
+        };
+        if let Ok(process_id) = process_id.parse::<u32>()
+            && path.starts_with('/')
+        {
+            session
+                .bus
+                .seed_trace_working_directory(process_id, path.to_string());
+        }
+    }
 }
 
 fn restore_terminal(session: &mut Session) {
@@ -841,10 +888,16 @@ impl SessionManager {
             },
         });
 
+        if session.bus.traces_syscalls() {
+            session.bus.set_trace_quiet(true);
+            learn_working_directories(session);
+            session.bus.set_trace_quiet(false);
+        }
+
         Ok(())
     }
 
-    pub fn trace_drain(&self, handle: u64, max_bytes: u32) -> Result<Vec<u8>, String> {
+    pub fn trace_drain(&self, handle: u64, max_bytes: u32) -> Result<String, String> {
         let sessions = self.sessions.borrow();
         let session = sessions
             .get(&handle)
@@ -855,7 +908,7 @@ impl SessionManager {
             .tracer()
             .ok_or_else(|| "tracing is not enabled for this session".to_string())?;
 
-        Ok(tracer.drain(max_bytes as usize))
+        Ok(tracer.drain_text(max_bytes as usize))
     }
 
     pub fn trace_stop(&self, handle: u64) -> Result<(), String> {

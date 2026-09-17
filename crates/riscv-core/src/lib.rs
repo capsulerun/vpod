@@ -17,7 +17,7 @@ pub mod trap;
 pub use csr::{Csr, PrivMode};
 pub use hart::Hart;
 pub use mmu::Mmu;
-pub use syscall_trace::{GuestString, SyscallEntry, SyscallKind};
+pub use syscall_trace::{AT_FDCWD, GuestMemory, GuestString, SyscallEntry, SyscallKind};
 pub use system_bus::{FlatMemory, SystemBus};
 pub use trap::{StepResult, TrapCause};
 

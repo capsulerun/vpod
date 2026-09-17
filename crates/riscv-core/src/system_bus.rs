@@ -40,12 +40,12 @@ pub trait SystemBus {
         false
     }
 
-    fn on_syscall_entry(&mut self, entry: SyscallEntry) {
-        let _ = entry;
+    fn on_syscall_entry(&mut self, entry: SyscallEntry, satp: u64) {
+        let _ = (entry, satp);
     }
 
-    fn on_syscall_return(&mut self, task: u64, return_pc: u64, value: i64) {
-        let _ = (task, return_pc, value);
+    fn on_syscall_return(&mut self, task: u64, return_pc: u64, value: i64, satp: u64) {
+        let _ = (task, return_pc, value, satp);
     }
 }
 

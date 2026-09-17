@@ -957,8 +957,9 @@ fn exec_amo<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32)
 #[cold]
 #[inline(never)]
 fn trace_syscall_entry<B: SystemBus>(ctx: &mut ExecContext<B>, pc: u64) {
-    if let Some(entry) = crate::syscall_trace::decode_entry(ctx, pc) {
-        ctx.bus.on_syscall_entry(entry);
+    let satp = crate::block::effective_satp(*ctx.priv_mode, ctx.csr.satp);
+    if let Some(entry) = crate::syscall_trace::decode_entry(ctx, pc, satp) {
+        ctx.bus.on_syscall_entry(entry, satp);
     }
 }
 
@@ -966,8 +967,9 @@ fn trace_syscall_entry<B: SystemBus>(ctx: &mut ExecContext<B>, pc: u64) {
 #[inline(never)]
 fn trace_syscall_return<B: SystemBus>(ctx: &mut ExecContext<B>) {
     let value = ctx.regs.read(10) as i64; // a0
+    let satp = crate::block::effective_satp(*ctx.priv_mode, ctx.csr.satp);
     ctx.bus
-        .on_syscall_return(ctx.csr.sscratch, ctx.csr.sepc, value);
+        .on_syscall_return(ctx.csr.sscratch, ctx.csr.sepc, value, satp);
 }
 
 fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32) -> StepResult {

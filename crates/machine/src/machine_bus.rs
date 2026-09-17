@@ -107,6 +107,22 @@ impl MachineBus {
         self.attach_tracer(None);
     }
 
+    pub fn traces_syscalls(&self) -> bool {
+        self.syscall_tracer.is_some()
+    }
+
+    pub fn set_trace_quiet(&mut self, quiet: bool) {
+        if let Some(syscall_tracer) = &mut self.syscall_tracer {
+            syscall_tracer.set_quiet(quiet);
+        }
+    }
+
+    pub fn seed_trace_working_directory(&mut self, process_id: u32, path: String) {
+        if let Some(syscall_tracer) = &mut self.syscall_tracer {
+            syscall_tracer.seed_working_directory(process_id, path);
+        }
+    }
+
     pub fn tracer(&self) -> Option<&Tracer> {
         self.tracer.as_ref()
     }
@@ -581,15 +597,17 @@ impl SystemBus for MachineBus {
         self.syscall_tracer.is_some()
     }
 
-    fn on_syscall_entry(&mut self, entry: riscv_core::SyscallEntry) {
-        if let Some(syscall_tracer) = &mut self.syscall_tracer {
-            syscall_tracer.on_entry(entry);
+    fn on_syscall_entry(&mut self, entry: riscv_core::SyscallEntry, satp: u64) {
+        if let Some(mut syscall_tracer) = self.syscall_tracer.take() {
+            syscall_tracer.on_entry(entry, self, satp);
+            self.syscall_tracer = Some(syscall_tracer);
         }
     }
 
-    fn on_syscall_return(&mut self, task: u64, return_pc: u64, value: i64) {
-        if let Some(syscall_tracer) = &mut self.syscall_tracer {
-            syscall_tracer.on_return(task, return_pc, value);
+    fn on_syscall_return(&mut self, task: u64, return_pc: u64, value: i64, satp: u64) {
+        if let Some(mut syscall_tracer) = self.syscall_tracer.take() {
+            syscall_tracer.on_return(task, return_pc, value, self, satp);
+            self.syscall_tracer = Some(syscall_tracer);
         }
     }
 }
