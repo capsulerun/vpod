@@ -165,7 +165,7 @@ fn lowest_settled<T>(table: &HashMap<u64, Vec<T>>) -> Option<u64> {
 }
 
 fn is_kernel_pointer(pointer: u64) -> bool {
-    pointer >> 56 == 0xff && pointer % 8 == 0
+    pointer >> 56 == 0xff && pointer.is_multiple_of(8)
 }
 
 #[cfg(test)]
