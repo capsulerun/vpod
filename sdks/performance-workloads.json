@@ -25,6 +25,7 @@
     "shellPerCallSeconds": 2,
     "networkRoundTripSeconds": 30,
     "throughputFloor": 0.2,
-    "throughputFloorAot": 0.6
+    "throughputFloorAot": 0.6,
+    "mountStatSeconds": 1.5
   }
 }
