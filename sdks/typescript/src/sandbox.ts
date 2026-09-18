@@ -22,6 +22,7 @@ import {
 } from "./snapshots/engine.js";
 import { defaultStore } from "./snapshots/index.js";
 import { resolveRegistryUrl } from "./snapshots/registry.js";
+import { mountEntries, type MountEntry, type MountSpec } from "./mounts.js";
 import {
     TRACE_NOT_SUPPORTED,
     TraceRecorder,
@@ -62,6 +63,8 @@ export interface SandboxOptions extends SandboxRuntimeOptions {
      */
     engine?: EngineMode;
     trace?: TraceSetting;
+    /** Host directories to mount, as guest path per host path. Append ":rw" for write access. Node only. */
+    mounts?: MountSpec;
 }
 
 interface ImageEngine {
@@ -443,6 +446,7 @@ export class Sandbox {
     readonly #snapshotPath: string;
     readonly #snapshotId: string;
     readonly #imageEngineSha256: string | null;
+    readonly #mounts: MountEntry[];
     #sessionHandle: bigint | null = null;
 
     private constructor(
@@ -451,11 +455,13 @@ export class Sandbox {
         snapshotId: string,
         imageEngineSha256: string | null,
         trace: WireTraceOptions | null,
+        mounts: MountEntry[] = [],
     ) {
         this.#runtime = runtime;
         this.#snapshotPath = snapshotPath;
         this.#snapshotId = snapshotId;
         this.#imageEngineSha256 = imageEngineSha256;
+        this.#mounts = mounts;
         this.commands = new Commands(this);
         this.code = new Code(this);
         this.trace = new TraceRecorder(trace, async (maxBytes) =>
@@ -630,6 +636,7 @@ export class Sandbox {
         }
 
         const trace = traceOptions(options.trace);
+        const mounts = mountEntries(options.mounts);
         const snapshot = options.snapshot ?? DEFAULT_SNAPSHOT;
         const cachedEngine =
             typeof snapshot === "string" ? await Sandbox.#cachedImageEngine(options, snapshot) : null;
@@ -650,6 +657,7 @@ export class Sandbox {
             mounted.snapshotId,
             imageEngine?.sha256 ?? null,
             trace,
+            mounts,
         );
     }
 
@@ -754,6 +762,7 @@ export class Sandbox {
                 this.#snapshotPath,
                 DEFAULT_SHELL,
                 DEFAULT_PROMPT,
+                this.#mounts,
             );
             await this.#startTrace(this.#sessionHandle);
         }
@@ -791,6 +800,7 @@ export class Sandbox {
                 : instance;
 
         const trace = traceOptions(options.trace);
+        const mounts = mountEntries(options.mounts);
         const snapshot = options.snapshot ?? resolved.snapshotId;
         let wanted: ImageEngine | null;
         if (resolved.engineSha256 !== undefined) {
@@ -826,6 +836,7 @@ export class Sandbox {
             mounted.snapshotId,
             imageEngine?.sha256 ?? null,
             trace,
+            mounts,
         );
         const delta = resolved.delta.slice();
         sandbox.#sessionHandle = await runtime.sessionResume(
@@ -833,6 +844,7 @@ export class Sandbox {
             delta.buffer,
             DEFAULT_SHELL,
             DEFAULT_PROMPT,
+            mounts,
         );
         await sandbox.#startTrace(sandbox.#sessionHandle);
 

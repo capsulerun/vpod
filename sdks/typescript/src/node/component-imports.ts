@@ -10,6 +10,9 @@ import * as random from "@bytecodealliance/preview2-shim/random";
 import * as sockets from "@bytecodealliance/preview2-shim/sockets";
 
 import { ipNameLookup } from "./host-resolver.js";
+import { allowMountWrites } from "./mount-writes.js";
+
+allowMountWrites();
 
 const WASI_PACKAGES = { cli, clocks, filesystem, io, random, sockets };
 
