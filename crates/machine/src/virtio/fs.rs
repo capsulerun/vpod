@@ -1418,6 +1418,21 @@ fn scatter_write(ram: &mut RamView, write_bufs: &[(u64, u32)], offset: u64, data
     }
 }
 
+fn read_filling(file: &mut fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0;
+
+    while filled < buf.len() {
+        match file.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(count) => filled += count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(filled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1526,19 +1541,4 @@ mod tests {
             (base, 16)
         );
     }
-}
-
-fn read_filling(file: &mut fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
-    let mut filled = 0;
-
-    while filled < buf.len() {
-        match file.read(&mut buf[filled..]) {
-            Ok(0) => break,
-            Ok(count) => filled += count,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
-        }
-    }
-
-    Ok(filled)
 }
