@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{STAGING_BASE, RamView, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
+use super::{RamView, STAGING_BASE, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
 use crate::trace::Tracer;
 
 const DEVICE_ID: u32 = 26; // VIRTIO_DEVICE_ID_FS
@@ -1502,7 +1502,11 @@ mod tests {
         view.write_u64(STAGING_BASE + 8, 0x1122_3344);
 
         assert_eq!(view.read_u32(STAGING_BASE), 16);
-        assert_eq!(view.read_u32(guest), 0xDEAD_BEEF, "guest memory was disturbed");
+        assert_eq!(
+            view.read_u32(guest),
+            0xDEAD_BEEF,
+            "guest memory was disturbed"
+        );
 
         let staged = view.take_staging().expect("staging was started");
         assert_eq!(&staged[..4], &16u32.to_le_bytes());
