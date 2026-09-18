@@ -3,20 +3,44 @@
  */
 
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { pullSnapshot } from "../snapshots/pull.js";
 import { componentImports, loadCoreModule } from "./component-imports.js";
 import { FileSnapshotStore } from "./store.js";
 import type { ComponentModule } from "../worker/component-imports.js";
 import type { ExecutorTransport } from "../transport/types.js";
+import type { MountEntry } from "../mounts.js";
 import type { ExecutionResult, WorkerCall } from "../worker/protocol.js";
 import type { WireTraceOptions } from "../trace.js";
 
+function hostMounts(mounts: MountEntry[]): MountEntry[] {
+    return mounts.map((mount) => {
+        const hostAlias = resolve(mount.hostAlias);
+
+        let directory = false;
+        try {
+            directory = statSync(hostAlias).isDirectory();
+        } catch {
+            throw new Error(`vpod: mount source ${hostAlias} does not exist`);
+        }
+        if (!directory) {
+            throw new Error(`vpod: mount source ${hostAlias} is not a directory`);
+        }
+
+        return { ...mount, hostAlias };
+    });
+}
+
 interface Executor {
-    sessionStart(snapshotPath: string, command: string, prompt: string, mounts: never[]): bigint;
+    sessionStart(
+        snapshotPath: string,
+        command: string,
+        prompt: string,
+        mounts: MountEntry[],
+    ): bigint;
     sessionExec(handle: bigint, code: string, timeout: bigint | undefined): ExecutionResult;
     sessionExecSlice(
         handle: bigint,
@@ -34,7 +58,7 @@ interface Executor {
         deltaPath: string,
         command: string,
         prompt: string,
-        mounts: never[],
+        mounts: MountEntry[],
     ): bigint;
     sessionTraceStart?(handle: bigint, options: WireTraceOptions): void;
     sessionTraceDrain?(handle: bigint, maxBytes: number): string;
@@ -128,7 +152,7 @@ export class NodeDispatcher {
                     call.snapshotPath,
                     call.command,
                     call.prompt,
-                    [],
+                    hostMounts(call.mounts),
                 );
 
             case "session-exec":
@@ -185,7 +209,7 @@ export class NodeDispatcher {
                         path,
                         call.command,
                         call.prompt,
-                        [],
+                        hostMounts(call.mounts),
                     );
                 } finally {
                     await rm(path, { force: true });

@@ -14,7 +14,14 @@ import { componentImports } from "./component-imports.js";
 import type { ComponentModule, CoreModuleLoader } from "./component-imports.js";
 import type { DriverCommand } from "../net/driver-protocol.js";
 import type { ExecutionResult, WorkerCall } from "./protocol.js";
+import { MOUNTS_NEED_A_HOST, type MountEntry } from "../mounts.js";
 import type { WireTraceOptions } from "../trace.js";
+
+function refuseMounts(mounts: MountEntry[]): void {
+    if (mounts.length > 0) {
+        throw new Error(MOUNTS_NEED_A_HOST);
+    }
+}
 
 async function announceHostTerminatedTls(): Promise<void> {
     const cli = (await import("../shims/cli.js")) as unknown as {
@@ -186,6 +193,7 @@ export class Dispatcher {
             }
 
             case "session-start":
+                refuseMounts(call.mounts);
                 try {
                     return this.#requireExecutor().sessionStart(
                         call.snapshotPath,
@@ -241,6 +249,7 @@ export class Dispatcher {
             }
 
             case "session-resume": {
+                refuseMounts(call.mounts);
                 const name = `resume-${this.#nextDeltaId++}.bin`;
                 const path = mountDelta(name, new Uint8Array(call.deltaBytes));
                 try {

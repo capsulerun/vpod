@@ -44,14 +44,44 @@ const MAX_QUEUES: usize = 4;
 pub const VRING_DESC_F_NEXT: u16 = 1;
 pub const VRING_DESC_F_WRITE: u16 = 2;
 
+pub const STAGING_BASE: u64 = 0xffff_0000_0000_0000;
+
+struct Staging {
+    base: u64,
+    buffer: Vec<u8>,
+}
+
 pub struct RamView<'a> {
     ram: &'a mut CowRam,
     mask: u64,
+    staging: Option<Staging>,
 }
 
 impl<'a> RamView<'a> {
     pub fn new(ram: &'a mut CowRam, mask: u64) -> Self {
-        Self { ram, mask }
+        Self {
+            ram,
+            mask,
+            staging: None,
+        }
+    }
+
+    pub fn begin_staging(&mut self, base: u64, len: usize) {
+        self.staging = Some(Staging {
+            base,
+            buffer: vec![0u8; len],
+        });
+    }
+
+    pub fn take_staging(&mut self) -> Option<Vec<u8>> {
+        self.staging.take().map(|staging| staging.buffer)
+    }
+
+    fn staged(&self, physical_address: u64, len: usize) -> Option<usize> {
+        let staging = self.staging.as_ref()?;
+        let offset = physical_address.checked_sub(staging.base)? as usize;
+
+        (offset + len <= staging.buffer.len()).then_some(offset)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -67,48 +97,98 @@ impl<'a> RamView<'a> {
     }
 
     pub fn read_u8(&self, physical_address: u64) -> u8 {
+        if self.staging.is_some() {
+            let mut bytes = [0u8; 1];
+            self.read_bytes(physical_address, &mut bytes);
+            return bytes[0];
+        }
         self.ram.read_u8(self.idx(physical_address))
     }
 
     pub fn read_u16(&self, physical_address: u64) -> u16 {
+        if self.staging.is_some() {
+            let mut bytes = [0u8; 2];
+            self.read_bytes(physical_address, &mut bytes);
+            return u16::from_le_bytes(bytes);
+        }
         self.ram.read_u16(self.idx(physical_address))
     }
 
     pub fn read_u32(&self, physical_address: u64) -> u32 {
+        if self.staging.is_some() {
+            let mut bytes = [0u8; 4];
+            self.read_bytes(physical_address, &mut bytes);
+            return u32::from_le_bytes(bytes);
+        }
         self.ram.read_u32(self.idx(physical_address))
     }
 
     pub fn read_u64(&self, physical_address: u64) -> u64 {
+        if self.staging.is_some() {
+            let mut bytes = [0u8; 8];
+            self.read_bytes(physical_address, &mut bytes);
+            return u64::from_le_bytes(bytes);
+        }
         self.ram.read_u64(self.idx(physical_address))
     }
 
     pub fn write_u8(&mut self, physical_address: u64, val: u8) {
+        if self.staging.is_some() {
+            self.write_bytes(physical_address, &val.to_le_bytes());
+            return;
+        }
         let idx = self.idx(physical_address);
         self.ram.write_u8(idx, val);
     }
 
     pub fn write_u16(&mut self, physical_address: u64, val: u16) {
+        if self.staging.is_some() {
+            self.write_bytes(physical_address, &val.to_le_bytes());
+            return;
+        }
         let idx = self.idx(physical_address);
         self.ram.write_u16(idx, val);
     }
 
     pub fn write_u32(&mut self, physical_address: u64, val: u32) {
+        if self.staging.is_some() {
+            self.write_bytes(physical_address, &val.to_le_bytes());
+            return;
+        }
         let idx = self.idx(physical_address);
         self.ram.write_u32(idx, val);
     }
 
     pub fn write_u64(&mut self, physical_address: u64, val: u64) {
+        if self.staging.is_some() {
+            self.write_bytes(physical_address, &val.to_le_bytes());
+            return;
+        }
         let idx = self.idx(physical_address);
         self.ram.write_u64(idx, val);
     }
 
     pub fn read_bytes(&self, physical_address: u64, buf: &mut [u8]) {
-        self.ram.read_into(self.idx(physical_address), buf);
+        match self.staged(physical_address, buf.len()) {
+            Some(offset) => {
+                let staging = self.staging.as_ref().expect("staged implies staging");
+                buf.copy_from_slice(&staging.buffer[offset..offset + buf.len()]);
+            }
+            None => self.ram.read_into(self.idx(physical_address), buf),
+        }
     }
 
     pub fn write_bytes(&mut self, physical_address: u64, buf: &[u8]) {
-        let idx = self.idx(physical_address);
-        self.ram.write_from(idx, buf);
+        match self.staged(physical_address, buf.len()) {
+            Some(offset) => {
+                let staging = self.staging.as_mut().expect("staged implies staging");
+                staging.buffer[offset..offset + buf.len()].copy_from_slice(buf);
+            }
+            None => {
+                let idx = self.idx(physical_address);
+                self.ram.write_from(idx, buf);
+            }
+        }
     }
 }
 

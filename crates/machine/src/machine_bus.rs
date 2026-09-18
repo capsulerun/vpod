@@ -249,7 +249,16 @@ impl MachineBus {
     }
 
     pub fn has_pending_io(&self) -> bool {
-        self.uart.rx_pending() || self.uart_data.rx_pending() || self.net_rx_pending()
+        self.uart.rx_pending()
+            || self.uart_data.rx_pending()
+            || self.net_rx_pending()
+            || self.fs_reply_pending()
+    }
+
+    pub fn fs_reply_pending(&self) -> bool {
+        self.fs_devices
+            .iter()
+            .any(|fs_device| fs_device.mmio.int_status != 0)
     }
 
     pub fn drain_console_tx(&mut self) -> Vec<u8> {
@@ -760,6 +769,31 @@ mod tests {
         bus.refresh_external_interrupt();
 
         bus
+    }
+
+    #[test]
+    fn a_finished_mount_reply_keeps_the_machine_out_of_idle() {
+        const RAM_SIZE: u64 = 1 << 20;
+
+        let mut bus = MachineBus::new(RAM_SIZE, CowRam::new(RAM_SIZE));
+        bus.attach_fs(vec![Mount {
+            host_path: PathBuf::from("/"),
+            tag: "vfs0".to_string(),
+            writable: false,
+        }]);
+
+        assert!(
+            !bus.has_pending_io(),
+            "an idle mount already looks like pending work"
+        );
+
+        bus.fs_devices[0].mmio.int_status |= 1;
+
+        assert!(
+            bus.has_pending_io(),
+            "a finished mount reply left the guest idle, so every request waits \
+             for the next timer tick and mounts run several times slower"
+        );
     }
 
     #[test]

@@ -13,6 +13,8 @@ export {
     normalizeLineEndings,
 } from "./execution.js";
 
+export type { MountEntry, MountSpec } from "./mounts.js";
+
 export { Trace, TraceRecorder } from "./trace.js";
 export type {
     FileActivity,

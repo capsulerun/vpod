@@ -1,6 +1,7 @@
 import type { ExecMode } from "../sandbox.js";
 
 import type { CoreModuleBytes } from "./component-imports.js";
+import type { MountEntry } from "../mounts.js";
 import type { WireTraceOptions } from "../trace.js";
 
 export interface WorkerInit {
@@ -53,7 +54,13 @@ export type WorkerCall =
     | { kind: "storage-quota" }
     | { kind: "fetch-snapshot"; url: string; name?: string }
     | { kind: "mount-snapshot"; name: string; bytes: ArrayBuffer }
-    | { kind: "session-start"; snapshotPath: string; command: string; prompt: string }
+    | {
+          kind: "session-start";
+          snapshotPath: string;
+          command: string;
+          prompt: string;
+          mounts: MountEntry[];
+      }
     | {
           kind: "session-exec";
           handle: bigint;
@@ -78,6 +85,7 @@ export type WorkerCall =
           deltaBytes: ArrayBuffer;
           command: string;
           prompt: string;
+          mounts: MountEntry[];
       }
     | { kind: "trace-supported" }
     | { kind: "session-trace-start"; handle: bigint; options: WireTraceOptions }

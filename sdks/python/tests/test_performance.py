@@ -282,3 +282,35 @@ def test_network_round_trip(box):
         f"a round trip took {seconds:.2f}s, ceiling "
         f"{CEILINGS['networkRoundTripSeconds']}s"
     )
+
+
+def test_mount_metadata_cost(tmp_path):
+    """Walking a mounted directory, which cost one timer tick per request until
+    the guest learned to wake on a finished virtio-fs reply."""
+    files = 400
+    for index in range(files):
+        directory = tmp_path / f"pkg{index // 40:02d}"
+        directory.mkdir(exist_ok=True)
+        (directory / f"file{index:03d}.txt").write_text("contents\n")
+
+    with Sandbox.create(mounts={str(tmp_path): "/workspace"}) as sandbox:
+        sandbox.commands.run("echo warm", timeout=60)
+
+        started_at = time.perf_counter()
+        result = sandbox.commands.run(
+            "find /workspace -type f | wc -l", timeout=120
+        )
+        seconds = time.perf_counter() - started_at
+
+    REPORT["wall"]["mountStatSeconds"] = seconds
+
+    assert result.exit_code == 0, result.stderr
+    assert result.stdout.strip() == str(files), (
+        f"walked {result.stdout.strip()} files, expected {files}, so this "
+        f"measures the wrong work"
+    )
+    assert seconds < CEILINGS["mountStatSeconds"], (
+        f"stat of {files} mounted files took {seconds:.2f}s, ceiling "
+        f"{CEILINGS['mountStatSeconds']}s: a mount request is most likely "
+        f"waiting for a timer tick again"
+    )

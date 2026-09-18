@@ -7,6 +7,7 @@ import {
 import { capabilitiesOf } from "./net/capabilities.js";
 import type { NetworkBackendName, NetworkCapabilities } from "./net/capabilities.js";
 import type { ExecutorTransport } from "./transport/types.js";
+import type { MountEntry } from "./mounts.js";
 import type { WireTraceOptions } from "./trace.js";
 import type {
     ExecutionResult,
@@ -86,12 +87,18 @@ export class SandboxRuntime {
         ]);
     }
 
-    sessionStart(snapshotPath: string, command = "/bin/sh", prompt = "# "): Promise<bigint> {
+    sessionStart(
+        snapshotPath: string,
+        command = "/bin/sh",
+        prompt = "# ",
+        mounts: MountEntry[] = [],
+    ): Promise<bigint> {
         return this.#transport.call<bigint>({
             kind: "session-start",
             snapshotPath,
             command,
             prompt,
+            mounts,
         });
     }
 
@@ -146,9 +153,10 @@ export class SandboxRuntime {
         deltaBytes: ArrayBuffer,
         command = "/bin/sh",
         prompt = "# ",
+        mounts: MountEntry[] = [],
     ): Promise<bigint> {
         return this.#transport.call<bigint>(
-            { kind: "session-resume", snapshotPath, deltaBytes, command, prompt },
+            { kind: "session-resume", snapshotPath, deltaBytes, command, prompt, mounts },
             [deltaBytes],
         );
     }
