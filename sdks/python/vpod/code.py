@@ -12,10 +12,11 @@ POWERED_OFF_ERROR = (
 class Code:
     """Code execution interface for a sandbox — persistent Python REPL."""
 
-    def __init__(self, get_exports, snapshot_path: str, get_session_id):
+    def __init__(self, get_exports, snapshot_path: str, get_session_id, recorder):
         self._get_exports = get_exports
         self._snapshot_path = snapshot_path
         self._get_session_id = get_session_id
+        self._recorder = recorder
 
     def run(self, code: str, timeout: int = 120) -> CodeExecution:
         """Run Python code in a persistent REPL. State lives in memory across calls."""
@@ -26,7 +27,13 @@ class Code:
                 "Use 'with Sandbox.create() as sandbox:'"
             )
 
+        trace_mark = self._recorder._mark()
         result = unwrap_result(self._get_exports()["session-exec"](session_id, "\x00" + code, timeout))
+        execution = self._interpret(result, timeout)
+        execution._trace = self._recorder._since(trace_mark)
+        return execution
+
+    def _interpret(self, result, timeout: int) -> CodeExecution:
         output = result.stdout if hasattr(result, 'stdout') else str(result)
         stderr = result.stderr if hasattr(result, 'stderr') else ""
 

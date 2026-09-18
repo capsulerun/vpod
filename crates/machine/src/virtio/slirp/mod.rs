@@ -18,6 +18,7 @@ use udp::{UdpConn, UdpKey};
 
 use super::net::NetworkBackend;
 use super::tls_proxy::TlsContext;
+use crate::trace::Tracer;
 
 pub struct SlirpBackend {
     guest_mac: [u8; 6],
@@ -27,6 +28,7 @@ pub struct SlirpBackend {
     dns_pending: Vec<DnsPending>,
     dhcp_xid: u32,
     tls: Option<TlsContext>,
+    tracer: Option<Tracer>,
 }
 
 impl SlirpBackend {
@@ -47,7 +49,13 @@ impl SlirpBackend {
             dns_pending: Vec::new(),
             dhcp_xid: 0,
             tls,
+            tracer: None,
         }
+    }
+
+    /// Connections opened from here on are traced; open ones are not.
+    pub fn set_tracer(&mut self, tracer: Option<Tracer>) {
+        self.tracer = tracer;
     }
 
     fn handle_ip(&mut self, frame: &[u8]) {
@@ -172,7 +180,7 @@ impl NetworkBackend for SlirpBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::frames::{ACK, Endpoints, FIN, GUEST_IP, SYN, make_tcp_frame};
+    use super::frames::{ACK, Endpoints, FIN, GUEST_IP, RST, SYN, make_tcp_frame};
     use super::*;
     use std::io::{Read, Write};
     use std::time::{Duration, Instant};
@@ -297,6 +305,61 @@ mod tests {
             saw_fin(&mut slirp, Duration::from_secs(5)),
             "the upstream ended and the guest was never sent a FIN"
         );
+    }
+
+    #[test]
+    fn a_traced_connection_records_its_request_and_its_flow() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let guest_mac = [0x02, 0, 0, 0, 0, 0x19];
+        let mut slirp = SlirpBackend::new(guest_mac);
+        let tracer = crate::trace::Tracer::new(crate::trace::TraceOptions::default());
+        tracer.remember_name([127, 0, 0, 1], "local.test");
+        slirp.set_tracer(Some(tracer.clone()));
+
+        let ends = from_guest(guest_mac, [127, 0, 0, 1], 45005, port);
+        let guest_isn = 5000u32;
+        let (mut upstream, ack) = connect(&mut slirp, &listener, &ends, guest_isn);
+
+        let request = b"GET /simple/ HTTP/1.1\r\nHost: local.test\r\n\r\n";
+        slirp.send(&make_tcp_frame(
+            &ends,
+            guest_isn.wrapping_add(1),
+            ack,
+            ACK,
+            request,
+        ));
+        assert_eq!(
+            read_upstream(&mut upstream, &mut slirp, request.len()),
+            request
+        );
+
+        slirp.send(&make_tcp_frame(
+            &ends,
+            guest_isn.wrapping_add(1),
+            ack,
+            RST,
+            &[],
+        ));
+
+        let events: Vec<serde_json::Value> = String::from_utf8(tracer.drain(usize::MAX))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|event| event["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, ["net.http", "net.flow"]);
+
+        assert_eq!(events[0]["method"], "GET");
+        assert_eq!(events[0]["url"], "http://local.test/simple/");
+        assert_eq!(events[1]["host"], "local.test");
+        assert_eq!(events[1]["port"], port);
+        assert_eq!(events[1]["bytes_out"], request.len());
+        assert_eq!(events[1]["failed"], false);
     }
 
     #[test]

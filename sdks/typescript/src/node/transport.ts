@@ -13,6 +13,7 @@ import { FileSnapshotStore } from "./store.js";
 import type { ComponentModule } from "../worker/component-imports.js";
 import type { ExecutorTransport } from "../transport/types.js";
 import type { ExecutionResult, WorkerCall } from "../worker/protocol.js";
+import type { WireTraceOptions } from "../trace.js";
 
 interface Executor {
     sessionStart(snapshotPath: string, command: string, prompt: string, mounts: never[]): bigint;
@@ -35,6 +36,9 @@ interface Executor {
         prompt: string,
         mounts: never[],
     ): bigint;
+    sessionTraceStart?(handle: bigint, options: WireTraceOptions): void;
+    sessionTraceDrain?(handle: bigint, maxBytes: number): string;
+    sessionTraceStop?(handle: bigint): void;
 }
 
 export interface NodeTransportOptions {
@@ -187,6 +191,20 @@ export class NodeDispatcher {
                     await rm(path, { force: true });
                 }
             }
+
+            case "trace-supported":
+                return typeof this.#executor.sessionTraceStart === "function";
+
+            case "session-trace-start":
+                this.#executor.sessionTraceStart!(call.handle, call.options);
+                return null;
+
+            case "session-trace-drain":
+                return this.#executor.sessionTraceDrain!(call.handle, call.maxBytes);
+
+            case "session-trace-stop":
+                this.#executor.sessionTraceStop!(call.handle);
+                return null;
 
             case "poll-stats":
                 return { spinCount: 0, spinNanoseconds: 0 };

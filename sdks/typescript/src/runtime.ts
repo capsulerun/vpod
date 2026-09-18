@@ -7,6 +7,7 @@ import {
 import { capabilitiesOf } from "./net/capabilities.js";
 import type { NetworkBackendName, NetworkCapabilities } from "./net/capabilities.js";
 import type { ExecutorTransport } from "./transport/types.js";
+import type { WireTraceOptions } from "./trace.js";
 import type {
     ExecutionResult,
     PullResult,
@@ -150,6 +151,22 @@ export class SandboxRuntime {
             { kind: "session-resume", snapshotPath, deltaBytes, command, prompt },
             [deltaBytes],
         );
+    }
+
+    traceSupported(): Promise<boolean> {
+        return this.#transport.call<boolean>({ kind: "trace-supported" });
+    }
+
+    sessionTraceStart(handle: bigint, options: WireTraceOptions): Promise<void> {
+        return this.#transport.call<void>({ kind: "session-trace-start", handle, options });
+    }
+
+    sessionTraceDrain(handle: bigint, maxBytes: number): Promise<string> {
+        return this.#transport.call<string>({ kind: "session-trace-drain", handle, maxBytes });
+    }
+
+    sessionTraceStop(handle: bigint): Promise<void> {
+        return this.#transport.call<void>({ kind: "session-trace-stop", handle });
     }
 
     pollStats(): Promise<{ spinCount: number; spinNanoseconds: number }> {

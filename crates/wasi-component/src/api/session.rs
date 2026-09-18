@@ -3,11 +3,14 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::exports::vpod::sandbox::executor::{ExecMode, ExecutionResult, SliceOutput};
+use crate::exports::vpod::sandbox::executor::{
+    ExecMode, ExecutionResult, SliceOutput, TraceOptions as WitTraceOptions,
+};
 use crate::repl;
 use crate::vm;
 
 use machine::machine_bus::MachineBus;
+use machine::trace::{DEFAULT_BUFFER_BYTES, TraceOptions};
 use riscv_core::Hart;
 
 const PYRUNNER_SENTINEL: &str = "---VPOD_DONE---";
@@ -23,6 +26,13 @@ const PYRUNNER_MAX_LINE: usize = 3800;
 const PYRUNNER_STAGE_CHUNK: usize = 2500;
 
 const SHELL_PROMPT_SENTINEL: &[u8] = b"\x1fvpod\x1f";
+
+const WORKING_DIRECTORY_MARKER: &str = "vpod-cwd ";
+const TRACE_START_TIMEOUT_SECONDS: u64 = 15;
+const TRACE_START_COMMAND: &str = "echo 2 > /proc/sys/kernel/io_uring_disabled 2>/dev/null; \
+     ( for p in /proc/[0-9]*; do \
+     cd -P \"$p/cwd\" 2>/dev/null && echo \"vpod-cwd ${p#/proc/} $PWD\"; \
+     done ) 2>/dev/null\n";
 
 const AOT_MISMATCH_PROBE_THRESHOLD: u64 = 64;
 
@@ -146,6 +156,47 @@ fn begin_shell_exec(session: &mut Session, code: String, timeout_secs: u64, mode
         timeout_secs,
         mode == ExecMode::Terminal,
     ));
+}
+
+fn prepare_tracing(session: &mut Session) {
+    if !session.is_shell || session.shell_lost || session.exec.is_some() {
+        return;
+    }
+
+    session.bus.uart.drain_tx();
+    for byte in TRACE_START_COMMAND.bytes() {
+        session.bus.uart.push_rx(byte);
+    }
+
+    let prompt = session.prompt.clone();
+    let output = repl::capture_output(
+        &mut session.bus,
+        &mut session.hart,
+        &prompt,
+        TRACE_START_TIMEOUT_SECONDS,
+        true,
+        None,
+        false,
+    );
+    repl::drain_ctrl_with_grace(&mut session.bus, &mut session.hart);
+    session.bus.uart.drain_tx();
+    session.bus.uart_stderr.drain_tx();
+
+    for line in output.lines() {
+        let Some(reported) = line.trim().strip_prefix(WORKING_DIRECTORY_MARKER) else {
+            continue;
+        };
+        let Some((process_id, path)) = reported.split_once(' ') else {
+            continue;
+        };
+        if let Ok(process_id) = process_id.parse::<u32>()
+            && path.starts_with('/')
+        {
+            session
+                .bus
+                .seed_trace_working_directory(process_id, path.to_string());
+        }
+    }
 }
 
 fn restore_terminal(session: &mut Session) {
@@ -818,6 +869,57 @@ impl SessionManager {
         );
 
         Ok(id)
+    }
+
+    pub fn trace_start(&self, handle: u64, options: WitTraceOptions) -> Result<(), String> {
+        let mut sessions = self.sessions.borrow_mut();
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+        session.bus.start_trace(TraceOptions {
+            processes: options.processes,
+            files: options.files,
+            network: options.network,
+            mounts: options.mounts,
+            buffer_bytes: if options.buffer_bytes == 0 {
+                DEFAULT_BUFFER_BYTES
+            } else {
+                options.buffer_bytes as usize
+            },
+        });
+
+        if session.bus.traces_syscalls() {
+            session.bus.set_trace_quiet(true);
+            prepare_tracing(session);
+            session.bus.set_trace_quiet(false);
+        }
+
+        Ok(())
+    }
+
+    pub fn trace_drain(&self, handle: u64, max_bytes: u32) -> Result<String, String> {
+        let sessions = self.sessions.borrow();
+        let session = sessions
+            .get(&handle)
+            .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+        let tracer = session
+            .bus
+            .tracer()
+            .ok_or_else(|| "tracing is not enabled for this session".to_string())?;
+
+        Ok(tracer.drain_text(max_bytes as usize))
+    }
+
+    pub fn trace_stop(&self, handle: u64) -> Result<(), String> {
+        let mut sessions = self.sessions.borrow_mut();
+        let session = sessions
+            .get_mut(&handle)
+            .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+
+        session.bus.stop_trace();
+        Ok(())
     }
 }
 

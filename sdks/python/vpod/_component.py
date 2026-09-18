@@ -374,7 +374,7 @@ def _resolve_exports(store, instance):
 
         return call
 
-    return {
+    exports = {
         name: get_export(name)
         for name in (
             "session-start",
@@ -387,6 +387,12 @@ def _resolve_exports(store, instance):
             "session-resume",
         )
     }
+
+    trace_exports = ("session-trace-start", "session-trace-drain", "session-trace-stop")
+    if all(instance.get_export_index(store, name, iface_index) is not None for name in trace_exports):
+        exports.update({name: get_export(name) for name in trace_exports})
+
+    return exports
 
 
 def _instance_key(snap_dir: str, mount_dirs: list[str] | None) -> str:

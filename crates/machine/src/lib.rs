@@ -5,6 +5,7 @@ pub mod instance;
 pub mod machine_bus;
 pub mod plic;
 pub mod snapshot;
+pub mod trace;
 pub mod uart;
 pub mod virtio;
 

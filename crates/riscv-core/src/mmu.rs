@@ -282,6 +282,19 @@ impl Mmu {
             .map_err(|_| MmuFault::InstructionPageFault(virtual_address))
     }
 
+    pub fn translate_readable(
+        virtual_address: u64,
+        satp: u64,
+        bus: &mut impl SystemBus,
+    ) -> Option<u64> {
+        if satp >> 60 == 0 {
+            return Some(virtual_address);
+        }
+        walk_inner(virtual_address, satp, false, false, bus)
+            .ok()
+            .map(|(physical_address, _, _)| physical_address)
+    }
+
     pub fn translate_load(
         &mut self,
         virtual_address: u64,

@@ -4,6 +4,7 @@ use crate::clint::{CLINT_BASE, CLINT_SIZE, Clint, TIMER_FREQUENCY};
 use crate::cow_ram::CowRam;
 use crate::dtb;
 use crate::plic::{PLIC_BASE, PLIC_SIZE, Plic};
+use crate::trace::{SyscallTracer, TraceOptions, Tracer};
 use crate::uart::Uart;
 use crate::virtio::RamView;
 use crate::virtio::blk::VirtioBlk;
@@ -36,6 +37,8 @@ pub struct MachineBus {
     pub console: VirtioConsole,
     pub net: Option<VirtioNet<SlirpBackend>>,
     pub fs_devices: Vec<VirtioFs>,
+    tracer: Option<Tracer>,
+    syscall_tracer: Option<Box<SyscallTracer>>,
 }
 
 impl MachineBus {
@@ -59,6 +62,8 @@ impl MachineBus {
             console: VirtioConsole::new(),
             net: None,
             fs_devices: Vec::new(),
+            tracer: None,
+            syscall_tracer: None,
         }
     }
 
@@ -90,6 +95,64 @@ impl MachineBus {
                 }
             })
             .collect();
+    }
+
+    pub fn start_trace(&mut self, options: TraceOptions) {
+        let tracer = Tracer::new(options);
+        tracer.set_guest_ns(self.guest_ns());
+        self.attach_tracer(Some(tracer));
+    }
+
+    pub fn stop_trace(&mut self) {
+        self.attach_tracer(None);
+    }
+
+    pub fn traces_syscalls(&self) -> bool {
+        self.syscall_tracer.is_some()
+    }
+
+    pub fn set_trace_quiet(&mut self, quiet: bool) {
+        if let Some(syscall_tracer) = &mut self.syscall_tracer {
+            syscall_tracer.set_quiet(quiet);
+        }
+    }
+
+    pub fn seed_trace_working_directory(&mut self, process_id: u32, path: String) {
+        if let Some(syscall_tracer) = &mut self.syscall_tracer {
+            syscall_tracer.seed_working_directory(process_id, path);
+        }
+    }
+
+    pub fn tracer(&self) -> Option<&Tracer> {
+        self.tracer.as_ref()
+    }
+
+    fn attach_tracer(&mut self, tracer: Option<Tracer>) {
+        if let Some(network_device) = &mut self.net {
+            network_device.backend_mut().set_tracer(tracer.clone());
+        }
+
+        for fs_device in &mut self.fs_devices {
+            fs_device.set_tracer(tracer.clone());
+        }
+
+        self.syscall_tracer = tracer
+            .clone()
+            .filter(|tracer| {
+                tracer.traces_processes() || tracer.traces_files() || tracer.traces_network()
+            })
+            .map(|tracer| Box::new(SyscallTracer::new(tracer)));
+        self.tracer = tracer;
+    }
+
+    fn guest_ns(&self) -> u64 {
+        self.clint.mtime() * (1_000_000_000 / TIMER_FREQUENCY)
+    }
+
+    fn sync_trace_clock(&self) {
+        if let Some(tracer) = &self.tracer {
+            tracer.set_guest_ns(self.guest_ns());
+        }
     }
 
     pub fn ram_size(&self) -> u64 {
@@ -126,6 +189,8 @@ impl MachineBus {
         } else {
             hart.csr.mip &= !MIP_MSIP;
         }
+
+        self.sync_trace_clock();
 
         if let Some(network_device) = &mut self.net {
             let mask = self.ram_mask;
@@ -438,6 +503,8 @@ impl SystemBus for MachineBus {
             };
 
             if let Some(queue_index) = notify_queue_index {
+                self.sync_trace_clock();
+
                 let mask = self.ram_mask;
                 let mut ram = RamView::new(&mut self.ram, mask);
 
@@ -523,6 +590,25 @@ impl SystemBus for MachineBus {
 
     fn external_interrupt_pending(&mut self) -> Option<bool> {
         Some(self.refresh_external_interrupt())
+    }
+
+    #[inline]
+    fn syscall_trace_enabled(&self) -> bool {
+        self.syscall_tracer.is_some()
+    }
+
+    fn on_syscall_entry(&mut self, entry: riscv_core::SyscallEntry, satp: u64) {
+        if let Some(mut syscall_tracer) = self.syscall_tracer.take() {
+            syscall_tracer.on_entry(entry, self, satp);
+            self.syscall_tracer = Some(syscall_tracer);
+        }
+    }
+
+    fn on_syscall_return(&mut self, task: u64, return_pc: u64, value: i64, satp: u64) {
+        if let Some(mut syscall_tracer) = self.syscall_tracer.take() {
+            syscall_tracer.on_return(task, return_pc, value, self, satp);
+            self.syscall_tracer = Some(syscall_tracer);
+        }
     }
 }
 

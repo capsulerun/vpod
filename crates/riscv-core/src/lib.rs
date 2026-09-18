@@ -10,12 +10,14 @@ pub mod gpr;
 pub mod hart;
 pub mod mmu;
 pub mod perf;
+pub mod syscall_trace;
 pub mod system_bus;
 pub mod trap;
 
 pub use csr::{Csr, PrivMode};
 pub use hart::Hart;
 pub use mmu::Mmu;
+pub use syscall_trace::{AT_FDCWD, GuestMemory, GuestString, SyscallEntry, SyscallKind};
 pub use system_bus::{FlatMemory, SystemBus};
 pub use trap::{StepResult, TrapCause};
 

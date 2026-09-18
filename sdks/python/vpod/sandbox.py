@@ -18,6 +18,7 @@ from ._component import (
 from ._result import unwrap_result as _unwrap_result
 from .code import Code
 from .commands import Commands
+from .trace import TraceRecorder, trace_options
 
 INSTANCES_DIR = Path.home() / ".vpod" / "instances"
 
@@ -54,9 +55,13 @@ class Sandbox:
         registry_url: str | None = None,
         api_key: str | None = None,
         engine: str = "auto",
+        trace=None,
     ):
         if engine not in engines.ENGINE_MODES:
             raise ValueError(f"engine must be one of {engines.ENGINE_MODES}, got {engine!r}")
+        self.trace = TraceRecorder(
+            trace_options(trace), lambda: (self._exports, self._shell_session_id)
+        )
 
         pulled = snapshots._pull(snapshot, registry_url, api_key, engine_mode=engine)
         snapshot_path = pulled.path
@@ -88,16 +93,20 @@ class Sandbox:
             )
             self._tier = active_tier()
 
+        self.trace._require_support(self._exports)
+
         self.commands = Commands(
             lambda: self._exports,
             self._snapshot_path,
             self._get_shell_session_id,
+            self.trace,
         )
 
         self.code = Code(
             lambda: self._exports,
             self._snapshot_path,
             self._get_code_session_id,
+            self.trace,
         )
 
     def _start_on_image_engine(self, chosen: dict, snapshot_path: Path, mount_dirs) -> bool:
@@ -123,8 +132,16 @@ class Sandbox:
         registry_url: str | None = None,
         api_key: str | None = None,
         engine: str = "auto",
+        trace=None,
     ) -> "Sandbox":
-        return cls(snapshot, mounts=mounts, registry_url=registry_url, api_key=api_key, engine=engine)
+        return cls(
+            snapshot,
+            mounts=mounts,
+            registry_url=registry_url,
+            api_key=api_key,
+            engine=engine,
+            trace=trace,
+        )
 
     @property
     def tier(self) -> str | None:
@@ -148,6 +165,7 @@ class Sandbox:
                 self._snapshot_path, _DEFAULT_SHELL, _DEFAULT_PROMPT, self._mount_entries()
             )
             self._shell_session_id = int(_unwrap_result(result))
+            self.trace._start(self._exports, self._shell_session_id)
         return self._shell_session_id
 
     def _maybe_upgrade_engine(self) -> None:
@@ -184,6 +202,7 @@ class Sandbox:
                         _DEFAULT_PROMPT, self._mount_entries(),
                     )
                     self._shell_session_id = int(_unwrap_result(result))
+                    self.trace._start(exports, self._shell_session_id)
 
                 try:
                     self._store, self._exports = load_component(
@@ -215,8 +234,10 @@ class Sandbox:
         self.code.close()
         self._in_context = False
         if self._shell_session_id is not None:
+            self.trace._drain()
             self._exports["session-close"](self._shell_session_id)
             self._shell_session_id = None
+        self.trace._close()
 
     def close(self) -> None:
         self.__exit__()
@@ -237,6 +258,7 @@ class Sandbox:
         instance_dir.mkdir(parents=True, exist_ok=True)
 
         delta_rel = f"instances/{instance_id}/delta.bin"
+        self.trace._drain()
         _unwrap_result(self._exports["session-suspend"](session_id, delta_rel))
 
         (instance_dir / "meta.json").write_text(json.dumps({
@@ -252,7 +274,10 @@ class Sandbox:
         return instance_id
 
     @classmethod
-    def resume(cls, instance_id: str, mounts: dict[str, str] | None = None) -> "Sandbox":
+    def resume(
+        cls, instance_id: str, mounts: dict[str, str] | None = None, trace=None
+    ) -> "Sandbox":
+        options = trace_options(trace)
         instance_dir = INSTANCES_DIR / instance_id
         meta = json.loads((instance_dir / "meta.json").read_text())
         delta_rel = f"instances/{instance_id}/delta.bin"
@@ -299,6 +324,12 @@ class Sandbox:
             store, exports = load_component(locate_wasm(), snapshot_path, mount_dirs or None)
             tier = active_tier()
 
+        instance = cls.__new__(cls)
+        instance.trace = TraceRecorder(
+            options, lambda: (instance._exports, instance._shell_session_id)
+        )
+        instance.trace._require_support(exports)
+
         mount_entries = []
         for i, m in enumerate(saved_mounts):
             entry = object.__new__(type("MountEntry", (), {}))
@@ -313,7 +344,6 @@ class Sandbox:
         )
         session_id = int(_unwrap_result(result))
 
-        instance = cls.__new__(cls)
         instance._snapshot_path = snap_rel
         instance._snapshot_file = snapshot_path
         instance._tier = tier
@@ -324,8 +354,13 @@ class Sandbox:
         instance._exports = exports
         instance._shell_session_id = session_id
         instance._in_context = True
-        instance.commands = Commands(lambda: instance._exports, snap_rel, instance._get_shell_session_id)
-        instance.code = Code(lambda: instance._exports, snap_rel, instance._get_code_session_id)
+        instance.trace._start(exports, session_id)
+        instance.commands = Commands(
+            lambda: instance._exports, snap_rel, instance._get_shell_session_id, instance.trace
+        )
+        instance.code = Code(
+            lambda: instance._exports, snap_rel, instance._get_code_session_id, instance.trace
+        )
 
         Sandbox.destroy(instance_id)
         return instance

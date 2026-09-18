@@ -1,16 +1,31 @@
+import { TRACE_NOT_ENABLED, type Trace } from "./trace.js";
+
+function requireTrace(trace: Trace | null): Trace {
+    if (trace === null) {
+        throw new Error(TRACE_NOT_ENABLED);
+    }
+    return trace;
+}
+
 export class CommandResult {
     readonly stdout: string;
     readonly stderr: string;
     readonly exitCode: number;
+    readonly #trace: Trace | null;
 
-    constructor(stdout: string, stderr = "", exitCode = 0) {
+    constructor(stdout: string, stderr = "", exitCode = 0, trace: Trace | null = null) {
         this.stdout = stdout;
         this.stderr = stderr;
         this.exitCode = exitCode;
+        this.#trace = trace;
     }
 
     get success(): boolean {
         return this.exitCode === 0;
+    }
+
+    get trace(): Trace {
+        return requireTrace(this.#trace);
     }
 }
 
@@ -19,21 +34,33 @@ export class CodeExecution {
     readonly error: string | null;
     readonly logs: string[];
     readonly stderr: string;
+    readonly #trace: Trace | null;
 
     constructor(
         text: string,
         error: string | null = null,
         logs: string[] = [],
         stderr = "",
+        trace: Trace | null = null,
     ) {
         this.text = text;
         this.error = error;
         this.logs = logs;
         this.stderr = stderr;
+        this.#trace = trace;
     }
 
     get success(): boolean {
         return this.error === null;
+    }
+
+    get trace(): Trace {
+        return requireTrace(this.#trace);
+    }
+
+    /** @internal */
+    _withTrace(trace: Trace | null): CodeExecution {
+        return new CodeExecution(this.text, this.error, this.logs, this.stderr, trace);
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::api::session::SESSION_MANAGER;
 use crate::exports::vpod::sandbox::executor::{
-    ExecMode, ExecutionResult, Guest, MountEntry, SliceOutput,
+    ExecMode, ExecutionResult, Guest, MountEntry, SliceOutput, TraceOptions,
 };
 use crate::vm;
 
@@ -83,5 +83,17 @@ impl Guest for Executor {
             .collect();
 
         SESSION_MANAGER.resume_session(snapshot_path, delta, command, prompt, mount_args)
+    }
+
+    fn session_trace_start(handle: u64, options: TraceOptions) -> Result<(), String> {
+        SESSION_MANAGER.trace_start(handle, options)
+    }
+
+    fn session_trace_drain(handle: u64, max_bytes: u32) -> Result<String, String> {
+        SESSION_MANAGER.trace_drain(handle, max_bytes)
+    }
+
+    fn session_trace_stop(handle: u64) -> Result<(), String> {
+        SESSION_MANAGER.trace_stop(handle)
     }
 }

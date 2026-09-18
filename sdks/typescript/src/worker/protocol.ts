@@ -1,6 +1,7 @@
 import type { ExecMode } from "../sandbox.js";
 
 import type { CoreModuleBytes } from "./component-imports.js";
+import type { WireTraceOptions } from "../trace.js";
 
 export interface WorkerInit {
     kind: "init";
@@ -78,6 +79,10 @@ export type WorkerCall =
           command: string;
           prompt: string;
       }
+    | { kind: "trace-supported" }
+    | { kind: "session-trace-start"; handle: bigint; options: WireTraceOptions }
+    | { kind: "session-trace-drain"; handle: bigint; maxBytes: number }
+    | { kind: "session-trace-stop"; handle: bigint }
     | { kind: "poll-stats" }
     | { kind: "component-load-milliseconds" }
     | { kind: "enable-network"; port: MessagePort; allowedPorts?: number[] };

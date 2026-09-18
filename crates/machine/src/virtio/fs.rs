@@ -5,7 +5,10 @@ use std::fs;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
+use serde_json::Value;
+
 use super::{RAM_BASE, RamView, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
+use crate::trace::Tracer;
 
 const DEVICE_ID: u32 = 26; // VIRTIO_DEVICE_ID_FS
 const VIRTIO_F_VERSION_1: u64 = 1u64 << 32;
@@ -53,6 +56,11 @@ const FATTR_SIZE: u32 = 1 << 3;
 
 const FUSE_ROOT_ID: u64 = 1;
 
+const O_ACCMODE: u32 = 0o3;
+const O_WRONLY: u32 = 0o1;
+const O_RDWR: u32 = 0o2;
+const O_TRUNC: u32 = 0o1000;
+
 // #[repr(C)]
 struct FuseInHeader {
     _len: u32,
@@ -61,7 +69,7 @@ struct FuseInHeader {
     nodeid: u64,
     _uid: u32,
     _gid: u32,
-    _pid: u32,
+    pid: u32,
     _padding: u32,
 }
 
@@ -89,6 +97,27 @@ pub struct VirtioFs {
     file_handles: HashMap<u64, FileHandle>,
     next_fh: u64,
     mounts: Vec<Mount>,
+    tracer: Option<Tracer>,
+    guest_root: String,
+    traced_handles: HashMap<u64, TracedHandle>,
+}
+
+enum MountRequest {
+    Open { path: String, flags: u32 },
+    Read { handle: u64 },
+    Write { handle: u64 },
+    Release { handle: u64 },
+    Create { path: String },
+    Mkdir { path: String },
+    Delete { path: String, directory: bool },
+    Rename { from: String, to: String },
+    Truncate { path: String, size: u64 },
+}
+
+struct TracedHandle {
+    path: String,
+    bytes_read: u64,
+    bytes_written: u64,
 }
 
 impl VirtioFs {
@@ -100,6 +129,9 @@ impl VirtioFs {
             file_handles: HashMap::new(),
             next_fh: 1,
             mounts,
+            tracer: None,
+            guest_root: String::new(),
+            traced_handles: HashMap::new(),
         };
 
         let tag = b"virtiofs";
@@ -117,6 +149,9 @@ impl VirtioFs {
             file_handles: HashMap::new(),
             next_fh: 1,
             mounts: vec![mount],
+            tracer: None,
+            guest_root: String::new(),
+            traced_handles: HashMap::new(),
         };
 
         let tag_bytes = tag.as_bytes();
@@ -129,6 +164,15 @@ impl VirtioFs {
 
     pub fn set_mounts(&mut self, mounts: Vec<Mount>) {
         self.mounts = mounts;
+    }
+
+    pub fn set_guest_root(&mut self, guest_root: &str) {
+        self.guest_root = guest_root.trim_end_matches('/').to_string();
+    }
+
+    pub fn set_tracer(&mut self, tracer: Option<Tracer>) {
+        self.tracer = tracer.filter(|tracer| tracer.traces_mounts());
+        self.traced_handles.clear();
     }
 
     fn root_path(&self) -> Option<&Path> {
@@ -191,7 +235,7 @@ impl VirtioFs {
             nodeid: ram.read_u64(header_addr + 16),
             _uid: ram.read_u32(header_addr + 24),
             _gid: ram.read_u32(header_addr + 28),
-            _pid: ram.read_u32(header_addr + 32),
+            pid: ram.read_u32(header_addr + 32),
             _padding: ram.read_u32(header_addr + 36),
         };
 
@@ -214,6 +258,11 @@ impl VirtioFs {
                 let scratch = RAM_BASE + ram.len() as u64 - 4096;
                 (scratch, true)
             }
+        };
+
+        let traced_request = match self.tracer {
+            Some(_) => self.describe_request(&header, ram, in_body_addr, in_body_len),
+            None => None,
         };
 
         let used_len = match header.opcode {
@@ -242,6 +291,12 @@ impl VirtioFs {
             _ => self.reply_error(&header, ENOSYS, out_addr, ram),
         };
 
+        if let Some(request) = traced_request
+            && used_len >= 16
+        {
+            self.record_request(request, &header, ram, out_addr, used_len);
+        }
+
         if needs_scatter && used_len > 0 {
             let mut src_offset = 0u64;
             for &(buf_addr, buf_len) in &write_bufs {
@@ -261,6 +316,208 @@ impl VirtioFs {
         }
 
         used_len
+    }
+
+    fn guest_path_of_node(&self, nodeid: u64) -> Option<String> {
+        if nodeid == FUSE_ROOT_ID {
+            return Some(if self.guest_root.is_empty() {
+                "/".to_string()
+            } else {
+                self.guest_root.clone()
+            });
+        }
+
+        let host_path = &self.inodes.get(&nodeid)?.path;
+        let relative = host_path.strip_prefix(self.root_path()?).ok()?;
+        Some(format!(
+            "{}/{}",
+            self.guest_root,
+            relative.to_string_lossy()
+        ))
+    }
+
+    fn guest_path_of_child(&self, parent: u64, name: &str) -> Option<String> {
+        let parent = self.guest_path_of_node(parent)?;
+        Some(format!("{}/{name}", parent.trim_end_matches('/')))
+    }
+
+    fn describe_request(
+        &self,
+        header: &FuseInHeader,
+        ram: &RamView,
+        in_body_addr: u64,
+        in_body_len: u32,
+    ) -> Option<MountRequest> {
+        let name_at = |offset: u32| {
+            self.read_cstring(
+                ram,
+                in_body_addr + offset as u64,
+                in_body_len.saturating_sub(offset),
+            )
+        };
+
+        Some(match header.opcode {
+            FUSE_OPEN => MountRequest::Open {
+                path: self.guest_path_of_node(header.nodeid)?,
+                flags: ram.read_u32(in_body_addr),
+            },
+            FUSE_READ => MountRequest::Read {
+                handle: ram.read_u64(in_body_addr),
+            },
+            FUSE_WRITE => MountRequest::Write {
+                handle: ram.read_u64(in_body_addr),
+            },
+            FUSE_RELEASE => MountRequest::Release {
+                handle: ram.read_u64(in_body_addr),
+            },
+            FUSE_CREATE => MountRequest::Create {
+                path: self.guest_path_of_child(header.nodeid, &name_at(16))?,
+            },
+            FUSE_MKDIR => MountRequest::Mkdir {
+                path: self.guest_path_of_child(header.nodeid, &name_at(8))?,
+            },
+            FUSE_UNLINK | FUSE_RMDIR => MountRequest::Delete {
+                path: self.guest_path_of_child(header.nodeid, &name_at(0))?,
+                directory: header.opcode == FUSE_RMDIR,
+            },
+            FUSE_RENAME | FUSE_RENAME2 => {
+                let names_at = if header.opcode == FUSE_RENAME2 { 12 } else { 8 };
+                let from_name = name_at(names_at);
+                let to_name = name_at(names_at + from_name.len() as u32 + 1);
+                MountRequest::Rename {
+                    from: self.guest_path_of_child(header.nodeid, &from_name)?,
+                    to: self.guest_path_of_child(ram.read_u64(in_body_addr), &to_name)?,
+                }
+            }
+            FUSE_SETATTR if ram.read_u32(in_body_addr) & FATTR_SIZE != 0 => {
+                MountRequest::Truncate {
+                    path: self.guest_path_of_node(header.nodeid)?,
+                    size: ram.read_u64(in_body_addr + 16),
+                }
+            }
+            _ => return None,
+        })
+    }
+
+    fn record_request(
+        &mut self,
+        request: MountRequest,
+        header: &FuseInHeader,
+        ram: &RamView,
+        out_addr: u64,
+        used_len: u32,
+    ) {
+        let Some(tracer) = self.tracer.clone() else {
+            return;
+        };
+        let result = ram.read_u32(out_addr + 4) as i32;
+        let succeeded = result == 0;
+        let pid = Value::from(header.pid);
+
+        match request {
+            MountRequest::Read { handle } => {
+                if succeeded && let Some(traced) = self.traced_handles.get_mut(&handle) {
+                    traced.bytes_read += (used_len - 16) as u64;
+                }
+            }
+            MountRequest::Write { handle } => {
+                if succeeded && let Some(traced) = self.traced_handles.get_mut(&handle) {
+                    traced.bytes_written += ram.read_u32(out_addr + 16) as u64;
+                }
+            }
+            MountRequest::Release { handle } => {
+                if let Some(traced) = self.traced_handles.remove(&handle) {
+                    tracer.record(
+                        "mount.close",
+                        &[
+                            ("pid", pid),
+                            ("path", traced.path.into()),
+                            ("bytes_read", traced.bytes_read.into()),
+                            ("bytes_written", traced.bytes_written.into()),
+                        ],
+                    );
+                }
+            }
+            MountRequest::Open { path, flags } => {
+                let access = match flags & O_ACCMODE {
+                    O_WRONLY => "write",
+                    O_RDWR => "read-write",
+                    _ => "read",
+                };
+                if succeeded {
+                    self.track_handle(ram.read_u64(out_addr + 16), &path);
+                }
+                tracer.record(
+                    "mount.open",
+                    &[
+                        ("pid", pid),
+                        ("path", path.into()),
+                        ("access", access.into()),
+                        ("truncate", (flags & O_TRUNC != 0).into()),
+                        ("result", result.into()),
+                    ],
+                );
+            }
+            MountRequest::Create { path } => {
+                if succeeded {
+                    self.track_handle(ram.read_u64(out_addr + 16 + 128), &path);
+                }
+                tracer.record(
+                    "mount.create",
+                    &[
+                        ("pid", pid),
+                        ("path", path.into()),
+                        ("result", result.into()),
+                    ],
+                );
+            }
+            MountRequest::Mkdir { path } => tracer.record(
+                "mount.mkdir",
+                &[
+                    ("pid", pid),
+                    ("path", path.into()),
+                    ("result", result.into()),
+                ],
+            ),
+            MountRequest::Delete { path, directory } => tracer.record(
+                "mount.delete",
+                &[
+                    ("pid", pid),
+                    ("path", path.into()),
+                    ("directory", directory.into()),
+                    ("result", result.into()),
+                ],
+            ),
+            MountRequest::Rename { from, to } => tracer.record(
+                "mount.rename",
+                &[
+                    ("pid", pid),
+                    ("from", from.into()),
+                    ("to", to.into()),
+                    ("result", result.into()),
+                ],
+            ),
+            MountRequest::Truncate { path, size } => tracer.record(
+                "mount.truncate",
+                &[
+                    ("pid", pid),
+                    ("path", path.into()),
+                    ("size", size.into()),
+                    ("result", result.into()),
+                ],
+            ),
+        }
+    }
+
+    fn track_handle(&mut self, handle: u64, path: &str) {
+        self.traced_handles.insert(
+            handle,
+            TracedHandle {
+                path: path.to_string(),
+                bytes_read: 0,
+                bytes_written: 0,
+            },
+        );
     }
 
     fn init(&self, header: &FuseInHeader, out_addr: u64, _out_len: u32, ram: &mut RamView) -> u32 {

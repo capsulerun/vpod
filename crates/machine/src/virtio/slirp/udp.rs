@@ -9,6 +9,7 @@ use super::frames::{
     GW_IP, IP_PROTO_UDP, eth_src, ip_dst, ip_payload, ip_src, make_ip_frame, make_udp_payload,
     u16be,
 };
+use crate::trace::format_address;
 
 const DHCP_SERVER_PORT: u16 = 67;
 const DHCP_CLIENT_PORT: u16 = 68;
@@ -82,6 +83,21 @@ impl SlirpBackend {
                     return;
                 };
                 sock.set_nonblocking(true).ok();
+
+                if let Some(tracer) = self
+                    .tracer
+                    .as_ref()
+                    .filter(|tracer| tracer.traces_network())
+                {
+                    tracer.record(
+                        "net.udp",
+                        &[
+                            ("address", format_address(dst_ip).into()),
+                            ("port", dst_port.into()),
+                            ("host", tracer.name_of(dst_ip).into()),
+                        ],
+                    );
+                }
 
                 slot.insert(UdpConn {
                     sock,

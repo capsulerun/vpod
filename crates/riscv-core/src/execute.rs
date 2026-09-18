@@ -954,6 +954,24 @@ fn exec_amo<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32)
     StepResult::Ok
 }
 
+#[cold]
+#[inline(never)]
+fn trace_syscall_entry<B: SystemBus>(ctx: &mut ExecContext<B>, pc: u64) {
+    let satp = crate::block::effective_satp(*ctx.priv_mode, ctx.csr.satp);
+    if let Some(entry) = crate::syscall_trace::decode_entry(ctx, pc, satp) {
+        ctx.bus.on_syscall_entry(entry, satp);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn trace_syscall_return<B: SystemBus>(ctx: &mut ExecContext<B>) {
+    let value = ctx.regs.read(10) as i64; // a0
+    let satp = crate::block::effective_satp(*ctx.priv_mode, ctx.csr.satp);
+    ctx.bus
+        .on_syscall_return(ctx.csr.sscratch, ctx.csr.sepc, value, satp);
+}
+
 fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u32) -> StepResult {
     let pc = ctx.regs.pc;
 
@@ -970,6 +988,10 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
                     && is_shutdown_ecall(ctx.regs.read(17), ctx.regs.read(16))
                 {
                     *ctx.shutdown_requested = true;
+                }
+
+                if matches!(ctx.priv_mode, PrivMode::U) && ctx.bus.syscall_trace_enabled() {
+                    trace_syscall_entry(ctx, pc);
                 }
 
                 take_exception(ctx, cause.mcause_code(), 0);
@@ -994,6 +1016,11 @@ fn exec_system<B: SystemBus>(ctx: &mut ExecContext<B>, inst: Instruction, raw: u
 
                 ctx.csr.mstatus |= MSTATUS_SPIE;
                 *ctx.priv_mode = PrivMode::from_bits(spp);
+
+                if spp == 0 && ctx.bus.syscall_trace_enabled() {
+                    trace_syscall_return(ctx);
+                }
+
                 ctx.regs.pc = ctx.csr.sepc;
                 return StepResult::Ok;
             }

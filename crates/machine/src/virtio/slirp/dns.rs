@@ -4,14 +4,18 @@
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant};
 
+use serde_json::Value;
+
 use super::SlirpBackend;
 use super::frames::{GW_IP, IP_PROTO_UDP, make_ip_frame, make_udp_payload};
+use crate::trace::{Tracer, format_address};
 
 const RELAY_TIMEOUT: Duration = Duration::from_secs(5);
 const QTYPE_A: u16 = 1;
 const QTYPE_AAAA: u16 = 28;
 const RCODE_NOERROR: u16 = 0;
 const RCODE_SERVFAIL: u16 = 2;
+const RCODE_NXDOMAIN: u16 = 3;
 const MAX_ANSWERS: usize = 4;
 
 const UPSTREAM_SERVERS: [[u8; 4]; 3] = [
@@ -44,6 +48,7 @@ impl SlirpBackend {
         src_port: u16,
     ) {
         if let Some(reply) = answer_from_host(query) {
+            trace_reply(self.tracer.as_ref(), &reply);
             self.reply_to_guest(&guest_mac, &src_ip, src_port, &reply);
             return;
         }
@@ -54,6 +59,7 @@ impl SlirpBackend {
 
         if let Some(question) = parse_question(query) {
             let servfail = build_reply(query, &question, &[], RCODE_SERVFAIL);
+            trace_reply(self.tracer.as_ref(), &servfail);
             self.reply_to_guest(&guest_mac, &src_ip, src_port, &servfail);
         }
     }
@@ -65,6 +71,7 @@ impl SlirpBackend {
             let mut buf = [0u8; 2048];
 
             if let Ok((n, _)) = request.sock.recv_from(&mut buf) {
+                trace_reply(self.tracer.as_ref(), &buf[..n]);
                 let reply = make_udp_payload(53, request.src_port, &buf[..n]);
                 self.rx_pending.push_back(make_ip_frame(
                     &request.guest_mac,
@@ -80,6 +87,7 @@ impl SlirpBackend {
             if request.created.elapsed() > RELAY_TIMEOUT {
                 if let Some(question) = parse_question(&request.query) {
                     let servfail = build_reply(&request.query, &question, &[], RCODE_SERVFAIL);
+                    trace_reply(self.tracer.as_ref(), &servfail);
                     let reply = make_udp_payload(53, request.src_port, &servfail);
                     self.rx_pending.push_back(make_ip_frame(
                         &request.guest_mac,
@@ -193,6 +201,85 @@ fn parse_question(query: &[u8]) -> Option<Question> {
     })
 }
 
+fn ipv4_answers(reply: &[u8], question_end: usize) -> Vec<[u8; 4]> {
+    let answer_count = u16::from_be_bytes([reply[6], reply[7]]);
+    let mut position = question_end;
+    let mut answers = Vec::new();
+
+    for _ in 0..answer_count {
+        loop {
+            let Some(&label_len) = reply.get(position) else {
+                return answers;
+            };
+            if label_len & 0xC0 == 0xC0 {
+                position += 2;
+                break;
+            }
+            position += 1 + label_len as usize;
+            if label_len == 0 {
+                break;
+            }
+        }
+
+        let Some(fixed) = reply.get(position..position + 10) else {
+            return answers;
+        };
+        let record_type = u16::from_be_bytes([fixed[0], fixed[1]]);
+        let data_len = u16::from_be_bytes([fixed[8], fixed[9]]) as usize;
+        position += 10;
+
+        let Some(data) = reply.get(position..position + data_len) else {
+            return answers;
+        };
+        if record_type == QTYPE_A && data_len == 4 {
+            answers.push(data.try_into().unwrap());
+        }
+        position += data_len;
+    }
+
+    answers
+}
+
+fn trace_reply(tracer: Option<&Tracer>, reply: &[u8]) {
+    let Some(tracer) = tracer.filter(|tracer| tracer.traces_network()) else {
+        return;
+    };
+    let Some(question) = parse_question(reply) else {
+        return;
+    };
+
+    let answers = ipv4_answers(reply, question.question_end);
+    for address in &answers {
+        tracer.remember_name(*address, &question.hostname);
+    }
+
+    let record_type = match question.qtype {
+        QTYPE_A => Value::from("A"),
+        QTYPE_AAAA => Value::from("AAAA"),
+        other => Value::from(other),
+    };
+    let mut fields = vec![
+        ("name", Value::from(question.hostname)),
+        ("type", record_type),
+        (
+            "answers",
+            answers
+                .into_iter()
+                .map(format_address)
+                .collect::<Vec<_>>()
+                .into(),
+        ),
+    ];
+    match u16::from_be_bytes([reply[2], reply[3]]) & 0x000F {
+        RCODE_NOERROR => {}
+        RCODE_NXDOMAIN => fields.push(("error", "nxdomain".into())),
+        RCODE_SERVFAIL => fields.push(("error", "servfail".into())),
+        other => fields.push(("error", format!("rcode {other}").into())),
+    }
+
+    tracer.record("net.dns", &fields);
+}
+
 fn answer_from_host(query: &[u8]) -> Option<Vec<u8>> {
     let question = parse_question(query)?;
 
@@ -302,6 +389,49 @@ mod tests {
             RCODE_SERVFAIL
         );
         assert_eq!(u16::from_be_bytes([reply[6], reply[7]]), 0);
+    }
+
+    #[test]
+    fn answers_are_read_back_from_a_reply_and_named_in_the_trace() {
+        let query = example_com_query(QTYPE_A);
+        let question = parse_question(&query).unwrap();
+        let reply = build_reply(
+            &query,
+            &question,
+            &[[93, 184, 215, 14], [93, 184, 215, 15]],
+            RCODE_NOERROR,
+        );
+        assert_eq!(
+            ipv4_answers(&reply, question.question_end),
+            [[93, 184, 215, 14], [93, 184, 215, 15]]
+        );
+
+        let tracer = Tracer::new(crate::trace::TraceOptions::default());
+        trace_reply(Some(&tracer), &reply);
+
+        let line: Value = serde_json::from_slice(&tracer.drain(usize::MAX)).unwrap();
+        assert_eq!(line["kind"], "net.dns");
+        assert_eq!(line["name"], "example.com");
+        assert_eq!(line["answers"][1], "93.184.215.15");
+        assert!(line.get("error").is_none());
+        assert_eq!(
+            tracer.name_of([93, 184, 215, 14]).as_deref(),
+            Some("example.com")
+        );
+    }
+
+    #[test]
+    fn a_failed_lookup_is_traced_with_its_error() {
+        let query = example_com_query(QTYPE_A);
+        let question = parse_question(&query).unwrap();
+        let servfail = build_reply(&query, &question, &[], RCODE_SERVFAIL);
+
+        let tracer = Tracer::new(crate::trace::TraceOptions::default());
+        trace_reply(Some(&tracer), &servfail);
+
+        let line: Value = serde_json::from_slice(&tracer.drain(usize::MAX)).unwrap();
+        assert_eq!(line["error"], "servfail");
+        assert_eq!(line["answers"], serde_json::json!([]));
     }
 
     #[test]

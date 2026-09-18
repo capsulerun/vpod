@@ -22,6 +22,13 @@ import {
 } from "./snapshots/engine.js";
 import { defaultStore } from "./snapshots/index.js";
 import { resolveRegistryUrl } from "./snapshots/registry.js";
+import {
+    TRACE_NOT_SUPPORTED,
+    TraceRecorder,
+    traceOptions,
+    type TraceSetting,
+    type WireTraceOptions,
+} from "./trace.js";
 
 const DEFAULT_SHELL = "/bin/sh";
 const DEFAULT_PROMPT = "# ";
@@ -54,6 +61,7 @@ export interface SandboxOptions extends SandboxRuntimeOptions {
      * and it is already cached; "default" always uses the bundled engine.
      */
     engine?: EngineMode;
+    trace?: TraceSetting;
 }
 
 interface ImageEngine {
@@ -110,6 +118,7 @@ export class Execution {
     #timeout: bigint;
     #mode: ExecMode;
     #tty: boolean;
+    #recorder: TraceRecorder | null;
 
     #outbox: Uint8Array[] = [];
     #eofPending = false;
@@ -128,6 +137,7 @@ export class Execution {
         command: string,
         timeoutSeconds: number,
         mode: ExecMode,
+        recorder: TraceRecorder | null = null,
     ) {
         this.#runtime = runtime;
         this.#handle = handle;
@@ -135,6 +145,7 @@ export class Execution {
         this.#timeout = BigInt(timeoutSeconds);
         this.#mode = mode;
         this.#tty = mode === "terminal";
+        this.#recorder = recorder;
     }
 
     get done(): boolean {
@@ -178,6 +189,7 @@ export class Execution {
             this.#mode,
         );
         this.#pending = null;
+        await this.#recorder?._drain();
 
         const stdoutChunk = this.#clean(slice.stdout);
         const stderrChunk = this.#clean(slice.stderr ?? "");
@@ -267,6 +279,7 @@ export class Commands {
 
     async run(command: string, options: RunOptions = {}): Promise<CommandResult> {
         if (options.stdin === undefined && !options.tty && !options.onStdout && !options.onStderr) {
+            const traceMark = await this.#sandbox.trace._mark();
             const result = await this.#sandbox._execSliced(
                 command,
                 options.timeout,
@@ -277,11 +290,13 @@ export class Commands {
                 normalizeLineEndings(result.stdout),
                 normalizeLineEndings(result.stderr ?? ""),
                 result.exitCode,
+                await this.#sandbox.trace._since(traceMark),
             );
         }
 
         options.signal?.throwIfAborted();
         const execution = await this.#start(command, options);
+        const traceMark = await this.#sandbox.trace._mark();
 
         const feeding =
             options.stdin === undefined ? null : feedStdin(execution, options.stdin);
@@ -312,7 +327,13 @@ export class Commands {
         }
 
         options.signal?.throwIfAborted();
-        return execution.result();
+        const result = execution.result();
+        return new CommandResult(
+            result.stdout,
+            result.stderr,
+            result.exitCode,
+            await this.#sandbox.trace._since(traceMark),
+        );
     }
 
     async interrupt(): Promise<void> {
@@ -380,6 +401,12 @@ export class Code {
     }
 
     async run(code: string, options: RunOptions = {}): Promise<CodeExecution> {
+        const traceMark = await this.#sandbox.trace._mark();
+        const execution = await this.#run(code, options);
+        return execution._withTrace(await this.#sandbox.trace._since(traceMark));
+    }
+
+    async #run(code: string, options: RunOptions): Promise<CodeExecution> {
         const timeout = options.timeout ?? DEFAULT_TIMEOUT_SECONDS;
         const result = await this.#sandbox._exec(PYTHON_PREFIX + code, timeout);
 
@@ -410,6 +437,7 @@ export class Code {
 export class Sandbox {
     readonly commands: Commands;
     readonly code: Code;
+    readonly trace: TraceRecorder;
 
     readonly #runtime: SandboxRuntime;
     readonly #snapshotPath: string;
@@ -422,6 +450,7 @@ export class Sandbox {
         snapshotPath: string,
         snapshotId: string,
         imageEngineSha256: string | null,
+        trace: WireTraceOptions | null,
     ) {
         this.#runtime = runtime;
         this.#snapshotPath = snapshotPath;
@@ -429,6 +458,11 @@ export class Sandbox {
         this.#imageEngineSha256 = imageEngineSha256;
         this.commands = new Commands(this);
         this.code = new Code(this);
+        this.trace = new TraceRecorder(trace, async (maxBytes) =>
+            this.#sessionHandle === null
+                ? null
+                : this.#runtime.sessionTraceDrain(this.#sessionHandle, maxBytes),
+        );
     }
 
     static async #withTransport(
@@ -557,6 +591,16 @@ export class Sandbox {
         };
     }
 
+    static async #requireTraceSupport(
+        runtime: SandboxRuntime,
+        trace: WireTraceOptions | null,
+    ): Promise<void> {
+        if (trace !== null && !(await runtime.traceSupported())) {
+            runtime.terminate();
+            throw new Error(TRACE_NOT_SUPPORTED);
+        }
+    }
+
     static async #connectNetwork(
         runtime: SandboxRuntime,
         requested: boolean | undefined,
@@ -585,10 +629,12 @@ export class Sandbox {
             throw new Error(`vpod: engine must be "auto" or "default", got ${JSON.stringify(options.engine)}`);
         }
 
+        const trace = traceOptions(options.trace);
         const snapshot = options.snapshot ?? DEFAULT_SNAPSHOT;
         const cachedEngine =
             typeof snapshot === "string" ? await Sandbox.#cachedImageEngine(options, snapshot) : null;
         const { runtime, imageEngine } = await Sandbox.#startRuntime(options, cachedEngine);
+        await Sandbox.#requireTraceSupport(runtime, trace);
 
         await Sandbox.#connectNetwork(runtime, options.network, options.corsProxy);
 
@@ -598,7 +644,13 @@ export class Sandbox {
             options.registryUrl,
             options.apiKey,
         );
-        return new Sandbox(runtime, mounted.snapshotPath, mounted.snapshotId, imageEngine?.sha256 ?? null);
+        return new Sandbox(
+            runtime,
+            mounted.snapshotPath,
+            mounted.snapshotId,
+            imageEngine?.sha256 ?? null,
+            trace,
+        );
     }
 
     get snapshotId(): string {
@@ -627,7 +679,7 @@ export class Sandbox {
     /** @internal */
     async _start(command: string, timeoutSeconds: number, mode: ExecMode): Promise<Execution> {
         const handle = await this.#ensureSession();
-        return new Execution(this.#runtime, handle, command, timeoutSeconds, mode);
+        return new Execution(this.#runtime, handle, command, timeoutSeconds, mode, this.trace);
     }
 
     async _execSliced(
@@ -655,6 +707,7 @@ export class Sandbox {
                 SLICE_NANOS,
             );
             code = null;
+            await this.trace._drain();
 
             const stdoutChunk = normalizeLineEndings(slice.stdout);
             const stderrChunk = normalizeLineEndings(slice.stderr);
@@ -702,12 +755,21 @@ export class Sandbox {
                 DEFAULT_SHELL,
                 DEFAULT_PROMPT,
             );
+            await this.#startTrace(this.#sessionHandle);
         }
         return this.#sessionHandle;
     }
 
+    async #startTrace(handle: bigint): Promise<void> {
+        const options = this.trace._options;
+        if (options !== null) {
+            await this.#runtime.sessionTraceStart(handle, options);
+        }
+    }
+
     async suspend(): Promise<Uint8Array> {
         const handle = await this.#ensureSession();
+        await this.trace._drain();
         const suspended = await this.#runtime.sessionSuspend(handle);
         this.#sessionHandle = null;
         return new Uint8Array(suspended.deltaBytes);
@@ -728,6 +790,7 @@ export class Sandbox {
                 ? await (await InstanceStore.open()).load(instance)
                 : instance;
 
+        const trace = traceOptions(options.trace);
         const snapshot = options.snapshot ?? resolved.snapshotId;
         let wanted: ImageEngine | null;
         if (resolved.engineSha256 !== undefined) {
@@ -747,6 +810,7 @@ export class Sandbox {
             );
         }
 
+        await Sandbox.#requireTraceSupport(runtime, trace);
         await Sandbox.#connectNetwork(runtime, options.network, options.corsProxy);
 
         const mounted = await Sandbox.#mount(
@@ -756,7 +820,13 @@ export class Sandbox {
             options.apiKey,
         );
 
-        const sandbox = new Sandbox(runtime, mounted.snapshotPath, mounted.snapshotId, imageEngine?.sha256 ?? null);
+        const sandbox = new Sandbox(
+            runtime,
+            mounted.snapshotPath,
+            mounted.snapshotId,
+            imageEngine?.sha256 ?? null,
+            trace,
+        );
         const delta = resolved.delta.slice();
         sandbox.#sessionHandle = await runtime.sessionResume(
             mounted.snapshotPath,
@@ -764,6 +834,7 @@ export class Sandbox {
             DEFAULT_SHELL,
             DEFAULT_PROMPT,
         );
+        await sandbox.#startTrace(sandbox.#sessionHandle);
 
         if (typeof instance === "string") {
             await Sandbox.destroy(instance);
@@ -783,9 +854,11 @@ export class Sandbox {
 
     async close(): Promise<void> {
         if (this.#sessionHandle !== null) {
+            await this.trace._drain();
             await this.#runtime.sessionClose(this.#sessionHandle);
             this.#sessionHandle = null;
         }
+        this.trace._close();
         this.#runtime.terminate();
     }
 

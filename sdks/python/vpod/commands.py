@@ -27,9 +27,10 @@ def mode_for(stdin, tty: bool) -> str:
 class Execution:
     """A command in flight. Internal: `Commands.run` is the supported entry point."""
 
-    def __init__(self, exports, session_id, command, timeout, mode):
+    def __init__(self, exports, session_id, command, timeout, mode, recorder):
         self._exports = exports
         self._session_id = session_id
+        self._recorder = recorder
         self._mode = mode
         self._tty = mode == TERMINAL
         self._timeout = timeout
@@ -70,6 +71,7 @@ class Execution:
             )
         )
         self._pending = None
+        self._recorder._drain()
 
         stdout_chunk = self._clean(slice_output.stdout)
         stderr_chunk = self._clean(slice_output.stderr or "")
@@ -159,15 +161,16 @@ class Execution:
 class Commands:
     """Shell command execution interface for a sandbox."""
 
-    def __init__(self, get_exports, snapshot_path: str, get_session_id):
+    def __init__(self, get_exports, snapshot_path: str, get_session_id, recorder):
         self._get_exports = get_exports
         self._snapshot_path = snapshot_path
         self._get_session_id = get_session_id
+        self._recorder = recorder
         self._running = None
 
     def _start(self, command: str, timeout: int, mode: str) -> Execution:
         execution = Execution(
-            self._get_exports(), self._get_session_id(), command, timeout, mode
+            self._get_exports(), self._get_session_id(), command, timeout, mode, self._recorder
         )
         self._running = execution
         return execution
@@ -182,6 +185,7 @@ class Commands:
         tty: bool = False,
     ) -> CommandResult:
         execution = self._start(command, timeout, mode_for(stdin, tty))
+        trace_mark = self._recorder._mark()
 
         if stdin is not None:
             self._feed(execution, stdin)
@@ -200,7 +204,9 @@ class Commands:
             if on_stderr is not None and len(execution.stderr) > before_err:
                 on_stderr(execution.stderr[before_err:])
 
-        return execution.result()
+        result = execution.result()
+        result._trace = self._recorder._since(trace_mark)
+        return result
 
     def interrupt(self) -> None:
         if self._running is not None:
