@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{RAM_BASE, RamView, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
+use super::{STAGING_BASE, RamView, VRING_DESC_F_NEXT, VRING_DESC_F_WRITE, VirtioMmio};
 use crate::trace::Tracer;
 
 const DEVICE_ID: u32 = 26; // VIRTIO_DEVICE_ID_FS
@@ -247,17 +247,15 @@ impl VirtioFs {
             (header_addr + 40, 0)
         };
 
-        let out_len: u32 = write_bufs.iter().map(|(_, l)| *l).sum();
-        let (out_addr, needs_scatter) = if write_bufs.len() == 1 {
-            (write_bufs[0].0, false)
+        let capacity: u32 = write_bufs.iter().map(|(_, len)| *len).sum();
+        let (contiguous_addr, contiguous_len) = contiguous_reply_window(&write_bufs);
+
+        let staged = header.opcode != FUSE_READ && contiguous_len < capacity;
+        let (out_addr, out_len) = if staged {
+            ram.begin_staging(STAGING_BASE, capacity as usize);
+            (STAGING_BASE, capacity)
         } else {
-            let (first_addr, first_len) = write_bufs[0];
-            if write_bufs[1].0 == first_addr + first_len as u64 {
-                (first_addr, false)
-            } else {
-                let scratch = RAM_BASE + ram.len() as u64 - 4096;
-                (scratch, true)
-            }
+            (contiguous_addr, contiguous_len)
         };
 
         let traced_request = match self.tracer {
@@ -270,7 +268,7 @@ impl VirtioFs {
             FUSE_LOOKUP => self.lookup(&header, ram, in_body_addr, in_body_len, out_addr, out_len),
             FUSE_GETATTR => self.getattr(&header, out_addr, out_len, ram),
             FUSE_OPEN | FUSE_OPENDIR => self.open(&header, ram, in_body_addr, out_addr, out_len),
-            FUSE_READ => self.read(&header, ram, in_body_addr, out_addr, out_len),
+            FUSE_READ => self.read(&header, ram, in_body_addr, &write_bufs),
             FUSE_READDIR => self.readdir(&header, ram, in_body_addr, out_addr, out_len, false),
             FUSE_READDIRPLUS => self.readdir(&header, ram, in_body_addr, out_addr, out_len, true),
             FUSE_RELEASE | FUSE_RELEASEDIR => {
@@ -297,22 +295,9 @@ impl VirtioFs {
             self.record_request(request, &header, ram, out_addr, used_len);
         }
 
-        if needs_scatter && used_len > 0 {
-            let mut src_offset = 0u64;
-            for &(buf_addr, buf_len) in &write_bufs {
-                let copy_len = (used_len as u64 - src_offset).min(buf_len as u64);
-
-                if copy_len == 0 {
-                    break;
-                }
-
-                for i in 0..copy_len {
-                    let b = ram.read_u8(out_addr + src_offset + i);
-                    ram.write_u8(buf_addr + i, b);
-                }
-
-                src_offset += copy_len;
-            }
+        if let Some(reply) = ram.take_staging() {
+            let written = (used_len as usize).min(reply.len());
+            scatter_write(ram, &write_bufs, 0, &reply[..written]);
         }
 
         used_len
@@ -648,12 +633,14 @@ impl VirtioFs {
         header: &FuseInHeader,
         ram: &mut RamView,
         in_body_addr: u64,
-        out_addr: u64,
-        out_len: u32,
+        write_bufs: &[(u64, u32)],
     ) -> u32 {
         let fh = ram.read_u64(in_body_addr);
         let offset = ram.read_u64(in_body_addr + 8);
         let size = ram.read_u32(in_body_addr + 16);
+        let out_addr = write_bufs[0].0;
+
+        let capacity: u64 = write_bufs.iter().map(|(_, len)| *len as u64).sum();
 
         let handle = match self.file_handles.get(&fh) {
             Some(h) => h,
@@ -667,18 +654,20 @@ impl VirtioFs {
 
         let _ = file.seek(std::io::SeekFrom::Start(offset));
 
-        let max_read = size.min(out_len.saturating_sub(16)) as usize;
+        let max_read = (size as u64).min(capacity.saturating_sub(16)) as usize;
         let mut buf = vec![0u8; max_read];
-        let bytes_read = match file.read(&mut buf) {
+        let bytes_read = match read_filling(&mut file, &mut buf) {
             Ok(n) => n,
             Err(_) => return self.reply_error(header, ENOENT, out_addr, ram),
         };
 
         let total = 16 + bytes_read as u32;
-        ram.write_u32(out_addr, total);
-        ram.write_u32(out_addr + 4, 0);
-        ram.write_u64(out_addr + 8, header.unique);
-        ram.write_bytes(out_addr + 16, &buf[..bytes_read]);
+        let mut out_header = [0u8; 16];
+        out_header[..4].copy_from_slice(&total.to_le_bytes());
+        out_header[8..].copy_from_slice(&header.unique.to_le_bytes());
+
+        scatter_write(ram, write_bufs, 0, &out_header);
+        scatter_write(ram, write_bufs, 16, &buf[..bytes_read]);
 
         total
     }
@@ -1388,4 +1377,164 @@ impl VirtioFs {
         ram.write_u64(out_addr + 8, header.unique);
         16
     }
+}
+
+fn contiguous_reply_window(write_bufs: &[(u64, u32)]) -> (u64, u32) {
+    let (first_addr, first_len) = write_bufs[0];
+    let mut len = first_len;
+
+    for &(addr, buf_len) in &write_bufs[1..] {
+        if addr != first_addr + len as u64 {
+            break;
+        }
+        len = len.saturating_add(buf_len);
+    }
+
+    (first_addr, len)
+}
+
+fn scatter_write(ram: &mut RamView, write_bufs: &[(u64, u32)], offset: u64, data: &[u8]) {
+    let mut remaining = data;
+    let mut reply_offset = 0u64;
+
+    for &(addr, len) in write_bufs {
+        if remaining.is_empty() {
+            return;
+        }
+
+        let len = len as u64;
+        let buffer_end = reply_offset + len;
+
+        if buffer_end > offset {
+            let skip = offset.saturating_sub(reply_offset);
+            let room = (len - skip) as usize;
+            let take = room.min(remaining.len());
+
+            ram.write_bytes(addr + skip, &remaining[..take]);
+            remaining = &remaining[take..];
+        }
+
+        reply_offset = buffer_end;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::RAM_BASE;
+    use crate::cow_ram::CowRam;
+
+    const RAM_BYTES: u64 = 1024 * 1024;
+
+    fn ram() -> CowRam {
+        CowRam::new(RAM_BYTES)
+    }
+
+    #[test]
+    fn a_reply_spans_buffers_the_guest_scattered_across_memory() {
+        let mut backing = ram();
+        let mut view = RamView::new(&mut backing, RAM_BYTES - 1);
+
+        let first = RAM_BASE + 0x1000;
+        let second = RAM_BASE + 0x9000;
+        let bufs = [(first, 16u32), (second, 32u32)];
+
+        let header: Vec<u8> = (0..16).collect();
+        let data: Vec<u8> = (100..120).collect();
+
+        scatter_write(&mut view, &bufs, 0, &header);
+        scatter_write(&mut view, &bufs, 16, &data);
+
+        let mut landed = vec![0u8; 16];
+        view.read_bytes(first, &mut landed);
+        assert_eq!(landed, header);
+
+        let mut payload = vec![0u8; data.len()];
+        view.read_bytes(second, &mut payload);
+        assert_eq!(payload, data);
+    }
+
+    #[test]
+    fn a_reply_longer_than_the_chain_stops_at_the_last_buffer() {
+        let mut backing = ram();
+        let mut view = RamView::new(&mut backing, RAM_BYTES - 1);
+
+        let only = RAM_BASE + 0x2000;
+        let bufs = [(only, 8u32)];
+        let guard = only + 8;
+        view.write_u8(guard, 0xAB);
+
+        scatter_write(&mut view, &bufs, 0, &[1u8; 64]);
+
+        assert_eq!(view.read_u8(guard), 0xAB, "wrote past the guest's buffer");
+    }
+
+    #[test]
+    fn a_split_payload_crosses_the_boundary_between_two_buffers() {
+        let mut backing = ram();
+        let mut view = RamView::new(&mut backing, RAM_BYTES - 1);
+
+        let first = RAM_BASE + 0x3000;
+        let second = RAM_BASE + 0xB000;
+        let bufs = [(first, 4u32), (second, 4u32)];
+
+        scatter_write(&mut view, &bufs, 0, &[1, 2, 3, 4, 5, 6, 7, 8]);
+
+        let mut head = vec![0u8; 4];
+        let mut tail = vec![0u8; 4];
+        view.read_bytes(first, &mut head);
+        view.read_bytes(second, &mut tail);
+
+        assert_eq!(head, [1, 2, 3, 4]);
+        assert_eq!(tail, [5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn a_staged_reply_never_touches_guest_memory_until_it_is_scattered() {
+        let mut backing = ram();
+        let mut view = RamView::new(&mut backing, RAM_BYTES - 1);
+
+        let guest = RAM_BASE + 0x6000;
+        view.write_u32(guest, 0xDEAD_BEEF);
+
+        view.begin_staging(STAGING_BASE, 64);
+        view.write_u32(STAGING_BASE, 16);
+        view.write_u64(STAGING_BASE + 8, 0x1122_3344);
+
+        assert_eq!(view.read_u32(STAGING_BASE), 16);
+        assert_eq!(view.read_u32(guest), 0xDEAD_BEEF, "guest memory was disturbed");
+
+        let staged = view.take_staging().expect("staging was started");
+        assert_eq!(&staged[..4], &16u32.to_le_bytes());
+        assert!(view.take_staging().is_none());
+    }
+
+    #[test]
+    fn touching_buffers_count_as_one_window_and_separated_ones_do_not() {
+        let base = RAM_BASE + 0x4000;
+
+        assert_eq!(
+            contiguous_reply_window(&[(base, 16), (base + 16, 48), (base + 64, 8)]),
+            (base, 72)
+        );
+        assert_eq!(
+            contiguous_reply_window(&[(base, 16), (base + 0x5000, 48)]),
+            (base, 16)
+        );
+    }
+}
+
+fn read_filling(file: &mut fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0;
+
+    while filled < buf.len() {
+        match file.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(count) => filled += count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(filled)
 }

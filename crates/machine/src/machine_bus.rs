@@ -249,7 +249,16 @@ impl MachineBus {
     }
 
     pub fn has_pending_io(&self) -> bool {
-        self.uart.rx_pending() || self.uart_data.rx_pending() || self.net_rx_pending()
+        self.uart.rx_pending()
+            || self.uart_data.rx_pending()
+            || self.net_rx_pending()
+            || self.fs_reply_pending()
+    }
+
+    pub fn fs_reply_pending(&self) -> bool {
+        self.fs_devices
+            .iter()
+            .any(|fs_device| fs_device.mmio.int_status != 0)
     }
 
     pub fn drain_console_tx(&mut self) -> Vec<u8> {
