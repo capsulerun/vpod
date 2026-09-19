@@ -106,7 +106,14 @@ impl Guest for Executor {
             })
             .collect();
 
-        SESSION_MANAGER.resume_session(snapshot_path, delta, command, prompt, mount_args, env_pairs(env)?)
+        SESSION_MANAGER.resume_session(
+            snapshot_path,
+            delta,
+            command,
+            prompt,
+            mount_args,
+            env_pairs(env)?,
+        )
     }
 
     fn session_trace_start(handle: u64, options: TraceOptions) -> Result<(), String> {
