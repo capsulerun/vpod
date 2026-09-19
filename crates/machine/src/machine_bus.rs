@@ -11,6 +11,7 @@ use crate::virtio::blk::VirtioBlk;
 use crate::virtio::console::VirtioConsole;
 use crate::virtio::fs::{Mount, VirtioFs};
 use crate::virtio::net::VirtioNet;
+use crate::virtio::secrets::SecretBinding;
 use crate::virtio::slirp::SlirpBackend;
 
 use crate::{
@@ -73,7 +74,11 @@ impl MachineBus {
     }
 
     pub fn attach_net(&mut self) {
-        let backend = SlirpBackend::new(GUEST_MAC);
+        self.attach_net_with_secrets(Vec::new());
+    }
+
+    pub fn attach_net_with_secrets(&mut self, secrets: Vec<SecretBinding>) {
+        let backend = SlirpBackend::with_secrets(GUEST_MAC, secrets);
         self.net = Some(VirtioNet::new(backend, GUEST_MAC));
     }
 

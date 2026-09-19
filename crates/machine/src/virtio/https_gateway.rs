@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use rustls::ClientConfig;
 use std::sync::Arc;
 
+use super::secrets::SecretBinding;
 use super::tls_proxy::{Timing, TlsContext, TlsProxy};
 use super::upstream::{PREAMBLE_PREFIX, Upstream, UpstreamMode, UpstreamStatus};
 use crate::trace::{HttpObserver, Tracer};
@@ -25,6 +26,7 @@ pub struct HttpsGateway {
     dst_ip: [u8; 4],
     timing: Option<Timing>,
     tracer: Option<Tracer>,
+    secrets: Vec<SecretBinding>,
 }
 
 impl HttpsGateway {
@@ -36,7 +38,12 @@ impl HttpsGateway {
             dst_ip,
             timing: Timing::new(),
             tracer: None,
+            secrets: Vec::new(),
         }
+    }
+
+    pub fn carry_secrets(&mut self, secrets: Vec<SecretBinding>) {
+        self.secrets = secrets;
     }
 
     pub fn observe_http(&mut self, tracer: Tracer) {
@@ -60,6 +67,7 @@ impl HttpsGateway {
             dst_ip,
             timing: None,
             tracer: None,
+            secrets: Vec::new(),
         }
     }
 
@@ -134,6 +142,8 @@ impl HttpsGateway {
                     if let Some(tracer) = self.tracer.take() {
                         proxy.observe_http(HttpObserver::new(tracer, "https", self.dst_ip, 443));
                     }
+
+                    proxy.carry_secrets(std::mem::take(&mut self.secrets));
                     proxy.push_from_guest(&buffered);
                     self.state = GatewayState::Tls(Box::new(proxy));
                 }

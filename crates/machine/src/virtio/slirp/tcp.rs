@@ -552,6 +552,7 @@ impl SlirpBackend {
 
         if let Some(ctx) = self.tls.as_ref().filter(|_| host_port == HTTPS_PORT) {
             let mut gateway = HttpsGateway::new(ctx, host_ip);
+            gateway.carry_secrets(self.secrets.clone());
             if let Some(tracer) = self
                 .tracer
                 .as_ref()

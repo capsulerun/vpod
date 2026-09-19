@@ -890,3 +890,153 @@ fn large_response_delivered_in_full_without_truncation() {
         .map(|i| got.len() - (i + 4));
     assert_eq!(body, Some(BODY), "large body truncated: {body:?} of {BODY}");
 }
+
+/// Drive a real guest TLS client through the proxy and return what the upstream
+/// received, or `None` when the proxy refused the connection.
+fn request_through_proxy(
+    proxy: &mut TlsProxy,
+    up_ca: &str,
+    seen: &std::sync::mpsc::Receiver<Vec<u8>>,
+    request: &str,
+) -> Option<String> {
+    let _ = up_ca;
+    let mut guest_roots = RootCertStore::empty();
+    let vpod_ca_der = Certificate::from_pem(CA_CERT_PEM)
+        .unwrap()
+        .to_der()
+        .unwrap();
+    guest_roots.add(CertificateDer::from(vpod_ca_der)).unwrap();
+
+    let guest_cfg = Arc::new(
+        ClientConfig::builder_with_provider(Arc::new(rustls_rustcrypto::provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(guest_roots)
+            .with_no_client_auth(),
+    );
+    let mut guest =
+        ClientConnection::new(guest_cfg, ServerName::try_from("localhost").unwrap()).unwrap();
+
+    let mut sent = false;
+    for _ in 0..2000 {
+        let mut out = Vec::new();
+        while guest.wants_write() {
+            guest.write_tls(&mut out).unwrap();
+        }
+        if !out.is_empty() {
+            proxy.push_from_guest(&out);
+        }
+
+        let mut buf = [0u8; 16384];
+        while let Some(n) = proxy.pull_to_guest(&mut buf) {
+            let mut slice = &buf[..n];
+            while !slice.is_empty() {
+                guest.read_tls(&mut slice).unwrap();
+            }
+            guest.process_new_packets().unwrap();
+        }
+
+        if !sent && !guest.is_handshaking() {
+            guest.writer().write_all(request.as_bytes()).unwrap();
+            sent = true;
+        }
+
+        if let Ok(received) = seen.try_recv() {
+            return Some(String::from_utf8_lossy(&received).into_owned());
+        }
+        if proxy.failed() {
+            return None;
+        }
+
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    seen.try_recv()
+        .ok()
+        .map(|received| String::from_utf8_lossy(&received).into_owned())
+}
+
+fn proxy_carrying(ctx: &TlsContext, up_ca: &str, port: u16, hosts: &[&str]) -> TlsProxy {
+    let mut proxy = TlsProxy::new_test(
+        ctx.server_config.clone(),
+        client_config_trusting(up_ca),
+        [127, 0, 0, 1],
+        port,
+    );
+    proxy.carry_secrets(vec![SecretBinding {
+        placeholder: "vpod-secret-key-a1b2c3d4".to_string(),
+        value: "sk-ant-the-real-thing".to_string(),
+        hosts: hosts.iter().map(|host| host.to_string()).collect(),
+    }]);
+
+    proxy
+}
+
+#[test]
+fn a_credential_the_guest_never_held_reaches_the_upstream() {
+    let (port, up_ca, seen, host) = spawn_capturing_upstream(UPSTREAM_REPLY);
+    let ctx = TlsContext::new().unwrap();
+    let mut proxy = proxy_carrying(&ctx, &up_ca, port, &["localhost"]);
+
+    let received = request_through_proxy(
+        &mut proxy,
+        &up_ca,
+        &seen,
+        "GET / HTTP/1.1\r\nHost: localhost\r\n\
+         x-api-key: vpod-secret-key-a1b2c3d4\r\nContent-Length: 0\r\n\r\n",
+    )
+    .expect("the upstream never saw a request");
+
+    let _ = host.join();
+
+    assert!(
+        received.contains("sk-ant-the-real-thing"),
+        "the real credential never went out: {received}"
+    );
+    assert!(
+        !received.contains("vpod-secret-key-a1b2c3d4"),
+        "the stand-in went out as well: {received}"
+    );
+}
+
+#[test]
+fn a_credential_bound_elsewhere_never_leaves_the_machine() {
+    let (port, up_ca, seen, host) = spawn_capturing_upstream(UPSTREAM_REPLY);
+    let ctx = TlsContext::new().unwrap();
+    // The allowlist names a host this connection is not going to.
+    let mut proxy = proxy_carrying(&ctx, &up_ca, port, &["api.anthropic.com"]);
+
+    let received = request_through_proxy(
+        &mut proxy,
+        &up_ca,
+        &seen,
+        "GET / HTTP/1.1\r\nHost: api.anthropic.com\r\n\
+         x-api-key: vpod-secret-key-a1b2c3d4\r\nContent-Length: 0\r\n\r\n",
+    );
+
+    drop(host);
+
+    assert!(
+        received.is_none(),
+        "the request was forwarded to a host outside the allowlist: {received:?}"
+    );
+    assert!(
+        proxy.failed(),
+        "the connection was left open after refusing"
+    );
+}
+
+#[test]
+fn a_request_without_a_credential_is_unchanged_by_the_substitution() {
+    let (port, up_ca, seen, host) = spawn_capturing_upstream(UPSTREAM_REPLY);
+    let ctx = TlsContext::new().unwrap();
+    let mut proxy = proxy_carrying(&ctx, &up_ca, port, &["localhost"]);
+
+    let wire = "GET /plain HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n";
+    let received = request_through_proxy(&mut proxy, &up_ca, &seen, wire)
+        .expect("the upstream never saw a request");
+
+    let _ = host.join();
+
+    assert_eq!(received, wire);
+}
