@@ -1227,5 +1227,9 @@ def test_env_survives_suspend_and_resume():
     resumed = Sandbox.resume(instance_id)
     try:
         assert resumed.commands.run("echo $VPOD_GREETING").stdout.strip() == "hello"
+
+        code = resumed.code.run("import os; print(os.environ['VPOD_GREETING'])")
+        assert code.success, code.error
+        assert code.text.strip() == "hello"
     finally:
         resumed.close()
