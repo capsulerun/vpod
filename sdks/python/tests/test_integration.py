@@ -1168,3 +1168,64 @@ def test_stdin_is_delivered_byte_for_byte():
         result = sbx.commands.run("base64", stdin=raw, timeout=120)
         assert result.exit_code == 0, result
         assert _b64.b64decode(result.stdout.replace("\n", "")) == raw
+
+
+def test_env_reaches_a_command():
+    with Sandbox.create(env={"VPOD_GREETING": "hello"}) as sbx:
+        result = sbx.commands.run("echo $VPOD_GREETING")
+
+        assert result.success
+        assert result.stdout.strip() == "hello"
+
+
+def test_env_value_with_shell_syntax_arrives_literally():
+    hostile = "'; echo pwned; x='$HOME `id`"
+
+    with Sandbox.create(env={"VPOD_HOSTILE": hostile}) as sbx:
+        result = sbx.commands.run('printf %s "$VPOD_HOSTILE"')
+
+        assert result.success
+        assert result.stdout == hostile
+
+
+def test_env_reaches_a_child_process():
+    with Sandbox.create(env={"VPOD_GREETING": "hello"}) as sbx:
+        result = sbx.commands.run("sh -c 'echo $VPOD_GREETING'")
+
+        assert result.stdout.strip() == "hello"
+
+
+def test_env_reaches_code_run():
+    with Sandbox.create(env={"VPOD_GREETING": "hello"}) as sbx:
+        result = sbx.code.run("import os; print(os.environ['VPOD_GREETING'])")
+
+        assert result.success, result.error
+        assert result.text.strip() == "hello"
+
+
+def test_a_long_env_value_survives():
+    value = "abc'def" * 400
+
+    with Sandbox.create(env={"VPOD_BIG": value}) as sbx:
+        result = sbx.commands.run('printf %s "$VPOD_BIG" | wc -c')
+
+        assert result.stdout.strip() == str(len(value))
+
+
+def test_env_name_that_is_not_an_identifier_is_refused():
+    with pytest.raises(ValueError, match="plain identifier"):
+        Sandbox.create(env={"NOT AN IDENT": "x"})
+
+
+def test_env_survives_suspend_and_resume():
+    sbx = Sandbox.create(env={"VPOD_GREETING": "hello"})
+    try:
+        instance_id = sbx.suspend()
+    finally:
+        pass
+
+    resumed = Sandbox.resume(instance_id)
+    try:
+        assert resumed.commands.run("echo $VPOD_GREETING").stdout.strip() == "hello"
+    finally:
+        resumed.close()

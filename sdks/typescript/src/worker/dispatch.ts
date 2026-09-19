@@ -14,6 +14,7 @@ import { componentImports } from "./component-imports.js";
 import type { ComponentModule, CoreModuleLoader } from "./component-imports.js";
 import type { DriverCommand } from "../net/driver-protocol.js";
 import type { ExecutionResult, WorkerCall } from "./protocol.js";
+import type { EnvVar } from "../env.js";
 import { MOUNTS_NEED_A_HOST, type MountEntry } from "../mounts.js";
 import type { WireTraceOptions } from "../trace.js";
 
@@ -36,6 +37,7 @@ export interface Executor {
         command: string,
         prompt: string,
         mounts: never[],
+        env: EnvVar[],
     ): bigint;
     sessionExec(
         handle: bigint,
@@ -59,6 +61,7 @@ export interface Executor {
         command: string,
         prompt: string,
         mounts: never[],
+        env: EnvVar[],
     ): bigint;
     sessionTraceStart?(handle: bigint, options: WireTraceOptions): void;
     sessionTraceDrain?(handle: bigint, maxBytes: number): string;
@@ -200,6 +203,7 @@ export class Dispatcher {
                         call.command,
                         call.prompt,
                         [],
+                        call.env,
                     );
                 } catch (thrown: unknown) {
                     throw await this.#explainRejectedSnapshot(call.snapshotPath, thrown);
@@ -259,6 +263,7 @@ export class Dispatcher {
                         call.command,
                         call.prompt,
                         [],
+                        call.env,
                     );
                 } finally {
                     removeGuestFile(path);

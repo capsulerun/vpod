@@ -1140,6 +1140,13 @@ mod env_tests {
     }
 
     #[test]
+    fn a_quote_is_closed_escaped_and_reopened() {
+        assert_eq!(shell_quote("a'b"), r#"'a'\''b'"#);
+        assert_eq!(shell_quote("plain"), "'plain'");
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
     fn a_plain_value_becomes_one_quoted_assignment() {
         assert_eq!(
             env_statements(&pairs(&[("TZ", "UTC")])),

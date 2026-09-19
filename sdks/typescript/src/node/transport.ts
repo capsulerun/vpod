@@ -12,6 +12,7 @@ import { componentImports, loadCoreModule } from "./component-imports.js";
 import { FileSnapshotStore } from "./store.js";
 import type { ComponentModule } from "../worker/component-imports.js";
 import type { ExecutorTransport } from "../transport/types.js";
+import type { EnvVar } from "../env.js";
 import type { MountEntry } from "../mounts.js";
 import type { ExecutionResult, WorkerCall } from "../worker/protocol.js";
 import type { WireTraceOptions } from "../trace.js";
@@ -40,6 +41,7 @@ interface Executor {
         command: string,
         prompt: string,
         mounts: MountEntry[],
+        env: EnvVar[],
     ): bigint;
     sessionExec(handle: bigint, code: string, timeout: bigint | undefined): ExecutionResult;
     sessionExecSlice(
@@ -59,6 +61,7 @@ interface Executor {
         command: string,
         prompt: string,
         mounts: MountEntry[],
+        env: EnvVar[],
     ): bigint;
     sessionTraceStart?(handle: bigint, options: WireTraceOptions): void;
     sessionTraceDrain?(handle: bigint, maxBytes: number): string;
@@ -153,6 +156,7 @@ export class NodeDispatcher {
                     call.command,
                     call.prompt,
                     hostMounts(call.mounts),
+                    call.env,
                 );
 
             case "session-exec":
@@ -210,6 +214,7 @@ export class NodeDispatcher {
                         call.command,
                         call.prompt,
                         hostMounts(call.mounts),
+                        call.env,
                     );
                 } finally {
                     await rm(path, { force: true });
