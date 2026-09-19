@@ -36,6 +36,97 @@ const TRACE_START_COMMAND: &str = "echo 2 > /proc/sys/kernel/io_uring_disabled 2
 
 const AOT_MISMATCH_PROBE_THRESHOLD: u64 = 64;
 
+const ENV_VALUE_CHUNK: usize = 400; //for secret/env api
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn env_statements(env: &[(String, String)]) -> Vec<String> {
+    let mut statements = Vec::new();
+
+    for (name, value) in env {
+        let mut chunks = value
+            .as_bytes()
+            .chunks(ENV_VALUE_CHUNK)
+            .map(|chunk| String::from_utf8_lossy(chunk).into_owned());
+
+        let first = chunks.next().unwrap_or_default();
+        statements.push(format!("export {}={}", name, shell_quote(&first)));
+
+        for chunk in chunks {
+            statements.push(format!("{0}=\"${0}\"{1}", name, shell_quote(&chunk)));
+        }
+    }
+
+    statements
+}
+
+fn apply_env_to_shell(
+    bus: &mut MachineBus,
+    hart: &mut Hart,
+    prompt: &[u8],
+    env: &[(String, String)],
+) {
+    let mut line = String::new();
+
+    for statement in env_statements(env) {
+        if !line.is_empty() && line.len() + statement.len() + 2 > MAX_INLINE_EXEC {
+            run_shell_line(bus, hart, prompt, &line);
+            line.clear();
+        }
+
+        if !line.is_empty() {
+            line.push_str("; ");
+        }
+        line.push_str(&statement);
+    }
+
+    if !line.is_empty() {
+        run_shell_line(bus, hart, prompt, &line);
+    }
+}
+
+fn run_shell_line(bus: &mut MachineBus, hart: &mut Hart, prompt: &[u8], line: &str) {
+    for byte in line.bytes() {
+        bus.uart.push_rx(byte);
+    }
+    bus.uart.push_rx(b'\n');
+
+    repl::wait_for_prompt(bus, hart, prompt);
+    bus.uart.drain_tx();
+}
+
+fn apply_env_to_pyrunner(bus: &mut MachineBus, hart: &mut Hart, env: &[(String, String)]) {
+    let encode = |text: &str| base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+
+    let pairs: Vec<String> = env
+        .iter()
+        .map(|(name, value)| {
+            format!(
+                "_d(\"{}\").decode(): _d(\"{}\").decode()",
+                encode(name),
+                encode(value)
+            )
+        })
+        .collect();
+
+    let source = format!(
+        "import os\nfrom base64 import b64decode as _d\nos.environ.update({{{}}})\ndel _d\n",
+        pairs.join(", ")
+    );
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
+    for byte in encoded.bytes() {
+        bus.uart_data.push_rx(byte);
+    }
+    bus.uart_data.push_rx(b'\n');
+
+    repl::capture_output(bus, hart, b"", 30, false, Some(PYRUNNER_SENTINEL), true);
+    bus.uart_stderr.drain_tx();
+    bus.uart_ctrl.drain_tx();
+}
+
 fn warn_if_aot_mismatch(hart: &Hart) {
     static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -67,6 +158,7 @@ pub struct Session {
     pub shell_lost: bool,
     pub exec: Option<repl::ExecState>,
     pub staged_stdin: Vec<u8>,
+    pub env: Vec<(String, String)>,
 }
 
 fn recover_shell(session: &mut Session) {
@@ -430,6 +522,7 @@ impl SessionManager {
         command: String,
         prompt: String,
         mount_args: Vec<vm::MountArg>,
+        env: Vec<(String, String)>,
     ) -> Result<u64, String> {
         self.ensure_base(&snapshot_path)?;
 
@@ -514,6 +607,16 @@ impl SessionManager {
             bus.uart.drain_tx();
         }
 
+        if !env.is_empty() {
+            if is_shell || use_pyrunner {
+                apply_env_to_shell(&mut bus, &mut hart, &prompt_bytes, &env);
+            }
+
+            if python_ready {
+                apply_env_to_pyrunner(&mut bus, &mut hart, &env);
+            }
+        }
+
         if is_shell {
             install_prompt_sentinel(&mut bus, &mut hart, &mut prompt_bytes);
         }
@@ -536,6 +639,7 @@ impl SessionManager {
                 shell_lost: false,
                 exec: None,
                 staged_stdin: Vec::new(),
+                env,
             },
         );
 
@@ -582,6 +686,11 @@ impl SessionManager {
             if session.pyrunner_dirty {
                 restart_pyrunner(session);
                 session.pyrunner_dirty = false;
+
+                if !session.env.is_empty() {
+                    let env = session.env.clone();
+                    apply_env_to_pyrunner(&mut session.bus, &mut session.hart, &env);
+                }
             }
 
             if !session.pyrunner_reseeded {
@@ -795,6 +904,7 @@ impl SessionManager {
         _command: String,
         _prompt: String,
         mount_args: Vec<vm::MountArg>,
+        env: Vec<(String, String)>,
     ) -> Result<u64, String> {
         self.ensure_base(&snapshot_path)?;
 
@@ -843,6 +953,14 @@ impl SessionManager {
                 (true, false, false, false, b"# ".to_vec())
             };
 
+        if !env.is_empty() {
+            apply_env_to_shell(&mut bus, &mut hart, &prompt, &env);
+
+            if has_pyrunner {
+                apply_env_to_pyrunner(&mut bus, &mut hart, &env);
+            }
+        }
+
         if is_shell {
             install_prompt_sentinel(&mut bus, &mut hart, &mut prompt);
         }
@@ -865,6 +983,7 @@ impl SessionManager {
                 shell_lost: false,
                 exec: None,
                 staged_stdin: Vec::new(),
+                env,
             },
         );
 
@@ -1007,4 +1126,140 @@ fn restart_pyrunner(session: &mut Session) {
     session.bus.uart_ctrl.drain_tx();
 
     session.pyrunner_reseeded = true;
+}
+
+#[cfg(test)]
+mod env_tests {
+    use super::{ENV_VALUE_CHUNK, MAX_INLINE_EXEC, env_statements, shell_quote};
+
+    fn pairs(entries: &[(&str, &str)]) -> Vec<(String, String)> {
+        entries
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_plain_value_becomes_one_quoted_assignment() {
+        assert_eq!(
+            env_statements(&pairs(&[("TZ", "UTC")])),
+            vec!["export TZ='UTC'"]
+        );
+    }
+
+    fn value_a_shell_sees(name: &str, value: &str) -> String {
+        let script = format!(
+            "{}\nprintf %s \"${}\"",
+            env_statements(&pairs(&[(name, value)])).join("\n"),
+            name
+        );
+
+        let output = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&script)
+            .output()
+            .expect("could not run /bin/sh");
+
+        assert!(
+            output.status.success(),
+            "the shell rejected the export: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    #[test]
+    fn a_value_carrying_shell_syntax_arrives_literally() {
+        for hostile in [
+            "'; rm -rf /; echo '",
+            "$HOME",
+            "`id`",
+            "$(id)",
+            "a'b",
+            "''",
+            "\\",
+            "line one\nline two",
+            "trailing space ",
+            "* ? [a-z]",
+        ] {
+            assert_eq!(
+                value_a_shell_sees("K", hostile),
+                hostile,
+                "the shell did not see {hostile:?} literally"
+            );
+        }
+    }
+
+    #[test]
+    fn a_long_value_survives_being_appended_in_pieces() {
+        let value: String = std::iter::repeat_n("abc'def", 400).collect();
+
+        assert_eq!(value_a_shell_sees("BIG", &value), value);
+    }
+
+    #[test]
+    fn every_quote_in_a_value_is_escaped() {
+        let statements = env_statements(&pairs(&[("K", "a'b'c")]));
+        let assignment = &statements[0];
+
+        assert_eq!(assignment, r#"export K='a'\''b'\''c'"#);
+        assert_eq!(
+            assignment.matches(r"'\''").count(),
+            2,
+            "one escape per quote in the value"
+        );
+    }
+
+    #[test]
+    fn a_dollar_sign_is_not_expanded() {
+        assert_eq!(
+            env_statements(&pairs(&[("K", "$HOME `id` $(id)")])),
+            vec!["export K='$HOME `id` $(id)'"]
+        );
+    }
+
+    #[test]
+    fn a_long_value_is_appended_across_statements_that_each_fit() {
+        let value = "x".repeat(ENV_VALUE_CHUNK * 3 + 7);
+        let statements = env_statements(&pairs(&[("BIG", &value)]));
+
+        assert_eq!(statements.len(), 4, "one assignment plus three appends");
+        assert!(statements[0].starts_with("export BIG='"));
+        assert!(statements[1].starts_with(r#"BIG="$BIG"'"#));
+
+        for statement in &statements {
+            assert!(
+                statement.len() < MAX_INLINE_EXEC,
+                "a statement outran the shell's input limit at {} bytes",
+                statement.len()
+            );
+        }
+    }
+
+    #[test]
+    fn a_long_value_of_nothing_but_quotes_still_fits() {
+        let value = "'".repeat(ENV_VALUE_CHUNK);
+        let statements = env_statements(&pairs(&[("Q", &value)]));
+
+        for statement in &statements {
+            assert!(
+                statement.len() < MAX_INLINE_EXEC,
+                "escaping pushed a statement to {} bytes",
+                statement.len()
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_value_is_still_exported() {
+        assert_eq!(env_statements(&pairs(&[("K", "")])), vec!["export K=''"]);
+    }
+
+    #[test]
+    fn variables_keep_the_order_they_were_given() {
+        let statements = env_statements(&pairs(&[("A", "1"), ("B", "2")]));
+
+        assert_eq!(statements, vec!["export A='1'", "export B='2'"]);
+    }
 }

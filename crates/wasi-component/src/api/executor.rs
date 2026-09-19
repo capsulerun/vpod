@@ -1,8 +1,30 @@
 use crate::api::session::SESSION_MANAGER;
 use crate::exports::vpod::sandbox::executor::{
-    ExecMode, ExecutionResult, Guest, MountEntry, SliceOutput, TraceOptions,
+    EnvVar, ExecMode, ExecutionResult, Guest, MountEntry, SliceOutput, TraceOptions,
 };
 use crate::vm;
+
+fn env_pairs(env: Vec<EnvVar>) -> Result<Vec<(String, String)>, String> {
+    env.into_iter()
+        .map(|entry| {
+            let valid = !entry.name.is_empty()
+                && !entry.name.starts_with(|c: char| c.is_ascii_digit())
+                && entry
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_');
+
+            if !valid {
+                return Err(format!(
+                    "environment variable name {:?} is not a plain identifier",
+                    entry.name
+                ));
+            }
+
+            Ok((entry.name, entry.value))
+        })
+        .collect()
+}
 
 pub struct Executor;
 
@@ -12,6 +34,7 @@ impl Guest for Executor {
         command: String,
         prompt: String,
         mounts: Vec<MountEntry>,
+        env: Vec<EnvVar>,
     ) -> Result<u64, String> {
         let mount_args: Vec<vm::MountArg> = mounts
             .into_iter()
@@ -22,7 +45,7 @@ impl Guest for Executor {
             })
             .collect();
 
-        SESSION_MANAGER.start_session(snapshot_path, command, prompt, mount_args)
+        SESSION_MANAGER.start_session(snapshot_path, command, prompt, mount_args, env_pairs(env)?)
     }
 
     fn session_exec(
@@ -69,6 +92,7 @@ impl Guest for Executor {
         command: String,
         prompt: String,
         mounts: Vec<MountEntry>,
+        env: Vec<EnvVar>,
     ) -> Result<u64, String> {
         let delta = std::fs::read(&delta_path)
             .map_err(|e| format!("failed to read delta from {delta_path}: {e}"))?;
@@ -82,7 +106,7 @@ impl Guest for Executor {
             })
             .collect();
 
-        SESSION_MANAGER.resume_session(snapshot_path, delta, command, prompt, mount_args)
+        SESSION_MANAGER.resume_session(snapshot_path, delta, command, prompt, mount_args, env_pairs(env)?)
     }
 
     fn session_trace_start(handle: u64, options: TraceOptions) -> Result<(), String> {
