@@ -3,6 +3,7 @@ import os
 import re
 import uuid
 from os.path import abspath
+from secrets import token_hex
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +23,61 @@ from .commands import Commands
 from .trace import TraceRecorder, trace_options
 
 INSTANCES_DIR = Path.home() / ".vpod" / "instances"
+
+
+def _parse_secrets(secrets: dict[str, dict]) -> list[dict]:
+    """A credential the sandbox can spend but never read.
+
+    The guest is given a stand-in through its environment. The value itself goes
+    only to the network gateway, which swaps it back in on the way out, and only
+    for a host on the secret's list.
+    """
+    parsed = []
+
+    for name, spec in secrets.items():
+        if not _ENV_NAME.fullmatch(name):
+            raise ValueError(f"secret name {name!r} is not a plain identifier")
+        if not isinstance(spec, dict):
+            raise TypeError(
+                f"secret {name!r} must be a dict with 'value' and 'hosts', got {spec!r}"
+            )
+
+        value = spec.get("value")
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"secret {name!r} needs a non-empty string value")
+
+        hosts = spec.get("hosts")
+        if isinstance(hosts, str):
+            hosts = [hosts]
+        if not hosts or not all(isinstance(host, str) and host for host in hosts):
+            raise ValueError(f"secret {name!r} needs at least one host it may be sent to")
+
+        placeholder = spec.get("placeholder") or f"vpod-secret-{name.lower()}-{token_hex(4)}"
+        if not isinstance(placeholder, str) or not placeholder:
+            raise ValueError(f"secret {name!r} has an empty placeholder")
+
+        parsed.append({
+            "name": name,
+            "placeholder": placeholder,
+            "value": value,
+            "hosts": list(hosts),
+        })
+
+    return parsed
+
+
+def _secret_entries(secrets: list[dict]) -> list:
+    entries = []
+
+    for secret in secrets:
+        entry = object.__new__(type("SecretBinding", (), {}))
+        object.__setattr__(entry, "name", secret["name"])
+        object.__setattr__(entry, "placeholder", secret["placeholder"])
+        object.__setattr__(entry, "value", secret["value"])
+        object.__setattr__(entry, "hosts", secret["hosts"])
+        entries.append(entry)
+
+    return entries
 
 
 def _parse_env(env: dict[str, str]) -> dict[str, str]:
@@ -83,6 +139,7 @@ class Sandbox:
         snapshot: str = "alpine:latest",
         mounts: dict[str, str] | None = None,
         env: dict[str, str] | None = None,
+        secrets: dict[str, dict] | None = None,
         registry_url: str | None = None,
         api_key: str | None = None,
         engine: str = "auto",
@@ -101,6 +158,7 @@ class Sandbox:
         self._snapshot_file = snapshot_path
         self._mounts = _parse_mounts(mounts) if mounts else []
         self._env = _parse_env(env) if env else {}
+        self._secrets = _parse_secrets(secrets) if secrets else []
         self._shell_session_id: Optional[int] = None
         self._in_context = False
         self._migrating = False
@@ -162,6 +220,7 @@ class Sandbox:
         snapshot: str = "vsnap-base:latest",
         mounts: dict[str, str] | None = None,
         env: dict[str, str] | None = None,
+        secrets: dict[str, dict] | None = None,
         registry_url: str | None = None,
         api_key: str | None = None,
         engine: str = "auto",
@@ -171,6 +230,7 @@ class Sandbox:
             snapshot,
             mounts=mounts,
             env=env,
+            secrets=secrets,
             registry_url=registry_url,
             api_key=api_key,
             engine=engine,
@@ -195,6 +255,9 @@ class Sandbox:
     def _env_entries(self) -> list:
         return _env_entries(self._env)
 
+    def _secret_entries(self) -> list:
+        return _secret_entries(self._secrets)
+
     def _get_shell_session_id(self) -> int:
         self._maybe_upgrade_engine()
         if self._shell_session_id is None:
@@ -204,6 +267,7 @@ class Sandbox:
                 _DEFAULT_PROMPT,
                 self._mount_entries(),
                 self._env_entries(),
+                self._secret_entries(),
             )
             self._shell_session_id = int(_unwrap_result(result))
             self.trace._start(self._exports, self._shell_session_id)
@@ -241,6 +305,7 @@ class Sandbox:
                     result = exports["session-resume"](
                         self._snapshot_path, delta_rel, _DEFAULT_SHELL,
                         _DEFAULT_PROMPT, self._mount_entries(), self._env_entries(),
+                        self._secret_entries(),
                     )
                     self._shell_session_id = int(_unwrap_result(result))
                     self.trace._start(exports, self._shell_session_id)
@@ -320,9 +385,11 @@ class Sandbox:
         instance_id: str,
         mounts: dict[str, str] | None = None,
         env: dict[str, str] | None = None,
+        secrets: dict[str, dict] | None = None,
         trace=None,
     ) -> "Sandbox":
         resumed_env = _parse_env(env) if env else {}
+        resumed_secrets = _parse_secrets(secrets) if secrets else []
         options = trace_options(trace)
         instance_dir = INSTANCES_DIR / instance_id
         meta = json.loads((instance_dir / "meta.json").read_text())
@@ -392,10 +459,12 @@ class Sandbox:
             _DEFAULT_PROMPT,
             mount_entries,
             _env_entries(resumed_env),
+            _secret_entries(resumed_secrets),
         )
         session_id = int(_unwrap_result(result))
 
         instance._env = resumed_env
+        instance._secrets = resumed_secrets
         instance._snapshot_path = snap_rel
         instance._snapshot_file = snapshot_path
         instance._tier = tier

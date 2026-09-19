@@ -8,6 +8,7 @@ import { capabilitiesOf } from "./net/capabilities.js";
 import type { NetworkBackendName, NetworkCapabilities } from "./net/capabilities.js";
 import type { ExecutorTransport } from "./transport/types.js";
 import type { EnvVar } from "./env.js";
+import type { SecretBinding } from "./secrets.js";
 import type { MountEntry } from "./mounts.js";
 import type { WireTraceOptions } from "./trace.js";
 import type {
@@ -94,6 +95,7 @@ export class SandboxRuntime {
         prompt = "# ",
         mounts: MountEntry[] = [],
         env: EnvVar[] = [],
+        secrets: SecretBinding[] = [],
     ): Promise<bigint> {
         return this.#transport.call<bigint>({
             kind: "session-start",
@@ -102,6 +104,7 @@ export class SandboxRuntime {
             prompt,
             mounts,
             env,
+            secrets,
         });
     }
 
@@ -158,9 +161,19 @@ export class SandboxRuntime {
         prompt = "# ",
         mounts: MountEntry[] = [],
         env: EnvVar[] = [],
+        secrets: SecretBinding[] = [],
     ): Promise<bigint> {
         return this.#transport.call<bigint>(
-            { kind: "session-resume", snapshotPath, deltaBytes, command, prompt, mounts, env },
+            {
+                kind: "session-resume",
+                snapshotPath,
+                deltaBytes,
+                command,
+                prompt,
+                mounts,
+                env,
+                secrets,
+            },
             [deltaBytes],
         );
     }

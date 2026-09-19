@@ -11,6 +11,7 @@ use crate::vm;
 
 use machine::machine_bus::MachineBus;
 use machine::trace::{DEFAULT_BUFFER_BYTES, TraceOptions};
+use machine::virtio::secrets::SecretBinding;
 use riscv_core::Hart;
 
 const PYRUNNER_SENTINEL: &str = "---VPOD_DONE---";
@@ -523,6 +524,7 @@ impl SessionManager {
         prompt: String,
         mount_args: Vec<vm::MountArg>,
         env: Vec<(String, String)>,
+        secrets: Vec<SecretBinding>,
     ) -> Result<u64, String> {
         self.ensure_base(&snapshot_path)?;
 
@@ -531,7 +533,8 @@ impl SessionManager {
         let flags = cached.flags;
         let ram_size = cached.base.ram_size();
 
-        let (mut bus, mut hart) = vm::_bus_from_base(&cached.base, ram_size, &mount_args, true);
+        let (mut bus, mut hart) =
+            vm::_bus_from_base(&cached.base, ram_size, &mount_args, true, secrets);
 
         machine::snapshot::restore_devices(
             &mut bus,
@@ -897,6 +900,7 @@ impl SessionManager {
         Ok(buf)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn resume_session(
         &self,
         snapshot_path: String,
@@ -905,13 +909,15 @@ impl SessionManager {
         _prompt: String,
         mount_args: Vec<vm::MountArg>,
         env: Vec<(String, String)>,
+        secrets: Vec<SecretBinding>,
     ) -> Result<u64, String> {
         self.ensure_base(&snapshot_path)?;
 
         let cache = self.base_cache.borrow();
         let cached = cache.as_ref().unwrap();
         let ram_size = cached.base.ram_size();
-        let (mut bus, mut hart) = vm::_bus_from_base(&cached.base, ram_size, &mount_args, true);
+        let (mut bus, mut hart) =
+            vm::_bus_from_base(&cached.base, ram_size, &mount_args, true, secrets);
         drop(cache);
 
         let meta_len_offset = delta.len() - 4;

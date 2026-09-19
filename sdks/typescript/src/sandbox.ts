@@ -23,6 +23,7 @@ import {
 import { defaultStore } from "./snapshots/index.js";
 import { resolveRegistryUrl } from "./snapshots/registry.js";
 import { envVars, type EnvSpec, type EnvVar } from "./env.js";
+import { secretBindings, type SecretBinding, type SecretsSpec } from "./secrets.js";
 import { mountEntries, type MountEntry, type MountSpec } from "./mounts.js";
 import {
     TRACE_NOT_SUPPORTED,
@@ -68,6 +69,8 @@ export interface SandboxOptions extends SandboxRuntimeOptions {
     mounts?: MountSpec;
     /** Environment variables the guest starts with. */
     env?: EnvSpec;
+    /** Credentials the guest can use but never read. */
+    secrets?: SecretsSpec;
 }
 
 interface ImageEngine {
@@ -451,6 +454,7 @@ export class Sandbox {
     readonly #imageEngineSha256: string | null;
     readonly #mounts: MountEntry[];
     readonly #env: EnvVar[];
+    readonly #secrets: SecretBinding[];
     #sessionHandle: bigint | null = null;
 
     private constructor(
@@ -461,6 +465,7 @@ export class Sandbox {
         trace: WireTraceOptions | null,
         mounts: MountEntry[] = [],
         env: EnvVar[] = [],
+        secrets: SecretBinding[] = [],
     ) {
         this.#runtime = runtime;
         this.#snapshotPath = snapshotPath;
@@ -468,6 +473,7 @@ export class Sandbox {
         this.#imageEngineSha256 = imageEngineSha256;
         this.#mounts = mounts;
         this.#env = env;
+        this.#secrets = secrets;
         this.commands = new Commands(this);
         this.code = new Code(this);
         this.trace = new TraceRecorder(trace, async (maxBytes) =>
@@ -644,6 +650,7 @@ export class Sandbox {
         const trace = traceOptions(options.trace);
         const mounts = mountEntries(options.mounts);
         const env = envVars(options.env);
+        const secrets = secretBindings(options.secrets);
         const snapshot = options.snapshot ?? DEFAULT_SNAPSHOT;
         const cachedEngine =
             typeof snapshot === "string" ? await Sandbox.#cachedImageEngine(options, snapshot) : null;
@@ -666,6 +673,7 @@ export class Sandbox {
             trace,
             mounts,
             env,
+            secrets,
         );
     }
 
@@ -772,6 +780,7 @@ export class Sandbox {
                 DEFAULT_PROMPT,
                 this.#mounts,
                 this.#env,
+                this.#secrets,
             );
             await this.#startTrace(this.#sessionHandle);
         }
@@ -811,6 +820,7 @@ export class Sandbox {
         const trace = traceOptions(options.trace);
         const mounts = mountEntries(options.mounts);
         const env = envVars(options.env);
+        const secrets = secretBindings(options.secrets);
         const snapshot = options.snapshot ?? resolved.snapshotId;
         let wanted: ImageEngine | null;
         if (resolved.engineSha256 !== undefined) {
@@ -848,6 +858,7 @@ export class Sandbox {
             trace,
             mounts,
             env,
+            secrets,
         );
         const delta = resolved.delta.slice();
         sandbox.#sessionHandle = await runtime.sessionResume(
@@ -857,6 +868,7 @@ export class Sandbox {
             DEFAULT_PROMPT,
             mounts,
             env,
+            secrets,
         );
         await sandbox.#startTrace(sandbox.#sessionHandle);
 

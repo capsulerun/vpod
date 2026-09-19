@@ -39,11 +39,16 @@ def mock_component(request, monkeypatch):
             **{"exit-code": result.returncode},
         )
 
-    def fake_session_start(snapshot_path, command, prompt, mounts=None, env=None):
+    def fake_session_start(
+        snapshot_path, command, prompt, mounts=None, env=None, secrets=None
+    ):
         session_counter["id"] += 1
         sid = session_counter["id"]
         sessions[sid] = {
-            "env": {entry.name: entry.value for entry in (env or [])},
+            "env": {
+                **{entry.name: entry.value for entry in (env or [])},
+                **{entry.name: entry.placeholder for entry in (secrets or [])},
+            },
             "type": command,
         }
         return sid

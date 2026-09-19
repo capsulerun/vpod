@@ -14,6 +14,7 @@ export {
 } from "./execution.js";
 
 export type { EnvSpec, EnvVar } from "./env.js";
+export type { SecretBinding, SecretSpec, SecretsSpec } from "./secrets.js";
 export type { MountEntry, MountSpec } from "./mounts.js";
 
 export { Trace, TraceRecorder } from "./trace.js";

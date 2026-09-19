@@ -1,8 +1,10 @@
 use crate::api::session::SESSION_MANAGER;
 use crate::exports::vpod::sandbox::executor::{
-    EnvVar, ExecMode, ExecutionResult, Guest, MountEntry, SliceOutput, TraceOptions,
+    EnvVar, ExecMode, ExecutionResult, Guest, MountEntry, SecretBinding as WitSecret, SliceOutput,
+    TraceOptions,
 };
 use crate::vm;
+use machine::virtio::secrets::SecretBinding;
 
 fn env_pairs(env: Vec<EnvVar>) -> Result<Vec<(String, String)>, String> {
     env.into_iter()
@@ -26,6 +28,34 @@ fn env_pairs(env: Vec<EnvVar>) -> Result<Vec<(String, String)>, String> {
         .collect()
 }
 
+type SplitSecrets = (Vec<(String, String)>, Vec<SecretBinding>);
+
+fn split_secrets(secrets: Vec<WitSecret>) -> Result<SplitSecrets, String> {
+    let mut guest_env = Vec::new();
+    let mut bindings = Vec::new();
+
+    for secret in secrets {
+        if secret.placeholder.is_empty() {
+            return Err(format!("secret {:?} has an empty placeholder", secret.name));
+        }
+        if secret.hosts.is_empty() {
+            return Err(format!(
+                "secret {:?} names no hosts, so it could never be used",
+                secret.name
+            ));
+        }
+
+        guest_env.push((secret.name, secret.placeholder.clone()));
+        bindings.push(SecretBinding {
+            placeholder: secret.placeholder,
+            value: secret.value,
+            hosts: secret.hosts,
+        });
+    }
+
+    Ok((guest_env, bindings))
+}
+
 pub struct Executor;
 
 impl Guest for Executor {
@@ -35,6 +65,7 @@ impl Guest for Executor {
         prompt: String,
         mounts: Vec<MountEntry>,
         env: Vec<EnvVar>,
+        secrets: Vec<WitSecret>,
     ) -> Result<u64, String> {
         let mount_args: Vec<vm::MountArg> = mounts
             .into_iter()
@@ -45,7 +76,11 @@ impl Guest for Executor {
             })
             .collect();
 
-        SESSION_MANAGER.start_session(snapshot_path, command, prompt, mount_args, env_pairs(env)?)
+        let (placeholders, bindings) = split_secrets(secrets)?;
+        let mut env = env_pairs(env)?;
+        env.extend(placeholders);
+
+        SESSION_MANAGER.start_session(snapshot_path, command, prompt, mount_args, env, bindings)
     }
 
     fn session_exec(
@@ -93,6 +128,7 @@ impl Guest for Executor {
         prompt: String,
         mounts: Vec<MountEntry>,
         env: Vec<EnvVar>,
+        secrets: Vec<WitSecret>,
     ) -> Result<u64, String> {
         let delta = std::fs::read(&delta_path)
             .map_err(|e| format!("failed to read delta from {delta_path}: {e}"))?;
@@ -106,13 +142,18 @@ impl Guest for Executor {
             })
             .collect();
 
+        let (placeholders, bindings) = split_secrets(secrets)?;
+        let mut env = env_pairs(env)?;
+        env.extend(placeholders);
+
         SESSION_MANAGER.resume_session(
             snapshot_path,
             delta,
             command,
             prompt,
             mount_args,
-            env_pairs(env)?,
+            env,
+            bindings,
         )
     }
 

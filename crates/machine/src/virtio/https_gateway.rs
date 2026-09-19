@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use rustls::ClientConfig;
 use std::sync::Arc;
 
-use super::secrets::SecretBinding;
+use super::secrets::{SecretBinding, Substitution};
 use super::tls_proxy::{Timing, TlsContext, TlsProxy};
 use super::upstream::{PREAMBLE_PREFIX, Upstream, UpstreamMode, UpstreamStatus};
 use crate::trace::{HttpObserver, Tracer};
@@ -189,6 +189,7 @@ impl HttpsGateway {
             port,
             &host,
             self.timing.take(),
+            &self.secrets,
         ) {
             Ok(mut bridge) => {
                 if let Some(tracer) = self.tracer.take() {
@@ -233,6 +234,7 @@ struct PlainBridge {
     upstream_hs_done: bool,
     marked_upstream_hs: bool,
     first_reply: bool,
+    substitution: Option<Substitution>,
 }
 
 impl PlainBridge {
@@ -243,6 +245,7 @@ impl PlainBridge {
         port: u16,
         host: &str,
         timing: Option<Timing>,
+        secrets: &[SecretBinding],
     ) -> Result<Self, String> {
         let upstream = Upstream::connect(mode, client_config, dst_ip, port, host)?;
 
@@ -257,6 +260,7 @@ impl PlainBridge {
             upstream_hs_done: false,
             marked_upstream_hs: false,
             first_reply: false,
+            substitution: Substitution::for_host(secrets, host),
         };
         if let Some(t) = &bridge.timing {
             t.mark("upstream TCP connected");
@@ -269,7 +273,27 @@ impl PlainBridge {
             http.observe(bytes);
         }
 
-        if self.upstream.send_plaintext(bytes).is_err() {
+        let outbound = match &mut self.substitution {
+            None => bytes.to_vec(),
+            Some(substitution) => match substitution.feed(bytes) {
+                Ok(bytes) => bytes,
+                Err(refused) => {
+                    log::warn!(
+                        "secrets: refusing a credential for {}, which is not on its allowlist",
+                        refused.host
+                    );
+                    self.failed = true;
+                    return;
+                }
+            },
+        };
+
+        if outbound.is_empty() {
+            self.pump();
+            return;
+        }
+
+        if self.upstream.send_plaintext(&outbound).is_err() {
             self.failed = true;
             return;
         }
@@ -342,8 +366,8 @@ impl PlainBridge {
 #[cfg(test)]
 mod tests {
     use super::super::tls_proxy::{
-        ca_cert_pem, client_config_trusting, spawn_plaintext_host, spawn_test_upstream,
-        spawn_test_upstream_rst, spawn_test_upstream_streaming,
+        ca_cert_pem, client_config_trusting, spawn_capturing_upstream, spawn_plaintext_host,
+        spawn_test_upstream, spawn_test_upstream_rst, spawn_test_upstream_streaming,
     };
     use super::*;
     use std::time::Duration;
@@ -355,6 +379,79 @@ mod tests {
         while let Some(n) = gateway.pull_to_guest(&mut buf) {
             into.extend_from_slice(&buf[..n]);
         }
+    }
+
+    fn secret_for(hosts: &[&str]) -> Vec<SecretBinding> {
+        vec![SecretBinding {
+            placeholder: "vpod-secret-key-a1b2c3d4".to_string(),
+            value: "sk-ant-the-real-thing".to_string(),
+            hosts: hosts.iter().map(|host| host.to_string()).collect(),
+        }]
+    }
+
+    #[test]
+    fn the_preamble_path_swaps_a_credential_too() {
+        let (port, up_ca, seen, up) = spawn_capturing_upstream(UPSTREAM_REPLY);
+        let ctx = TlsContext::new().unwrap();
+        let mut gateway =
+            HttpsGateway::new_test(&ctx, [127, 0, 0, 1], client_config_trusting(&up_ca));
+        gateway.carry_secrets(secret_for(&["localhost"]));
+
+        let wire = format!(
+            "VPOD-CONNECT localhost {port}\nGET / HTTP/1.1\r\nHost: localhost\r\n\
+             x-api-key: vpod-secret-key-a1b2c3d4\r\nContent-Length: 0\r\n\r\n"
+        );
+        gateway.push_from_guest(wire.as_bytes());
+
+        let mut got = Vec::new();
+        for _ in 0..2000 {
+            drain(&mut gateway, &mut got);
+            if gateway.eof() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let _ = up.join();
+
+        let received =
+            String::from_utf8_lossy(&seen.recv().expect("upstream saw no request")).into_owned();
+
+        assert!(
+            received.contains("sk-ant-the-real-thing"),
+            "the preamble path sent the stand-in: {received}"
+        );
+        assert!(!received.contains("vpod-secret-key-a1b2c3d4"));
+    }
+
+    #[test]
+    fn the_preamble_path_refuses_a_credential_bound_elsewhere() {
+        let (port, up_ca, seen, up) = spawn_capturing_upstream(UPSTREAM_REPLY);
+        let ctx = TlsContext::new().unwrap();
+        let mut gateway =
+            HttpsGateway::new_test(&ctx, [127, 0, 0, 1], client_config_trusting(&up_ca));
+        gateway.carry_secrets(secret_for(&["api.anthropic.com"]));
+
+        let wire = format!(
+            "VPOD-CONNECT localhost {port}\nGET / HTTP/1.1\r\nHost: api.anthropic.com\r\n\
+             x-api-key: vpod-secret-key-a1b2c3d4\r\nContent-Length: 0\r\n\r\n"
+        );
+        gateway.push_from_guest(wire.as_bytes());
+
+        let mut got = Vec::new();
+        for _ in 0..200 {
+            drain(&mut gateway, &mut got);
+            if gateway.failed() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        drop(up);
+
+        assert!(gateway.failed(), "the connection survived the refusal");
+        assert!(
+            seen.try_recv().is_err(),
+            "a request reached a host outside the allowlist"
+        );
     }
 
     #[test]

@@ -1233,3 +1233,46 @@ def test_env_survives_suspend_and_resume():
         assert code.text.strip() == "hello"
     finally:
         resumed.close()
+
+
+def test_the_guest_sees_a_placeholder_and_never_the_value():
+    real = "sk-ant-the-real-thing-do-not-leak"
+
+    with Sandbox.create(
+        secrets={"ANTHROPIC_API_KEY": {"value": real, "hosts": ["api.anthropic.com"]}}
+    ) as sbx:
+        shown = sbx.commands.run("printf %s \"$ANTHROPIC_API_KEY\"").stdout
+
+        assert shown.startswith("vpod-secret-anthropic_api_key-"), shown
+        assert real not in shown
+
+        assert real not in sbx.commands.run("env").stdout
+        assert real not in sbx.commands.run("cat /proc/self/environ").stdout
+
+        seen = sbx.code.run("import os; print(os.environ['ANTHROPIC_API_KEY'])")
+        assert seen.success, seen.error
+        assert real not in seen.text
+        assert seen.text.strip().startswith("vpod-secret-")
+
+
+def test_a_chosen_placeholder_is_what_the_guest_gets():
+    with Sandbox.create(
+        secrets={
+            "API_KEY": {
+                "value": "real-value",
+                "hosts": ["api.example.com"],
+                "placeholder": "sk-live-stand-in",
+            }
+        }
+    ) as sbx:
+        assert sbx.commands.run("printf %s \"$API_KEY\"").stdout == "sk-live-stand-in"
+
+
+def test_a_secret_without_a_host_is_refused():
+    with pytest.raises(ValueError, match="at least one host"):
+        Sandbox.create(secrets={"K": {"value": "x", "hosts": []}})
+
+
+def test_a_secret_needs_a_value():
+    with pytest.raises(ValueError, match="non-empty string value"):
+        Sandbox.create(secrets={"K": {"value": "", "hosts": ["api.example.com"]}})
