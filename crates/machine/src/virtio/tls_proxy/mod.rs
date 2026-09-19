@@ -27,6 +27,7 @@ use x509_cert::serial_number::SerialNumber;
 use x509_cert::spki::SubjectPublicKeyInfoOwned;
 use x509_cert::time::{Time, Validity};
 
+use super::secrets::{SecretBinding, Substitution};
 use super::upstream::{Upstream, UpstreamMode, UpstreamStatus};
 use crate::trace::HttpObserver;
 
@@ -38,8 +39,8 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use testutil::{
-    client_config_trusting, spawn_plaintext_host, spawn_test_upstream, spawn_test_upstream_rst,
-    spawn_test_upstream_streaming,
+    client_config_trusting, spawn_capturing_upstream, spawn_plaintext_host, spawn_test_upstream,
+    spawn_test_upstream_rst, spawn_test_upstream_streaming,
 };
 
 const CA_KEY_PEM: &str = include_str!("../../../assets/tls/vpod-ca-key.pem");
@@ -240,6 +241,8 @@ pub struct TlsProxy {
     close_notified: bool,
     timing: Option<Timing>,
     http: Option<HttpObserver>,
+    secrets: Vec<SecretBinding>,
+    substitution: Option<Substitution>,
 }
 
 pub(crate) struct Timing {
@@ -311,7 +314,13 @@ impl TlsProxy {
             close_notified: false,
             timing,
             http: None,
+            secrets: Vec::new(),
+            substitution: None,
         })
+    }
+
+    pub(crate) fn carry_secrets(&mut self, secrets: Vec<SecretBinding>) {
+        self.secrets = secrets;
     }
 
     pub(crate) fn observe_http(&mut self, http: HttpObserver) {
@@ -389,6 +398,9 @@ impl TlsProxy {
             if let Some(http) = &mut self.http {
                 http.set_default_host(&sni);
             }
+            // The upstream handshake validates a real certificate for this name,
+            // so a guest that lies about it cannot reach the server it named.
+            self.substitution = Substitution::for_host(&self.secrets, &sni);
             self.connect_upstream(&sni);
 
             if let (Some(t), true) = (&mut self.timing, self.upstream.is_some())
@@ -410,7 +422,34 @@ impl TlsProxy {
                             http.observe(&buf[..n]);
                         }
 
-                        if upstream.send_plaintext(&buf[..n]).is_err() {
+                        // After the observer, never before: swapping first would
+                        // record the real credential in the trace of any API that
+                        // takes its key in a query string.
+                        let outbound = match &mut self.substitution {
+                            None => buf[..n].to_vec(),
+                            Some(substitution) => match substitution.feed(&buf[..n]) {
+                                Ok(bytes) => bytes,
+                                Err(refused) => {
+                                    log::warn!(
+                                        "secrets: refusing {} for {}, which is not on its allowlist",
+                                        if refused.placeholder.is_empty() {
+                                            "an oversized request head"
+                                        } else {
+                                            "a credential"
+                                        },
+                                        refused.host
+                                    );
+                                    self.failed = true;
+                                    return;
+                                }
+                            },
+                        };
+
+                        if outbound.is_empty() {
+                            continue;
+                        }
+
+                        if upstream.send_plaintext(&outbound).is_err() {
                             self.failed = true;
                             return;
                         }
@@ -567,6 +606,8 @@ impl TlsProxy {
             close_notified: false,
             timing: None,
             http: None,
+            secrets: Vec::new(),
+            substitution: None,
         }
     }
 }

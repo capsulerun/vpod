@@ -17,6 +17,7 @@ use tcp::{TcpConn, TcpKey, TcpState};
 use udp::{UdpConn, UdpKey};
 
 use super::net::NetworkBackend;
+use super::secrets::SecretBinding;
 use super::tls_proxy::TlsContext;
 use crate::trace::Tracer;
 
@@ -29,10 +30,15 @@ pub struct SlirpBackend {
     dhcp_xid: u32,
     tls: Option<TlsContext>,
     tracer: Option<Tracer>,
+    secrets: Vec<SecretBinding>,
 }
 
 impl SlirpBackend {
     pub fn new(guest_mac: [u8; 6]) -> Self {
+        Self::with_secrets(guest_mac, Vec::new())
+    }
+
+    pub fn with_secrets(guest_mac: [u8; 6], secrets: Vec<SecretBinding>) -> Self {
         let tls = match TlsContext::new() {
             Ok(ctx) => Some(ctx),
             Err(e) => {
@@ -50,6 +56,7 @@ impl SlirpBackend {
             dhcp_xid: 0,
             tls,
             tracer: None,
+            secrets,
         }
     }
 

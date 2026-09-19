@@ -1168,3 +1168,111 @@ def test_stdin_is_delivered_byte_for_byte():
         result = sbx.commands.run("base64", stdin=raw, timeout=120)
         assert result.exit_code == 0, result
         assert _b64.b64decode(result.stdout.replace("\n", "")) == raw
+
+
+def test_env_reaches_a_command():
+    with Sandbox.create(env={"VPOD_GREETING": "hello"}) as sbx:
+        result = sbx.commands.run("echo $VPOD_GREETING")
+
+        assert result.success
+        assert result.stdout.strip() == "hello"
+
+
+def test_env_value_with_shell_syntax_arrives_literally():
+    hostile = "'; echo pwned; x='$HOME `id`"
+
+    with Sandbox.create(env={"VPOD_HOSTILE": hostile}) as sbx:
+        result = sbx.commands.run('printf %s "$VPOD_HOSTILE"')
+
+        assert result.success
+        assert result.stdout == hostile
+
+
+def test_env_reaches_a_child_process():
+    with Sandbox.create(env={"VPOD_GREETING": "hello"}) as sbx:
+        result = sbx.commands.run("sh -c 'echo $VPOD_GREETING'")
+
+        assert result.stdout.strip() == "hello"
+
+
+def test_env_reaches_code_run():
+    with Sandbox.create(env={"VPOD_GREETING": "hello"}) as sbx:
+        result = sbx.code.run("import os; print(os.environ['VPOD_GREETING'])")
+
+        assert result.success, result.error
+        assert result.text.strip() == "hello"
+
+
+def test_a_long_env_value_survives():
+    value = "abc'def" * 400
+
+    with Sandbox.create(env={"VPOD_BIG": value}) as sbx:
+        result = sbx.commands.run('printf %s "$VPOD_BIG" | wc -c')
+
+        assert result.stdout.strip() == str(len(value))
+
+
+def test_env_name_that_is_not_an_identifier_is_refused():
+    with pytest.raises(ValueError, match="plain identifier"):
+        Sandbox.create(env={"NOT AN IDENT": "x"})
+
+
+def test_env_survives_suspend_and_resume():
+    sbx = Sandbox.create(env={"VPOD_GREETING": "hello"})
+    try:
+        instance_id = sbx.suspend()
+    finally:
+        pass
+
+    resumed = Sandbox.resume(instance_id)
+    try:
+        assert resumed.commands.run("echo $VPOD_GREETING").stdout.strip() == "hello"
+
+        code = resumed.code.run("import os; print(os.environ['VPOD_GREETING'])")
+        assert code.success, code.error
+        assert code.text.strip() == "hello"
+    finally:
+        resumed.close()
+
+
+def test_the_guest_sees_a_placeholder_and_never_the_value():
+    real = "sk-ant-the-real-thing-do-not-leak"
+
+    with Sandbox.create(
+        secrets={"ANTHROPIC_API_KEY": {"value": real, "hosts": ["api.anthropic.com"]}}
+    ) as sbx:
+        shown = sbx.commands.run("printf %s \"$ANTHROPIC_API_KEY\"").stdout
+
+        assert shown.startswith("vpod-secret-anthropic_api_key-"), shown
+        assert real not in shown
+
+        assert real not in sbx.commands.run("env").stdout
+        assert real not in sbx.commands.run("cat /proc/self/environ").stdout
+
+        seen = sbx.code.run("import os; print(os.environ['ANTHROPIC_API_KEY'])")
+        assert seen.success, seen.error
+        assert real not in seen.text
+        assert seen.text.strip().startswith("vpod-secret-")
+
+
+def test_a_chosen_placeholder_is_what_the_guest_gets():
+    with Sandbox.create(
+        secrets={
+            "API_KEY": {
+                "value": "real-value",
+                "hosts": ["api.example.com"],
+                "placeholder": "sk-live-stand-in",
+            }
+        }
+    ) as sbx:
+        assert sbx.commands.run("printf %s \"$API_KEY\"").stdout == "sk-live-stand-in"
+
+
+def test_a_secret_without_a_host_is_refused():
+    with pytest.raises(ValueError, match="at least one host"):
+        Sandbox.create(secrets={"K": {"value": "x", "hosts": []}})
+
+
+def test_a_secret_needs_a_value():
+    with pytest.raises(ValueError, match="non-empty string value"):
+        Sandbox.create(secrets={"K": {"value": "", "hosts": ["api.example.com"]}})
