@@ -8,7 +8,7 @@ use rustls::pki_types::ServerName;
 use std::net::TcpListener;
 use std::thread;
 
-use crate::trace::{Tracer, TraceOptions};
+use crate::trace::{TraceOptions, Tracer};
 
 const UPSTREAM_REPLY: &[u8] = b"HTTP/1.0 200 OK\r\nContent-Length: 5\r\n\r\nhello";
 
