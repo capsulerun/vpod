@@ -3,6 +3,8 @@ export interface TraceSources {
     files?: boolean;
     network?: boolean;
     mounts?: boolean;
+    /** Keep the headers and body of each traced request. Needs `network`. */
+    requestContent?: boolean;
     bufferBytes?: number;
 }
 
@@ -13,6 +15,7 @@ export interface WireTraceOptions {
     files: boolean;
     network: boolean;
     mounts: boolean;
+    requestContent: boolean;
     bufferBytes: number;
 }
 
@@ -86,17 +89,32 @@ export function traceOptions(setting: TraceSetting | undefined): WireTraceOption
         return null;
     }
     if (setting === true) {
-        return { processes: true, files: true, network: true, mounts: true, bufferBytes: 0 };
+        return {
+            processes: true,
+            files: true,
+            network: true,
+            mounts: true,
+            requestContent: false,
+            bufferBytes: 0,
+        };
     }
     if (typeof setting !== "object" || setting === null) {
         throw new Error(`vpod: trace must be true or an object of sources, got ${JSON.stringify(setting)}`);
     }
 
-    const known = new Set<string>([...SOURCES, "bufferBytes"]);
+    const known = new Set<string>([...SOURCES, "requestContent", "bufferBytes"]);
     const unknown = Object.keys(setting).filter((key) => !known.has(key));
     if (unknown.length > 0) {
         throw new Error(
             `vpod: unknown trace options ${JSON.stringify(unknown)}, expected ${JSON.stringify([...known])}`,
+        );
+    }
+
+    const requestContent = setting.requestContent === true;
+    if (requestContent && setting.network !== true) {
+        throw new Error(
+            "vpod: trace requestContent records what each traced request carried, " +
+                "so it needs network tracing on as well",
         );
     }
 
@@ -105,6 +123,7 @@ export function traceOptions(setting: TraceSetting | undefined): WireTraceOption
         files: setting.files === true,
         network: setting.network === true,
         mounts: setting.mounts === true,
+        requestContent,
         bufferBytes: setting.bufferBytes ?? 0,
     };
 }

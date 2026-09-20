@@ -23,6 +23,7 @@ pub struct TraceOptions {
     pub files: bool,
     pub network: bool,
     pub mounts: bool,
+    pub request_content: bool,
     pub buffer_bytes: usize,
 }
 
@@ -33,6 +34,7 @@ impl Default for TraceOptions {
             files: true,
             network: true,
             mounts: true,
+            request_content: false,
             buffer_bytes: DEFAULT_BUFFER_BYTES,
         }
     }
@@ -84,6 +86,10 @@ impl Tracer {
         self.options.network
     }
 
+    pub fn traces_request_content(&self) -> bool {
+        self.options.network && self.options.request_content
+    }
+
     pub fn traces_mounts(&self) -> bool {
         self.options.mounts
     }
@@ -103,6 +109,10 @@ impl Tracer {
     }
 
     pub fn record(&self, kind: &str, fields: &[(&str, Value)]) {
+        self.record_seq(kind, fields);
+    }
+
+    pub fn record_seq(&self, kind: &str, fields: &[(&str, Value)]) -> Option<u64> {
         let wall_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|elapsed| elapsed.as_millis() as u64)
@@ -117,18 +127,21 @@ impl Tracer {
 
             if recorder.buffered_bytes + marker.len() > capacity {
                 recorder.dropped += 1;
-                return;
+                return None;
             }
             recorder.dropped = 0;
             recorder.push(marker);
         }
 
+        let seq = recorder.next_seq;
         let line = recorder.line(kind, wall_ms, fields);
         if recorder.buffered_bytes + line.len() > capacity {
             recorder.dropped += 1;
-            return;
+            return None;
         }
         recorder.push(line);
+
+        Some(seq)
     }
 
     pub fn drain(&self, max_bytes: usize) -> Vec<u8> {
