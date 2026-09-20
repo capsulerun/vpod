@@ -37,6 +37,29 @@ pub(crate) fn generate_ca_pems() -> (String, String) {
 pub(crate) fn spawn_test_upstream(
     reply: &'static [u8],
 ) -> (u16, String, std::thread::JoinHandle<()>) {
+    spawn_test_upstream_reporting(reply, None)
+}
+
+/// Like `spawn_test_upstream`, but hands back the request the upstream actually
+/// received, which is the only way to prove what left the machine.
+pub(crate) fn spawn_capturing_upstream(
+    reply: &'static [u8],
+) -> (
+    u16,
+    String,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+    std::thread::JoinHandle<()>,
+) {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let (port, ca, handle) = spawn_test_upstream_reporting(reply, Some(sender));
+
+    (port, ca, receiver, handle)
+}
+
+fn spawn_test_upstream_reporting(
+    reply: &'static [u8],
+    seen: Option<std::sync::mpsc::Sender<Vec<u8>>>,
+) -> (u16, String, std::thread::JoinHandle<()>) {
     use std::net::TcpListener;
 
     let (up_ca_key, up_ca_cert) = generate_ca_pems();
@@ -91,6 +114,10 @@ pub(crate) fn spawn_test_upstream(
             conn.read_tls(&mut sock).unwrap();
             conn.process_new_packets().unwrap();
         }
+        if let Some(seen) = seen {
+            let _ = seen.send(req.clone());
+        }
+
         conn.writer().write_all(reply).unwrap();
         while conn.wants_write() {
             conn.write_tls(&mut sock).unwrap();

@@ -57,7 +57,8 @@ with Sandbox.create() as sbx:
 
 ### Advanced Configuration
 
-You can mount local directories into the sandbox and specify which snapshot to use.
+You can mount local directories into the sandbox, set environment variables, and
+specify which snapshot to use.
 
 ```python
 from vpod import Sandbox
@@ -68,6 +69,13 @@ mounts = {"workspace": "/workspace:rw"}
 with Sandbox.create(snapshot="vsnap-data", mounts=mounts) as sbx:
     sbx.code.run("import pandas as pd")
     sbx.code.run("print('Pandas is ready!')")
+```
+
+Environment variables are set at creation and reach both commands and `code.run`:
+
+```python
+with Sandbox.create(env={"TZ": "UTC"}) as sbx:
+    sbx.commands.run("date")
 ```
 
 ### Suspend & Resume

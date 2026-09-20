@@ -3,6 +3,7 @@ use machine::cow_ram::CowRam;
 use machine::machine_bus::MachineBus;
 use machine::snapshot;
 use machine::virtio::fs::Mount;
+use machine::virtio::secrets::SecretBinding;
 use riscv_core::Hart;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -125,9 +126,10 @@ pub fn _bus_from_base(
     ram_size: u64,
     mounts: &[MountArg],
     capture_tx: bool,
+    secrets: Vec<SecretBinding>,
 ) -> (MachineBus, Hart) {
     let mut bus = MachineBus::new(ram_size, base.clone_shared());
-    bus.attach_net();
+    bus.attach_net_with_secrets(secrets);
     bus.attach_fs(vec![]);
 
     let mut hart = Hart::new(0x1000);

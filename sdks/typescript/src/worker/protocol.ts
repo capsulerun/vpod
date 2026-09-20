@@ -1,6 +1,8 @@
 import type { ExecMode } from "../sandbox.js";
 
 import type { CoreModuleBytes } from "./component-imports.js";
+import type { EnvVar } from "../env.js";
+import type { SecretBinding } from "../secrets.js";
 import type { MountEntry } from "../mounts.js";
 import type { WireTraceOptions } from "../trace.js";
 
@@ -60,6 +62,8 @@ export type WorkerCall =
           command: string;
           prompt: string;
           mounts: MountEntry[];
+          env: EnvVar[];
+          secrets: SecretBinding[];
       }
     | {
           kind: "session-exec";
@@ -86,6 +90,8 @@ export type WorkerCall =
           command: string;
           prompt: string;
           mounts: MountEntry[];
+          env: EnvVar[];
+          secrets: SecretBinding[];
       }
     | { kind: "trace-supported" }
     | { kind: "session-trace-start"; handle: bigint; options: WireTraceOptions }
