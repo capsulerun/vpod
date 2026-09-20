@@ -1007,7 +1007,6 @@ impl SessionManager {
             files: options.files,
             network: options.network,
             mounts: options.mounts,
-            request_content: options.request_content,
             buffer_bytes: if options.buffer_bytes == 0 {
                 DEFAULT_BUFFER_BYTES
             } else {

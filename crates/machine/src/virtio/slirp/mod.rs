@@ -189,6 +189,7 @@ impl NetworkBackend for SlirpBackend {
 mod tests {
     use super::frames::{ACK, Endpoints, FIN, GUEST_IP, RST, SYN, make_tcp_frame};
     use super::*;
+    use crate::trace::TraceOptions;
     use std::io::{Read, Write};
     use std::time::{Duration, Instant};
 
@@ -321,7 +322,7 @@ mod tests {
 
         let guest_mac = [0x02, 0, 0, 0, 0, 0x19];
         let mut slirp = SlirpBackend::new(guest_mac);
-        let tracer = crate::trace::Tracer::new(crate::trace::TraceOptions::default());
+        let tracer = Tracer::new(TraceOptions::default());
         tracer.remember_name([127, 0, 0, 1], "local.test");
         slirp.set_tracer(Some(tracer.clone()));
 
@@ -376,10 +377,7 @@ mod tests {
 
         let guest_mac = [0x02, 0, 0, 0, 0, 0x1a];
         let mut slirp = SlirpBackend::new(guest_mac);
-        let tracer = crate::trace::Tracer::new(crate::trace::TraceOptions {
-            request_content: true,
-            ..crate::trace::TraceOptions::default()
-        });
+        let tracer = Tracer::new(TraceOptions::default());
         tracer.remember_name([127, 0, 0, 1], "local.test");
         slirp.set_tracer(Some(tracer.clone()));
 
@@ -438,55 +436,6 @@ mod tests {
         assert_eq!(captured["content"], body);
     }
 
-    #[test]
-    fn a_traced_request_says_nothing_of_its_content_unless_asked() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-
-        let guest_mac = [0x02, 0, 0, 0, 0, 0x1b];
-        let mut slirp = SlirpBackend::new(guest_mac);
-        let tracer = crate::trace::Tracer::new(crate::trace::TraceOptions::default());
-        tracer.remember_name([127, 0, 0, 1], "local.test");
-        slirp.set_tracer(Some(tracer.clone()));
-
-        let ends = from_guest(guest_mac, [127, 0, 0, 1], 45007, port);
-        let guest_isn = 5000u32;
-        let (mut upstream, ack) = connect(&mut slirp, &listener, &ends, guest_isn);
-
-        let body = r#"{"secret":"do-not-record"}"#;
-        let request = format!(
-            "POST /v1/messages HTTP/1.1\r\nHost: local.test\r\nContent-Length: {}\r\n\r\n{body}",
-            body.len()
-        );
-        slirp.send(&make_tcp_frame(
-            &ends,
-            guest_isn.wrapping_add(1),
-            ack,
-            ACK,
-            request.as_bytes(),
-        ));
-        read_upstream(&mut upstream, &mut slirp, request.len());
-
-        slirp.send(&make_tcp_frame(
-            &ends,
-            guest_isn.wrapping_add(1),
-            ack,
-            RST,
-            &[],
-        ));
-
-        let drained = String::from_utf8(tracer.drain(usize::MAX)).unwrap();
-
-        assert!(
-            !drained.contains("net.http.body"),
-            "a body event appeared uninvited"
-        );
-        assert!(
-            !drained.contains("do-not-record"),
-            "the body was recorded anyway"
-        );
-        assert!(!drained.contains("headers"), "headers were recorded anyway");
-    }
     #[test]
     fn a_guest_fin_becomes_an_upstream_eof() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

@@ -3,146 +3,1650 @@
     {
       "name": "an agent command that installs, downloads and edits files",
       "events": [
-        {"v": 1, "seq": 0, "guest_ns": 1000, "wall_ms": 1, "kind": "file.open", "task": "a1", "pid": 1, "path": "/dev/ttyS1", "access": "write", "create": true, "truncate": true, "result": 3, "internal": true},
-        {"v": 1, "seq": 1, "guest_ns": 1000, "wall_ms": 1, "kind": "process.fork", "task": "a1", "pid": 1, "child_pid": 563, "thread": false},
-        {"v": 1, "seq": 2, "guest_ns": 2000, "wall_ms": 1, "kind": "process.exec", "task": "b2", "pid": 563, "ppid": 1, "path": "/usr/local/bin/sh", "argv": ["sh", "-c", "cd /app && make"], "result": -2},
-        {"v": 1, "seq": 3, "guest_ns": 2000, "wall_ms": 1, "kind": "process.exec", "task": "b2", "pid": 563, "ppid": 1, "path": "/bin/sh", "argv": ["sh", "-c", "cd /app && make"]},
-        {"v": 1, "seq": 4, "guest_ns": 3000, "wall_ms": 1, "kind": "file.open", "task": "b2", "pid": 563, "path": "/etc/ld-musl-riscv64.path", "access": "read", "create": false, "truncate": false, "result": 3},
-        {"v": 1, "seq": 5, "guest_ns": 3000, "wall_ms": 1, "kind": "file.open", "task": "b2", "pid": 563, "path": "/usr/lib/libz.so.1", "access": "read", "create": false, "truncate": false, "result": 3},
-        {"v": 1, "seq": 6, "guest_ns": 3000, "wall_ms": 1, "kind": "file.open", "task": "b2", "pid": 563, "path": "/proc/self/stat", "access": "read", "create": false, "truncate": false, "result": 4},
-        {"v": 1, "seq": 7, "guest_ns": 4000, "wall_ms": 1, "kind": "file.open", "task": "b2", "pid": 563, "path": "/app/Makefile", "access": "read", "create": false, "truncate": false, "result": 3},
-        {"v": 1, "seq": 8, "guest_ns": 4000, "wall_ms": 1, "kind": "file.open", "task": "b2", "pid": 563, "path": "/app/missing.h", "access": "read", "create": false, "truncate": false, "result": -2},
-        {"v": 1, "seq": 9, "guest_ns": 5000, "wall_ms": 1, "kind": "file.open", "task": "b2", "pid": 563, "path": "/etc/shadow", "access": "read", "create": false, "truncate": false, "result": -13},
-        {"v": 1, "seq": 10, "guest_ns": 5000, "wall_ms": 1, "kind": "file.open", "task": "b2", "pid": 563, "path": "/app/build/.out.tmp", "access": "write", "create": true, "truncate": true, "result": 5},
-        {"v": 1, "seq": 11, "guest_ns": 6000, "wall_ms": 1, "kind": "file.rename", "task": "b2", "pid": 563, "from": "/app/build/.out.tmp", "to": "/app/build/out", "result": 0},
-        {"v": 1, "seq": 12, "guest_ns": 6000, "wall_ms": 1, "kind": "file.open", "task": "b2", "pid": 563, "path": "/app/build/ext.so", "access": "write", "create": true, "truncate": true, "result": 6},
-        {"v": 1, "seq": 13, "guest_ns": 6000, "wall_ms": 1, "kind": "file.open", "task": "b2", "pid": 563, "path": "/app/db.sqlite", "access": "read-write", "create": false, "truncate": false, "result": 7},
-        {"v": 1, "seq": 14, "guest_ns": 7000, "wall_ms": 1, "kind": "dir.create", "task": "b2", "pid": 563, "path": "/app/cache", "result": 0},
-        {"v": 1, "seq": 15, "guest_ns": 7000, "wall_ms": 1, "kind": "dir.create", "task": "b2", "pid": 563, "path": "/app/build", "result": -17},
-        {"v": 1, "seq": 16, "guest_ns": 7000, "wall_ms": 1, "kind": "file.truncate", "task": "b2", "pid": 563, "path": "/app/log.txt", "size": 0, "result": 0},
-        {"v": 1, "seq": 17, "guest_ns": 8000, "wall_ms": 1, "kind": "file.delete", "task": "b2", "pid": 563, "path": "/app/old.o", "directory": false, "result": 0},
-        {"v": 1, "seq": 18, "guest_ns": 8000, "wall_ms": 1, "kind": "file.delete", "task": "b2", "pid": 563, "path": "/root/.ssh/authorized_keys", "directory": false, "result": -1},
-        {"v": 1, "seq": 19, "guest_ns": 8000, "wall_ms": 1, "kind": "file.delete", "task": "c3", "pid": 700, "path": "/tmp/.vpod_cmd.b64", "directory": false, "result": 0, "internal": true},
-        {"v": 1, "seq": 20, "guest_ns": 9000, "wall_ms": 1, "kind": "net.dns", "name": "pypi.org", "type": "A", "answers": ["151.101.192.223"]},
-        {"v": 1, "seq": 21, "guest_ns": 9000, "wall_ms": 1, "kind": "net.connect", "task": "b2", "pid": 563, "protocol": "tcp", "address": "151.101.192.223", "port": 443, "host": "pypi.org", "result": 0},
-        {"v": 1, "seq": 22, "guest_ns": 9500, "wall_ms": 1, "kind": "net.http", "protocol": "https", "method": "GET", "url": "https://pypi.org/simple/requests/", "address": "151.101.192.223", "port": 443},
-        {"v": 1, "seq": 23, "guest_ns": 9600, "wall_ms": 1, "kind": "net.http", "protocol": "https", "method": "GET", "url": "https://pypi.org/simple/urllib3/", "address": "151.101.192.223", "port": 443},
-        {"v": 1, "seq": 24, "guest_ns": 9700, "wall_ms": 1, "kind": "net.flow", "protocol": "tcp", "address": "151.101.192.223", "port": 443, "host": "pypi.org", "bytes_out": 252, "bytes_in": 84487, "duration_ns": 300, "failed": false},
-        {"v": 1, "seq": 25, "guest_ns": 9800, "wall_ms": 1, "kind": "net.connect", "task": "b2", "pid": 563, "protocol": "tcp", "address": "151.101.192.223", "port": 443, "host": "pypi.org", "result": -115},
-        {"v": 1, "seq": 26, "guest_ns": 9900, "wall_ms": 1, "kind": "net.flow", "protocol": "tcp", "address": "151.101.192.223", "port": 443, "host": "pypi.org", "bytes_out": 100, "bytes_in": 1000, "duration_ns": 50, "failed": false},
-        {"v": 1, "seq": 27, "guest_ns": 10000, "wall_ms": 1, "kind": "net.connect", "task": "e5", "pid": 564, "protocol": null, "address": "127.0.0.1", "port": 9, "host": null, "result": -111},
-        {"v": 1, "seq": 28, "guest_ns": 10000, "wall_ms": 1, "kind": "net.http", "protocol": "http", "method": "POST", "url": "http://example.com/upload", "address": "93.184.215.14", "port": 80},
-        {"v": 1, "seq": 29, "guest_ns": 10000, "wall_ms": 1, "kind": "net.flow", "protocol": "tcp", "address": "93.184.215.14", "port": 80, "host": null, "bytes_out": 11, "bytes_in": 0, "duration_ns": 5, "failed": true},
-        {"v": 1, "seq": 30, "guest_ns": 10500, "wall_ms": 1, "kind": "net.udp", "address": "8.8.8.8", "port": 123, "host": null},
-        {"v": 1, "seq": 31, "guest_ns": 10600, "wall_ms": 1, "kind": "net.connect", "task": "c3", "pid": 700, "protocol": "tcp", "address": "10.0.2.2", "port": 8080, "host": null, "result": 0, "internal": true},
-        {"v": 1, "seq": 32, "guest_ns": 11000, "wall_ms": 1, "kind": "mount.open", "pid": 563, "path": "/data/input.csv", "access": "read", "truncate": false, "result": 0},
-        {"v": 1, "seq": 33, "guest_ns": 11000, "wall_ms": 1, "kind": "mount.close", "pid": 563, "path": "/data/input.csv", "bytes_read": 4096, "bytes_written": 0},
-        {"v": 1, "seq": 34, "guest_ns": 11000, "wall_ms": 1, "kind": "mount.create", "pid": 563, "path": "/data/report.md", "result": 0},
-        {"v": 1, "seq": 35, "guest_ns": 11000, "wall_ms": 1, "kind": "mount.close", "pid": 563, "path": "/data/report.md", "bytes_read": 0, "bytes_written": 512},
-        {"v": 1, "seq": 36, "guest_ns": 11000, "wall_ms": 1, "kind": "mount.mkdir", "pid": 563, "path": "/data/out", "result": 0},
-        {"v": 1, "seq": 37, "guest_ns": 11000, "wall_ms": 1, "kind": "mount.rename", "pid": 563, "from": "/data/draft.md", "to": "/data/out/final.md", "result": 0},
-        {"v": 1, "seq": 38, "guest_ns": 11000, "wall_ms": 1, "kind": "mount.delete", "pid": 563, "path": "/data/stale.lock", "directory": false, "result": 0},
-        {"v": 1, "seq": 39, "guest_ns": 11000, "wall_ms": 1, "kind": "mount.truncate", "pid": 563, "path": "/data/log.txt", "size": 0, "result": 0},
-        {"v": 1, "seq": 40, "guest_ns": 11000, "wall_ms": 1, "kind": "mount.open", "pid": 563, "path": "/data/secret.key", "access": "read", "truncate": false, "result": -13},
-        {"v": 1, "seq": 41, "guest_ns": 12000, "wall_ms": 1, "kind": "process.exec", "task": "d4", "pid": 570, "ppid": 1, "path": "/usr/lib/vpod/vpod-seed-entropy", "argv": ["vpod-seed-entropy", "ab12"], "internal": true},
-        {"v": 1, "seq": 42, "guest_ns": 12000, "wall_ms": 1, "kind": "process.exit", "task": "d4", "pid": 570, "code": 0, "internal": true},
-        {"v": 1, "seq": 43, "guest_ns": 13000, "wall_ms": 1, "kind": "process.exec", "task": "b2", "pid": 563, "ppid": 1, "path": "/usr/bin/make", "argv": ["make"]},
-        {"v": 1, "seq": 44, "guest_ns": 13500, "wall_ms": 1, "kind": "process.fork", "task": "b2", "pid": 563, "child_pid": 564, "thread": false},
-        {"v": 1, "seq": 45, "guest_ns": 14000, "wall_ms": 1, "kind": "process.exec", "task": "e5", "pid": 564, "ppid": 563, "path": "/usr/bin/cc", "argv": ["cc", "-o", "build/out", "main.c"]},
-        {"v": 1, "seq": 46, "guest_ns": 15000, "wall_ms": 1, "kind": "process.exit", "task": "e5", "pid": 564, "code": 1},
-        {"v": 1, "seq": 47, "guest_ns": 15200, "wall_ms": 1, "kind": "process.fork", "task": "b2", "pid": 563, "child_pid": 565, "thread": false},
-        {"v": 1, "seq": 48, "guest_ns": 15300, "wall_ms": 1, "kind": "process.fork", "task": "f6", "pid": 565, "child_pid": 566, "thread": false},
-        {"v": 1, "seq": 49, "guest_ns": 15400, "wall_ms": 1, "kind": "process.exec", "task": "g7", "pid": 566, "ppid": 565, "path": "/bin/echo", "argv": ["echo", "done"]},
-        {"v": 1, "seq": 50, "guest_ns": 15500, "wall_ms": 1, "kind": "process.exit", "task": "g7", "pid": 566, "code": 0},
-        {"v": 1, "seq": 51, "guest_ns": 16000, "wall_ms": 1, "kind": "process.exit", "task": "b2", "pid": 563, "code": 2},
-        {"v": 1, "seq": 52, "guest_ns": 16500, "wall_ms": 1, "kind": "process.fork", "task": "a1", "pid": 1, "child_pid": 571, "thread": false},
-        {"v": 1, "seq": 53, "guest_ns": 17000, "wall_ms": 1, "kind": "process.exec", "task": "h8", "pid": 571, "ppid": 1, "path": "/usr/bin/python3", "argv": ["python3", "-c", "print(1)"], "argv_truncated": true},
-        {"v": 1, "seq": 54, "guest_ns": 17500, "wall_ms": 1, "kind": "process.fork", "task": "h8", "pid": 571, "child_pid": 572, "thread": true}
+        {
+          "v": 1,
+          "seq": 0,
+          "guest_ns": 1000,
+          "wall_ms": 1,
+          "kind": "file.open",
+          "task": "a1",
+          "pid": 1,
+          "path": "/dev/ttyS1",
+          "access": "write",
+          "create": true,
+          "truncate": true,
+          "result": 3,
+          "internal": true
+        },
+        {
+          "v": 1,
+          "seq": 1,
+          "guest_ns": 1000,
+          "wall_ms": 1,
+          "kind": "process.fork",
+          "task": "a1",
+          "pid": 1,
+          "child_pid": 563,
+          "thread": false
+        },
+        {
+          "v": 1,
+          "seq": 2,
+          "guest_ns": 2000,
+          "wall_ms": 1,
+          "kind": "process.exec",
+          "task": "b2",
+          "pid": 563,
+          "ppid": 1,
+          "path": "/usr/local/bin/sh",
+          "argv": [
+            "sh",
+            "-c",
+            "cd /app && make"
+          ],
+          "result": -2
+        },
+        {
+          "v": 1,
+          "seq": 3,
+          "guest_ns": 2000,
+          "wall_ms": 1,
+          "kind": "process.exec",
+          "task": "b2",
+          "pid": 563,
+          "ppid": 1,
+          "path": "/bin/sh",
+          "argv": [
+            "sh",
+            "-c",
+            "cd /app && make"
+          ]
+        },
+        {
+          "v": 1,
+          "seq": 4,
+          "guest_ns": 3000,
+          "wall_ms": 1,
+          "kind": "file.open",
+          "task": "b2",
+          "pid": 563,
+          "path": "/etc/ld-musl-riscv64.path",
+          "access": "read",
+          "create": false,
+          "truncate": false,
+          "result": 3
+        },
+        {
+          "v": 1,
+          "seq": 5,
+          "guest_ns": 3000,
+          "wall_ms": 1,
+          "kind": "file.open",
+          "task": "b2",
+          "pid": 563,
+          "path": "/usr/lib/libz.so.1",
+          "access": "read",
+          "create": false,
+          "truncate": false,
+          "result": 3
+        },
+        {
+          "v": 1,
+          "seq": 6,
+          "guest_ns": 3000,
+          "wall_ms": 1,
+          "kind": "file.open",
+          "task": "b2",
+          "pid": 563,
+          "path": "/proc/self/stat",
+          "access": "read",
+          "create": false,
+          "truncate": false,
+          "result": 4
+        },
+        {
+          "v": 1,
+          "seq": 7,
+          "guest_ns": 4000,
+          "wall_ms": 1,
+          "kind": "file.open",
+          "task": "b2",
+          "pid": 563,
+          "path": "/app/Makefile",
+          "access": "read",
+          "create": false,
+          "truncate": false,
+          "result": 3
+        },
+        {
+          "v": 1,
+          "seq": 8,
+          "guest_ns": 4000,
+          "wall_ms": 1,
+          "kind": "file.open",
+          "task": "b2",
+          "pid": 563,
+          "path": "/app/missing.h",
+          "access": "read",
+          "create": false,
+          "truncate": false,
+          "result": -2
+        },
+        {
+          "v": 1,
+          "seq": 9,
+          "guest_ns": 5000,
+          "wall_ms": 1,
+          "kind": "file.open",
+          "task": "b2",
+          "pid": 563,
+          "path": "/etc/shadow",
+          "access": "read",
+          "create": false,
+          "truncate": false,
+          "result": -13
+        },
+        {
+          "v": 1,
+          "seq": 10,
+          "guest_ns": 5000,
+          "wall_ms": 1,
+          "kind": "file.open",
+          "task": "b2",
+          "pid": 563,
+          "path": "/app/build/.out.tmp",
+          "access": "write",
+          "create": true,
+          "truncate": true,
+          "result": 5
+        },
+        {
+          "v": 1,
+          "seq": 11,
+          "guest_ns": 6000,
+          "wall_ms": 1,
+          "kind": "file.rename",
+          "task": "b2",
+          "pid": 563,
+          "from": "/app/build/.out.tmp",
+          "to": "/app/build/out",
+          "result": 0
+        },
+        {
+          "v": 1,
+          "seq": 12,
+          "guest_ns": 6000,
+          "wall_ms": 1,
+          "kind": "file.open",
+          "task": "b2",
+          "pid": 563,
+          "path": "/app/build/ext.so",
+          "access": "write",
+          "create": true,
+          "truncate": true,
+          "result": 6
+        },
+        {
+          "v": 1,
+          "seq": 13,
+          "guest_ns": 6000,
+          "wall_ms": 1,
+          "kind": "file.open",
+          "task": "b2",
+          "pid": 563,
+          "path": "/app/db.sqlite",
+          "access": "read-write",
+          "create": false,
+          "truncate": false,
+          "result": 7
+        },
+        {
+          "v": 1,
+          "seq": 14,
+          "guest_ns": 7000,
+          "wall_ms": 1,
+          "kind": "dir.create",
+          "task": "b2",
+          "pid": 563,
+          "path": "/app/cache",
+          "result": 0
+        },
+        {
+          "v": 1,
+          "seq": 15,
+          "guest_ns": 7000,
+          "wall_ms": 1,
+          "kind": "dir.create",
+          "task": "b2",
+          "pid": 563,
+          "path": "/app/build",
+          "result": -17
+        },
+        {
+          "v": 1,
+          "seq": 16,
+          "guest_ns": 7000,
+          "wall_ms": 1,
+          "kind": "file.truncate",
+          "task": "b2",
+          "pid": 563,
+          "path": "/app/log.txt",
+          "size": 0,
+          "result": 0
+        },
+        {
+          "v": 1,
+          "seq": 17,
+          "guest_ns": 8000,
+          "wall_ms": 1,
+          "kind": "file.delete",
+          "task": "b2",
+          "pid": 563,
+          "path": "/app/old.o",
+          "directory": false,
+          "result": 0
+        },
+        {
+          "v": 1,
+          "seq": 18,
+          "guest_ns": 8000,
+          "wall_ms": 1,
+          "kind": "file.delete",
+          "task": "b2",
+          "pid": 563,
+          "path": "/root/.ssh/authorized_keys",
+          "directory": false,
+          "result": -1
+        },
+        {
+          "v": 1,
+          "seq": 19,
+          "guest_ns": 8000,
+          "wall_ms": 1,
+          "kind": "file.delete",
+          "task": "c3",
+          "pid": 700,
+          "path": "/tmp/.vpod_cmd.b64",
+          "directory": false,
+          "result": 0,
+          "internal": true
+        },
+        {
+          "v": 1,
+          "seq": 20,
+          "guest_ns": 9000,
+          "wall_ms": 1,
+          "kind": "net.dns",
+          "name": "pypi.org",
+          "type": "A",
+          "answers": [
+            "151.101.192.223"
+          ]
+        },
+        {
+          "v": 1,
+          "seq": 21,
+          "guest_ns": 9000,
+          "wall_ms": 1,
+          "kind": "net.connect",
+          "task": "b2",
+          "pid": 563,
+          "protocol": "tcp",
+          "address": "151.101.192.223",
+          "port": 443,
+          "host": "pypi.org",
+          "result": 0
+        },
+        {
+          "v": 1,
+          "seq": 22,
+          "guest_ns": 9500,
+          "wall_ms": 1,
+          "kind": "net.http",
+          "protocol": "https",
+          "method": "GET",
+          "url": "https://pypi.org/simple/requests/",
+          "address": "151.101.192.223",
+          "port": 443
+        },
+        {
+          "v": 1,
+          "seq": 23,
+          "guest_ns": 9600,
+          "wall_ms": 1,
+          "kind": "net.http",
+          "protocol": "https",
+          "method": "GET",
+          "url": "https://pypi.org/simple/urllib3/",
+          "address": "151.101.192.223",
+          "port": 443
+        },
+        {
+          "v": 1,
+          "seq": 24,
+          "guest_ns": 9700,
+          "wall_ms": 1,
+          "kind": "net.flow",
+          "protocol": "tcp",
+          "address": "151.101.192.223",
+          "port": 443,
+          "host": "pypi.org",
+          "bytes_out": 252,
+          "bytes_in": 84487,
+          "duration_ns": 300,
+          "failed": false
+        },
+        {
+          "v": 1,
+          "seq": 25,
+          "guest_ns": 9800,
+          "wall_ms": 1,
+          "kind": "net.connect",
+          "task": "b2",
+          "pid": 563,
+          "protocol": "tcp",
+          "address": "151.101.192.223",
+          "port": 443,
+          "host": "pypi.org",
+          "result": -115
+        },
+        {
+          "v": 1,
+          "seq": 26,
+          "guest_ns": 9900,
+          "wall_ms": 1,
+          "kind": "net.flow",
+          "protocol": "tcp",
+          "address": "151.101.192.223",
+          "port": 443,
+          "host": "pypi.org",
+          "bytes_out": 100,
+          "bytes_in": 1000,
+          "duration_ns": 50,
+          "failed": false
+        },
+        {
+          "v": 1,
+          "seq": 27,
+          "guest_ns": 10000,
+          "wall_ms": 1,
+          "kind": "net.connect",
+          "task": "e5",
+          "pid": 564,
+          "protocol": null,
+          "address": "127.0.0.1",
+          "port": 9,
+          "host": null,
+          "result": -111
+        },
+        {
+          "v": 1,
+          "seq": 28,
+          "guest_ns": 10000,
+          "wall_ms": 1,
+          "kind": "net.http",
+          "protocol": "http",
+          "method": "POST",
+          "url": "http://example.com/upload",
+          "address": "93.184.215.14",
+          "port": 80
+        },
+        {
+          "v": 1,
+          "seq": 29,
+          "guest_ns": 10000,
+          "wall_ms": 1,
+          "kind": "net.flow",
+          "protocol": "tcp",
+          "address": "93.184.215.14",
+          "port": 80,
+          "host": null,
+          "bytes_out": 11,
+          "bytes_in": 0,
+          "duration_ns": 5,
+          "failed": true
+        },
+        {
+          "v": 1,
+          "seq": 30,
+          "guest_ns": 10500,
+          "wall_ms": 1,
+          "kind": "net.udp",
+          "address": "8.8.8.8",
+          "port": 123,
+          "host": null
+        },
+        {
+          "v": 1,
+          "seq": 31,
+          "guest_ns": 10600,
+          "wall_ms": 1,
+          "kind": "net.connect",
+          "task": "c3",
+          "pid": 700,
+          "protocol": "tcp",
+          "address": "10.0.2.2",
+          "port": 8080,
+          "host": null,
+          "result": 0,
+          "internal": true
+        },
+        {
+          "v": 1,
+          "seq": 32,
+          "guest_ns": 11000,
+          "wall_ms": 1,
+          "kind": "mount.open",
+          "pid": 563,
+          "path": "/data/input.csv",
+          "access": "read",
+          "truncate": false,
+          "result": 0
+        },
+        {
+          "v": 1,
+          "seq": 33,
+          "guest_ns": 11000,
+          "wall_ms": 1,
+          "kind": "mount.close",
+          "pid": 563,
+          "path": "/data/input.csv",
+          "bytes_read": 4096,
+          "bytes_written": 0
+        },
+        {
+          "v": 1,
+          "seq": 34,
+          "guest_ns": 11000,
+          "wall_ms": 1,
+          "kind": "mount.create",
+          "pid": 563,
+          "path": "/data/report.md",
+          "result": 0
+        },
+        {
+          "v": 1,
+          "seq": 35,
+          "guest_ns": 11000,
+          "wall_ms": 1,
+          "kind": "mount.close",
+          "pid": 563,
+          "path": "/data/report.md",
+          "bytes_read": 0,
+          "bytes_written": 512
+        },
+        {
+          "v": 1,
+          "seq": 36,
+          "guest_ns": 11000,
+          "wall_ms": 1,
+          "kind": "mount.mkdir",
+          "pid": 563,
+          "path": "/data/out",
+          "result": 0
+        },
+        {
+          "v": 1,
+          "seq": 37,
+          "guest_ns": 11000,
+          "wall_ms": 1,
+          "kind": "mount.rename",
+          "pid": 563,
+          "from": "/data/draft.md",
+          "to": "/data/out/final.md",
+          "result": 0
+        },
+        {
+          "v": 1,
+          "seq": 38,
+          "guest_ns": 11000,
+          "wall_ms": 1,
+          "kind": "mount.delete",
+          "pid": 563,
+          "path": "/data/stale.lock",
+          "directory": false,
+          "result": 0
+        },
+        {
+          "v": 1,
+          "seq": 39,
+          "guest_ns": 11000,
+          "wall_ms": 1,
+          "kind": "mount.truncate",
+          "pid": 563,
+          "path": "/data/log.txt",
+          "size": 0,
+          "result": 0
+        },
+        {
+          "v": 1,
+          "seq": 40,
+          "guest_ns": 11000,
+          "wall_ms": 1,
+          "kind": "mount.open",
+          "pid": 563,
+          "path": "/data/secret.key",
+          "access": "read",
+          "truncate": false,
+          "result": -13
+        },
+        {
+          "v": 1,
+          "seq": 41,
+          "guest_ns": 12000,
+          "wall_ms": 1,
+          "kind": "process.exec",
+          "task": "d4",
+          "pid": 570,
+          "ppid": 1,
+          "path": "/usr/lib/vpod/vpod-seed-entropy",
+          "argv": [
+            "vpod-seed-entropy",
+            "ab12"
+          ],
+          "internal": true
+        },
+        {
+          "v": 1,
+          "seq": 42,
+          "guest_ns": 12000,
+          "wall_ms": 1,
+          "kind": "process.exit",
+          "task": "d4",
+          "pid": 570,
+          "code": 0,
+          "internal": true
+        },
+        {
+          "v": 1,
+          "seq": 43,
+          "guest_ns": 13000,
+          "wall_ms": 1,
+          "kind": "process.exec",
+          "task": "b2",
+          "pid": 563,
+          "ppid": 1,
+          "path": "/usr/bin/make",
+          "argv": [
+            "make"
+          ]
+        },
+        {
+          "v": 1,
+          "seq": 44,
+          "guest_ns": 13500,
+          "wall_ms": 1,
+          "kind": "process.fork",
+          "task": "b2",
+          "pid": 563,
+          "child_pid": 564,
+          "thread": false
+        },
+        {
+          "v": 1,
+          "seq": 45,
+          "guest_ns": 14000,
+          "wall_ms": 1,
+          "kind": "process.exec",
+          "task": "e5",
+          "pid": 564,
+          "ppid": 563,
+          "path": "/usr/bin/cc",
+          "argv": [
+            "cc",
+            "-o",
+            "build/out",
+            "main.c"
+          ]
+        },
+        {
+          "v": 1,
+          "seq": 46,
+          "guest_ns": 15000,
+          "wall_ms": 1,
+          "kind": "process.exit",
+          "task": "e5",
+          "pid": 564,
+          "code": 1
+        },
+        {
+          "v": 1,
+          "seq": 47,
+          "guest_ns": 15200,
+          "wall_ms": 1,
+          "kind": "process.fork",
+          "task": "b2",
+          "pid": 563,
+          "child_pid": 565,
+          "thread": false
+        },
+        {
+          "v": 1,
+          "seq": 48,
+          "guest_ns": 15300,
+          "wall_ms": 1,
+          "kind": "process.fork",
+          "task": "f6",
+          "pid": 565,
+          "child_pid": 566,
+          "thread": false
+        },
+        {
+          "v": 1,
+          "seq": 49,
+          "guest_ns": 15400,
+          "wall_ms": 1,
+          "kind": "process.exec",
+          "task": "g7",
+          "pid": 566,
+          "ppid": 565,
+          "path": "/bin/echo",
+          "argv": [
+            "echo",
+            "done"
+          ]
+        },
+        {
+          "v": 1,
+          "seq": 50,
+          "guest_ns": 15500,
+          "wall_ms": 1,
+          "kind": "process.exit",
+          "task": "g7",
+          "pid": 566,
+          "code": 0
+        },
+        {
+          "v": 1,
+          "seq": 51,
+          "guest_ns": 16000,
+          "wall_ms": 1,
+          "kind": "process.exit",
+          "task": "b2",
+          "pid": 563,
+          "code": 2
+        },
+        {
+          "v": 1,
+          "seq": 52,
+          "guest_ns": 16500,
+          "wall_ms": 1,
+          "kind": "process.fork",
+          "task": "a1",
+          "pid": 1,
+          "child_pid": 571,
+          "thread": false
+        },
+        {
+          "v": 1,
+          "seq": 53,
+          "guest_ns": 17000,
+          "wall_ms": 1,
+          "kind": "process.exec",
+          "task": "h8",
+          "pid": 571,
+          "ppid": 1,
+          "path": "/usr/bin/python3",
+          "argv": [
+            "python3",
+            "-c",
+            "print(1)"
+          ],
+          "argv_truncated": true
+        },
+        {
+          "v": 1,
+          "seq": 54,
+          "guest_ns": 17500,
+          "wall_ms": 1,
+          "kind": "process.fork",
+          "task": "h8",
+          "pid": 571,
+          "child_pid": 572,
+          "thread": true
+        }
       ],
       "complete": true,
       "files": [
-        {"path": "/app/Makefile", "read": true, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/etc/shadow", "read": false, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": true, "processes": [563]},
-        {"path": "/app/build/.out.tmp", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": "/app/build/out", "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/app/build/out", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": "/app/build/.out.tmp", "denied": false, "processes": [563]},
-        {"path": "/app/build/ext.so", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/app/db.sqlite", "read": true, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/app/cache", "read": false, "written": false, "created": true, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/app/log.txt", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/app/old.o", "read": false, "written": false, "created": false, "deleted": true, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/root/.ssh/authorized_keys", "read": false, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": true, "processes": [563]},
-        {"path": "/data/input.csv", "read": true, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/data/report.md", "read": false, "written": true, "created": true, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/data/out", "read": false, "written": false, "created": true, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/data/draft.md", "read": false, "written": false, "created": false, "deleted": false, "renamed_to": "/data/out/final.md", "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/data/out/final.md", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": "/data/draft.md", "denied": false, "processes": [563]},
-        {"path": "/data/stale.lock", "read": false, "written": false, "created": false, "deleted": true, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/data/log.txt", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/data/secret.key", "read": false, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": true, "processes": [563]}
+        {
+          "path": "/app/Makefile",
+          "read": true,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/etc/shadow",
+          "read": false,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": true,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/app/build/.out.tmp",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": "/app/build/out",
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/app/build/out",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": "/app/build/.out.tmp",
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/app/build/ext.so",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/app/db.sqlite",
+          "read": true,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/app/cache",
+          "read": false,
+          "written": false,
+          "created": true,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/app/log.txt",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/app/old.o",
+          "read": false,
+          "written": false,
+          "created": false,
+          "deleted": true,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/root/.ssh/authorized_keys",
+          "read": false,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": true,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/data/input.csv",
+          "read": true,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/data/report.md",
+          "read": false,
+          "written": true,
+          "created": true,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/data/out",
+          "read": false,
+          "written": false,
+          "created": true,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/data/draft.md",
+          "read": false,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": "/data/out/final.md",
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/data/out/final.md",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": "/data/draft.md",
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/data/stale.lock",
+          "read": false,
+          "written": false,
+          "created": false,
+          "deleted": true,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/data/log.txt",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/data/secret.key",
+          "read": false,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": true,
+          "processes": [
+            563
+          ]
+        }
       ],
       "files_including_internal_and_noise": [
-        {"path": "/dev/ttyS1", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [1]},
-        {"path": "/etc/ld-musl-riscv64.path", "read": true, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/usr/lib/libz.so.1", "read": true, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/proc/self/stat", "read": true, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/app/Makefile", "read": true, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/etc/shadow", "read": false, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": true, "processes": [563]},
-        {"path": "/app/build/.out.tmp", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": "/app/build/out", "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/app/build/out", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": "/app/build/.out.tmp", "denied": false, "processes": [563]},
-        {"path": "/app/build/ext.so", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/app/db.sqlite", "read": true, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/app/cache", "read": false, "written": false, "created": true, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/app/log.txt", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/app/old.o", "read": false, "written": false, "created": false, "deleted": true, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/root/.ssh/authorized_keys", "read": false, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": true, "processes": [563]},
-        {"path": "/tmp/.vpod_cmd.b64", "read": false, "written": false, "created": false, "deleted": true, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [700]},
-        {"path": "/data/input.csv", "read": true, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/data/report.md", "read": false, "written": true, "created": true, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/data/out", "read": false, "written": false, "created": true, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/data/draft.md", "read": false, "written": false, "created": false, "deleted": false, "renamed_to": "/data/out/final.md", "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/data/out/final.md", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": "/data/draft.md", "denied": false, "processes": [563]},
-        {"path": "/data/stale.lock", "read": false, "written": false, "created": false, "deleted": true, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/data/log.txt", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/data/secret.key", "read": false, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": true, "processes": [563]}
+        {
+          "path": "/dev/ttyS1",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            1
+          ]
+        },
+        {
+          "path": "/etc/ld-musl-riscv64.path",
+          "read": true,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/usr/lib/libz.so.1",
+          "read": true,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/proc/self/stat",
+          "read": true,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/app/Makefile",
+          "read": true,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/etc/shadow",
+          "read": false,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": true,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/app/build/.out.tmp",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": "/app/build/out",
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/app/build/out",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": "/app/build/.out.tmp",
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/app/build/ext.so",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/app/db.sqlite",
+          "read": true,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/app/cache",
+          "read": false,
+          "written": false,
+          "created": true,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/app/log.txt",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/app/old.o",
+          "read": false,
+          "written": false,
+          "created": false,
+          "deleted": true,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/root/.ssh/authorized_keys",
+          "read": false,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": true,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/tmp/.vpod_cmd.b64",
+          "read": false,
+          "written": false,
+          "created": false,
+          "deleted": true,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            700
+          ]
+        },
+        {
+          "path": "/data/input.csv",
+          "read": true,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/data/report.md",
+          "read": false,
+          "written": true,
+          "created": true,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/data/out",
+          "read": false,
+          "written": false,
+          "created": true,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/data/draft.md",
+          "read": false,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": "/data/out/final.md",
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/data/out/final.md",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": "/data/draft.md",
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/data/stale.lock",
+          "read": false,
+          "written": false,
+          "created": false,
+          "deleted": true,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/data/log.txt",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/data/secret.key",
+          "read": false,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": true,
+          "processes": [
+            563
+          ]
+        }
       ],
       "network": [
-        {"host": "pypi.org", "address": "151.101.192.223", "port": 443, "protocol": "tcp", "requests": [{"method": "GET", "url": "https://pypi.org/simple/requests/"}, {"method": "GET", "url": "https://pypi.org/simple/urllib3/"}], "bytes_out": 352, "bytes_in": 85487, "failed": false, "processes": [563]},
-        {"host": null, "address": "127.0.0.1", "port": 9, "protocol": null, "requests": [], "bytes_out": 0, "bytes_in": 0, "failed": true, "processes": [564]},
-        {"host": "example.com", "address": "93.184.215.14", "port": 80, "protocol": "tcp", "requests": [{"method": "POST", "url": "http://example.com/upload"}], "bytes_out": 11, "bytes_in": 0, "failed": true, "processes": []},
-        {"host": null, "address": "8.8.8.8", "port": 123, "protocol": "udp", "requests": [], "bytes_out": 0, "bytes_in": 0, "failed": false, "processes": []}
+        {
+          "host": "pypi.org",
+          "address": "151.101.192.223",
+          "port": 443,
+          "protocol": "tcp",
+          "requests": [
+            {
+              "method": "GET",
+              "url": "https://pypi.org/simple/requests/",
+              "headers": {},
+              "body_bytes": null,
+              "body": null,
+              "body_encoding": null,
+              "body_truncated": false
+            },
+            {
+              "method": "GET",
+              "url": "https://pypi.org/simple/urllib3/",
+              "headers": {},
+              "body_bytes": null,
+              "body": null,
+              "body_encoding": null,
+              "body_truncated": false
+            }
+          ],
+          "bytes_out": 352,
+          "bytes_in": 85487,
+          "failed": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "host": null,
+          "address": "127.0.0.1",
+          "port": 9,
+          "protocol": null,
+          "requests": [],
+          "bytes_out": 0,
+          "bytes_in": 0,
+          "failed": true,
+          "processes": [
+            564
+          ]
+        },
+        {
+          "host": "example.com",
+          "address": "93.184.215.14",
+          "port": 80,
+          "protocol": "tcp",
+          "requests": [
+            {
+              "method": "POST",
+              "url": "http://example.com/upload",
+              "headers": {},
+              "body_bytes": null,
+              "body": null,
+              "body_encoding": null,
+              "body_truncated": false
+            }
+          ],
+          "bytes_out": 11,
+          "bytes_in": 0,
+          "failed": true,
+          "processes": []
+        },
+        {
+          "host": null,
+          "address": "8.8.8.8",
+          "port": 123,
+          "protocol": "udp",
+          "requests": [],
+          "bytes_out": 0,
+          "bytes_in": 0,
+          "failed": false,
+          "processes": []
+        }
       ],
       "network_including_internal": [
-        {"host": "pypi.org", "address": "151.101.192.223", "port": 443, "protocol": "tcp", "requests": [{"method": "GET", "url": "https://pypi.org/simple/requests/"}, {"method": "GET", "url": "https://pypi.org/simple/urllib3/"}], "bytes_out": 352, "bytes_in": 85487, "failed": false, "processes": [563]},
-        {"host": null, "address": "127.0.0.1", "port": 9, "protocol": null, "requests": [], "bytes_out": 0, "bytes_in": 0, "failed": true, "processes": [564]},
-        {"host": "example.com", "address": "93.184.215.14", "port": 80, "protocol": "tcp", "requests": [{"method": "POST", "url": "http://example.com/upload"}], "bytes_out": 11, "bytes_in": 0, "failed": true, "processes": []},
-        {"host": null, "address": "8.8.8.8", "port": 123, "protocol": "udp", "requests": [], "bytes_out": 0, "bytes_in": 0, "failed": false, "processes": []},
-        {"host": null, "address": "10.0.2.2", "port": 8080, "protocol": "tcp", "requests": [], "bytes_out": 0, "bytes_in": 0, "failed": false, "processes": [700]}
+        {
+          "host": "pypi.org",
+          "address": "151.101.192.223",
+          "port": 443,
+          "protocol": "tcp",
+          "requests": [
+            {
+              "method": "GET",
+              "url": "https://pypi.org/simple/requests/",
+              "headers": {},
+              "body_bytes": null,
+              "body": null,
+              "body_encoding": null,
+              "body_truncated": false
+            },
+            {
+              "method": "GET",
+              "url": "https://pypi.org/simple/urllib3/",
+              "headers": {},
+              "body_bytes": null,
+              "body": null,
+              "body_encoding": null,
+              "body_truncated": false
+            }
+          ],
+          "bytes_out": 352,
+          "bytes_in": 85487,
+          "failed": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "host": null,
+          "address": "127.0.0.1",
+          "port": 9,
+          "protocol": null,
+          "requests": [],
+          "bytes_out": 0,
+          "bytes_in": 0,
+          "failed": true,
+          "processes": [
+            564
+          ]
+        },
+        {
+          "host": "example.com",
+          "address": "93.184.215.14",
+          "port": 80,
+          "protocol": "tcp",
+          "requests": [
+            {
+              "method": "POST",
+              "url": "http://example.com/upload",
+              "headers": {},
+              "body_bytes": null,
+              "body": null,
+              "body_encoding": null,
+              "body_truncated": false
+            }
+          ],
+          "bytes_out": 11,
+          "bytes_in": 0,
+          "failed": true,
+          "processes": []
+        },
+        {
+          "host": null,
+          "address": "8.8.8.8",
+          "port": 123,
+          "protocol": "udp",
+          "requests": [],
+          "bytes_out": 0,
+          "bytes_in": 0,
+          "failed": false,
+          "processes": []
+        },
+        {
+          "host": null,
+          "address": "10.0.2.2",
+          "port": 8080,
+          "protocol": "tcp",
+          "requests": [],
+          "bytes_out": 0,
+          "bytes_in": 0,
+          "failed": false,
+          "processes": [
+            700
+          ]
+        }
       ],
       "processes": [
-        {"pid": 563, "path": "/bin/sh", "argv": ["sh", "-c", "cd /app && make"], "exit_code": null, "started_at": 2000, "children": [{"pid": 563, "path": "/usr/bin/make", "argv": ["make"], "exit_code": 2, "started_at": 13000, "children": [{"pid": 564, "path": "/usr/bin/cc", "argv": ["cc", "-o", "build/out", "main.c"], "exit_code": 1, "started_at": 14000, "children": []}, {"pid": 566, "path": "/bin/echo", "argv": ["echo", "done"], "exit_code": 0, "started_at": 15400, "children": []}]}]},
-        {"pid": 571, "path": "/usr/bin/python3", "argv": ["python3", "-c", "print(1)"], "exit_code": null, "started_at": 17000, "children": []}
+        {
+          "pid": 563,
+          "path": "/bin/sh",
+          "argv": [
+            "sh",
+            "-c",
+            "cd /app && make"
+          ],
+          "exit_code": null,
+          "started_at": 2000,
+          "children": [
+            {
+              "pid": 563,
+              "path": "/usr/bin/make",
+              "argv": [
+                "make"
+              ],
+              "exit_code": 2,
+              "started_at": 13000,
+              "children": [
+                {
+                  "pid": 564,
+                  "path": "/usr/bin/cc",
+                  "argv": [
+                    "cc",
+                    "-o",
+                    "build/out",
+                    "main.c"
+                  ],
+                  "exit_code": 1,
+                  "started_at": 14000,
+                  "children": []
+                },
+                {
+                  "pid": 566,
+                  "path": "/bin/echo",
+                  "argv": [
+                    "echo",
+                    "done"
+                  ],
+                  "exit_code": 0,
+                  "started_at": 15400,
+                  "children": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "pid": 571,
+          "path": "/usr/bin/python3",
+          "argv": [
+            "python3",
+            "-c",
+            "print(1)"
+          ],
+          "exit_code": null,
+          "started_at": 17000,
+          "children": []
+        }
       ],
       "processes_including_internal": [
-        {"pid": 563, "path": "/bin/sh", "argv": ["sh", "-c", "cd /app && make"], "exit_code": null, "started_at": 2000, "children": [{"pid": 563, "path": "/usr/bin/make", "argv": ["make"], "exit_code": 2, "started_at": 13000, "children": [{"pid": 564, "path": "/usr/bin/cc", "argv": ["cc", "-o", "build/out", "main.c"], "exit_code": 1, "started_at": 14000, "children": []}, {"pid": 566, "path": "/bin/echo", "argv": ["echo", "done"], "exit_code": 0, "started_at": 15400, "children": []}]}]},
-        {"pid": 570, "path": "/usr/lib/vpod/vpod-seed-entropy", "argv": ["vpod-seed-entropy", "ab12"], "exit_code": 0, "started_at": 12000, "children": []},
-        {"pid": 571, "path": "/usr/bin/python3", "argv": ["python3", "-c", "print(1)"], "exit_code": null, "started_at": 17000, "children": []}
+        {
+          "pid": 563,
+          "path": "/bin/sh",
+          "argv": [
+            "sh",
+            "-c",
+            "cd /app && make"
+          ],
+          "exit_code": null,
+          "started_at": 2000,
+          "children": [
+            {
+              "pid": 563,
+              "path": "/usr/bin/make",
+              "argv": [
+                "make"
+              ],
+              "exit_code": 2,
+              "started_at": 13000,
+              "children": [
+                {
+                  "pid": 564,
+                  "path": "/usr/bin/cc",
+                  "argv": [
+                    "cc",
+                    "-o",
+                    "build/out",
+                    "main.c"
+                  ],
+                  "exit_code": 1,
+                  "started_at": 14000,
+                  "children": []
+                },
+                {
+                  "pid": 566,
+                  "path": "/bin/echo",
+                  "argv": [
+                    "echo",
+                    "done"
+                  ],
+                  "exit_code": 0,
+                  "started_at": 15400,
+                  "children": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "pid": 570,
+          "path": "/usr/lib/vpod/vpod-seed-entropy",
+          "argv": [
+            "vpod-seed-entropy",
+            "ab12"
+          ],
+          "exit_code": 0,
+          "started_at": 12000,
+          "children": []
+        },
+        {
+          "pid": 571,
+          "path": "/usr/bin/python3",
+          "argv": [
+            "python3",
+            "-c",
+            "print(1)"
+          ],
+          "exit_code": null,
+          "started_at": 17000,
+          "children": []
+        }
       ]
     },
     {
       "name": "a buffer that overflowed",
       "events": [
-        {"v": 1, "seq": 0, "guest_ns": 1, "wall_ms": 1, "kind": "file.open", "task": "a1", "pid": 563, "path": "/tmp/a", "access": "write", "create": true, "truncate": true, "result": 3},
-        {"v": 1, "seq": 1, "guest_ns": 2, "wall_ms": 1, "kind": "trace.dropped", "count": 912},
-        {"v": 1, "seq": 2, "guest_ns": 3, "wall_ms": 1, "kind": "file.open", "task": "a1", "pid": 563, "path": "/tmp/b", "access": "read", "create": false, "truncate": false, "result": 3}
+        {
+          "v": 1,
+          "seq": 0,
+          "guest_ns": 1,
+          "wall_ms": 1,
+          "kind": "file.open",
+          "task": "a1",
+          "pid": 563,
+          "path": "/tmp/a",
+          "access": "write",
+          "create": true,
+          "truncate": true,
+          "result": 3
+        },
+        {
+          "v": 1,
+          "seq": 1,
+          "guest_ns": 2,
+          "wall_ms": 1,
+          "kind": "trace.dropped",
+          "count": 912
+        },
+        {
+          "v": 1,
+          "seq": 2,
+          "guest_ns": 3,
+          "wall_ms": 1,
+          "kind": "file.open",
+          "task": "a1",
+          "pid": 563,
+          "path": "/tmp/b",
+          "access": "read",
+          "create": false,
+          "truncate": false,
+          "result": 3
+        }
       ],
       "complete": false,
       "files": [
-        {"path": "/tmp/a", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/tmp/b", "read": true, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]}
+        {
+          "path": "/tmp/a",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/tmp/b",
+          "read": true,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        }
       ],
       "files_including_internal_and_noise": [
-        {"path": "/tmp/a", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]},
-        {"path": "/tmp/b", "read": true, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [563]}
+        {
+          "path": "/tmp/a",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        },
+        {
+          "path": "/tmp/b",
+          "read": true,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            563
+          ]
+        }
       ],
       "network": [],
       "network_including_internal": [],
@@ -152,46 +1656,196 @@
     {
       "name": "a guest whose process ids were never calibrated",
       "events": [
-        {"v": 1, "seq": 0, "guest_ns": 1000, "wall_ms": 1, "kind": "process.exec", "task": "a1", "pid": null, "path": "/bin/sh", "argv": ["sh", "-c", "cat data/notes.txt"]},
-        {"v": 1, "seq": 1, "guest_ns": 2000, "wall_ms": 1, "kind": "file.open", "task": "a1", "pid": null, "path": "data/notes.txt", "access": "read", "create": false, "truncate": false, "result": 3, "path_unresolved": true}
+        {
+          "v": 1,
+          "seq": 0,
+          "guest_ns": 1000,
+          "wall_ms": 1,
+          "kind": "process.exec",
+          "task": "a1",
+          "pid": null,
+          "path": "/bin/sh",
+          "argv": [
+            "sh",
+            "-c",
+            "cat data/notes.txt"
+          ]
+        },
+        {
+          "v": 1,
+          "seq": 1,
+          "guest_ns": 2000,
+          "wall_ms": 1,
+          "kind": "file.open",
+          "task": "a1",
+          "pid": null,
+          "path": "data/notes.txt",
+          "access": "read",
+          "create": false,
+          "truncate": false,
+          "result": 3,
+          "path_unresolved": true
+        }
       ],
       "complete": false,
       "files": [
-        {"path": "data/notes.txt", "read": true, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": []}
+        {
+          "path": "data/notes.txt",
+          "read": true,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": []
+        }
       ],
       "files_including_internal_and_noise": [
-        {"path": "data/notes.txt", "read": true, "written": false, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": []}
+        {
+          "path": "data/notes.txt",
+          "read": true,
+          "written": false,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": []
+        }
       ],
       "network": [],
       "network_including_internal": [],
       "processes": [
-        {"pid": null, "path": "/bin/sh", "argv": ["sh", "-c", "cat data/notes.txt"], "exit_code": null, "started_at": 1000, "children": []}
+        {
+          "pid": null,
+          "path": "/bin/sh",
+          "argv": [
+            "sh",
+            "-c",
+            "cat data/notes.txt"
+          ],
+          "exit_code": null,
+          "started_at": 1000,
+          "children": []
+        }
       ],
       "processes_including_internal": [
-        {"pid": null, "path": "/bin/sh", "argv": ["sh", "-c", "cat data/notes.txt"], "exit_code": null, "started_at": 1000, "children": []}
+        {
+          "pid": null,
+          "path": "/bin/sh",
+          "argv": [
+            "sh",
+            "-c",
+            "cat data/notes.txt"
+          ],
+          "exit_code": null,
+          "started_at": 1000,
+          "children": []
+        }
       ]
     },
     {
       "name": "a guest that got behind the tracer with io_uring",
       "events": [
-        {"v": 1, "seq": 0, "guest_ns": 1000, "wall_ms": 1, "kind": "process.exec", "task": "a1", "pid": 601, "ppid": 1, "path": "/usr/bin/node", "argv": ["node", "build.js"]},
-        {"v": 1, "seq": 1, "guest_ns": 2000, "wall_ms": 1, "kind": "trace.blind", "task": "a1", "pid": 601, "reason": "io-uring"},
-        {"v": 1, "seq": 2, "guest_ns": 3000, "wall_ms": 1, "kind": "file.open", "task": "a1", "pid": 601, "path": "/app/out.js", "access": "write", "create": true, "truncate": true, "result": 3}
+        {
+          "v": 1,
+          "seq": 0,
+          "guest_ns": 1000,
+          "wall_ms": 1,
+          "kind": "process.exec",
+          "task": "a1",
+          "pid": 601,
+          "ppid": 1,
+          "path": "/usr/bin/node",
+          "argv": [
+            "node",
+            "build.js"
+          ]
+        },
+        {
+          "v": 1,
+          "seq": 1,
+          "guest_ns": 2000,
+          "wall_ms": 1,
+          "kind": "trace.blind",
+          "task": "a1",
+          "pid": 601,
+          "reason": "io-uring"
+        },
+        {
+          "v": 1,
+          "seq": 2,
+          "guest_ns": 3000,
+          "wall_ms": 1,
+          "kind": "file.open",
+          "task": "a1",
+          "pid": 601,
+          "path": "/app/out.js",
+          "access": "write",
+          "create": true,
+          "truncate": true,
+          "result": 3
+        }
       ],
       "complete": false,
       "files": [
-        {"path": "/app/out.js", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [601]}
+        {
+          "path": "/app/out.js",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            601
+          ]
+        }
       ],
       "files_including_internal_and_noise": [
-        {"path": "/app/out.js", "read": false, "written": true, "created": false, "deleted": false, "renamed_to": null, "renamed_from": null, "denied": false, "processes": [601]}
+        {
+          "path": "/app/out.js",
+          "read": false,
+          "written": true,
+          "created": false,
+          "deleted": false,
+          "renamed_to": null,
+          "renamed_from": null,
+          "denied": false,
+          "processes": [
+            601
+          ]
+        }
       ],
       "network": [],
       "network_including_internal": [],
       "processes": [
-        {"pid": 601, "path": "/usr/bin/node", "argv": ["node", "build.js"], "exit_code": null, "started_at": 1000, "children": []}
+        {
+          "pid": 601,
+          "path": "/usr/bin/node",
+          "argv": [
+            "node",
+            "build.js"
+          ],
+          "exit_code": null,
+          "started_at": 1000,
+          "children": []
+        }
       ],
       "processes_including_internal": [
-        {"pid": 601, "path": "/usr/bin/node", "argv": ["node", "build.js"], "exit_code": null, "started_at": 1000, "children": []}
+        {
+          "pid": 601,
+          "path": "/usr/bin/node",
+          "argv": [
+            "node",
+            "build.js"
+          ],
+          "exit_code": null,
+          "started_at": 1000,
+          "children": []
+        }
       ]
     }
   ]

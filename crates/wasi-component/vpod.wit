@@ -42,7 +42,6 @@ interface executor {
         files: bool,
         network: bool,
         mounts: bool,
-        request-content: bool,
         buffer-bytes: u32,
     }
 

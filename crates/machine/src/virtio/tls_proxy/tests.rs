@@ -8,6 +8,8 @@ use rustls::pki_types::ServerName;
 use std::net::TcpListener;
 use std::thread;
 
+use crate::trace::{Tracer, TraceOptions};
+
 const UPSTREAM_REPLY: &[u8] = b"HTTP/1.0 200 OK\r\nContent-Length: 5\r\n\r\nhello";
 
 fn provider() -> Arc<CryptoProvider> {
@@ -891,8 +893,6 @@ fn large_response_delivered_in_full_without_truncation() {
     assert_eq!(body, Some(BODY), "large body truncated: {body:?} of {BODY}");
 }
 
-/// Drive a real guest TLS client through the proxy and return what the upstream
-/// received, or `None` when the proxy refused the connection.
 fn request_through_proxy(
     proxy: &mut TlsProxy,
     up_ca: &str,
@@ -1047,10 +1047,7 @@ fn a_traced_header_holds_the_stand_in_and_never_the_credential() {
     let ctx = TlsContext::new().unwrap();
     let mut proxy = proxy_carrying(&ctx, &up_ca, port, &["localhost"]);
 
-    let tracer = crate::trace::Tracer::new(crate::trace::TraceOptions {
-        request_content: true,
-        ..crate::trace::TraceOptions::default()
-    });
+    let tracer = Tracer::new(TraceOptions::default());
     proxy.observe_http(crate::trace::HttpObserver::new(
         tracer.clone(),
         "https",

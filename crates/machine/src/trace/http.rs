@@ -32,7 +32,6 @@ pub struct HttpRequests {
     head: Vec<u8>,
     body_bytes_left: u64,
     stopped: bool,
-    capture_bodies: bool,
     body: Vec<u8>,
     body_truncated: bool,
 }
@@ -45,14 +44,9 @@ impl HttpRequests {
             head: Vec::new(),
             body_bytes_left: 0,
             stopped: false,
-            capture_bodies: false,
             body: Vec::new(),
             body_truncated: false,
         }
-    }
-
-    pub fn capture_bodies(&mut self) {
-        self.capture_bodies = true;
     }
 
     pub fn set_default_host(&mut self, host: &str) {
@@ -118,7 +112,7 @@ impl HttpRequests {
     }
 
     fn keep_body(&mut self, bytes: &[u8]) {
-        if !self.capture_bodies || bytes.is_empty() {
+        if bytes.is_empty() {
             return;
         }
 
@@ -130,7 +124,7 @@ impl HttpRequests {
     }
 
     fn finish_body(&mut self) -> Option<HttpEvent> {
-        if !self.capture_bodies || (self.body.is_empty() && !self.body_truncated) {
+        if self.body.is_empty() && !self.body_truncated {
             return None;
         }
 
@@ -236,25 +230,17 @@ pub struct HttpObserver {
     requests: HttpRequests,
     address: [u8; 4],
     port: u16,
-    content: bool,
     head_seq: Option<u64>,
     head_url: Option<String>,
 }
 
 impl HttpObserver {
     pub fn new(tracer: Tracer, scheme: &'static str, address: [u8; 4], port: u16) -> Self {
-        let content = tracer.traces_request_content();
-        let mut requests = HttpRequests::new(scheme, None);
-        if content {
-            requests.capture_bodies();
-        }
-
         Self {
             tracer,
-            requests,
+            requests: HttpRequests::new(scheme, None),
             address,
             port,
-            content,
             head_seq: None,
             head_url: None,
         }
@@ -277,22 +263,20 @@ impl HttpObserver {
                         ("port", self.port.into()),
                     ];
 
-                    if self.content {
-                        let headers: serde_json::Map<String, Value> = request
-                            .headers
-                            .into_iter()
-                            .map(|(name, value)| (name, Value::from(value)))
-                            .collect();
+                    let headers: serde_json::Map<String, Value> = request
+                        .headers
+                        .into_iter()
+                        .map(|(name, value)| (name, Value::from(value)))
+                        .collect();
 
-                        fields.push(("headers", Value::Object(headers)));
-                        fields.push((
-                            "body_bytes",
-                            match request.body_bytes {
-                                Some(length) => Value::from(length),
-                                None => Value::Null,
-                            },
-                        ));
-                    }
+                    fields.push(("headers", Value::Object(headers)));
+                    fields.push((
+                        "body_bytes",
+                        match request.body_bytes {
+                            Some(length) => Value::from(length),
+                            None => Value::Null,
+                        },
+                    ));
 
                     self.head_seq = self.tracer.record_seq("net.http", &fields);
                     self.head_url = Some(url);
@@ -362,9 +346,7 @@ mod tests {
     }
 
     fn capturing() -> HttpRequests {
-        let mut requests = HttpRequests::new("https", Some("api.example.com".to_string()));
-        requests.capture_bodies();
-        requests
+        HttpRequests::new("https", Some("api.example.com".to_string()))
     }
 
     fn post(body: &str) -> Vec<u8> {
@@ -493,17 +475,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn nothing_is_kept_unless_capture_was_asked_for() {
-        let mut requests = HttpRequests::new("https", Some("api.example.com".to_string()));
-        let events = requests.observe(&post(r#"{"secret":"value"}"#));
-
-        assert_eq!(
-            bodies(events).len(),
-            0,
-            "a body was kept without being asked for"
-        );
-    }
     #[test]
     fn a_request_split_across_writes_is_seen_once() {
         let mut requests = HttpRequests::new("https", None);

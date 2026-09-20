@@ -33,28 +33,15 @@ def trace_options(trace) -> Optional[dict]:
     if trace is None or trace is False:
         return None
     if trace is True:
-        return {
-            **{source: True for source in SOURCES},
-            "request_content": False,
-            "buffer_bytes": 0,
-        }
+        return {**{source: True for source in SOURCES}, "buffer_bytes": 0}
     if isinstance(trace, dict):
-        unknown = set(trace) - set(SOURCES) - {"buffer_bytes", "request_content"}
+        unknown = set(trace) - set(SOURCES) - {"buffer_bytes"}
         if unknown:
             raise ValueError(
-                f"unknown trace options {sorted(unknown)}, expected "
-                f"{list(SOURCES) + ['request_content', 'buffer_bytes']}"
+                f"unknown trace options {sorted(unknown)}, expected {list(SOURCES) + ['buffer_bytes']}"
             )
-        request_content = bool(trace.get("request_content", False))
-        if request_content and not trace.get("network", False):
-            raise ValueError(
-                "trace request_content records what each traced request carried, "
-                "so it needs network tracing on as well"
-            )
-
         return {
             **{source: bool(trace.get(source, False)) for source in SOURCES},
-            "request_content": request_content,
             "buffer_bytes": int(trace.get("buffer_bytes", 0)),
         }
     raise TypeError(f"trace must be True or a dict of sources, got {trace!r}")
@@ -77,6 +64,11 @@ class FileActivity:
 class HttpRequest:
     method: str
     url: str
+    headers: dict[str, str] = field(default_factory=dict)
+    body_bytes: Optional[int] = None
+    body: Optional[str] = None
+    body_encoding: Optional[str] = None
+    body_truncated: bool = False
 
 
 @dataclass
@@ -223,10 +215,19 @@ class Trace:
                 touching[key].add(pid)
             return entry
 
+        requests_by_seq: dict[int, HttpRequest] = {}
+
         for event in self._events:
             if event.get("internal") and not internal:
                 continue
             kind = event["kind"]
+
+            if kind == "net.http.body":
+                if (request := requests_by_seq.get(event.get("request_seq"))) is not None:
+                    request.body = event.get("content")
+                    request.body_encoding = event.get("encoding")
+                    request.body_truncated = bool(event.get("truncated"))
+                continue
 
             if kind not in ("net.connect", "net.flow", "net.udp", "net.http"):
                 continue
@@ -246,7 +247,14 @@ class Trace:
                 entry.failed = False
             else:
                 entry.host = entry.host or urlsplit(event["url"]).hostname
-                entry.requests.append(HttpRequest(event["method"], event["url"]))
+                request = HttpRequest(
+                    event["method"],
+                    event["url"],
+                    headers=event.get("headers") or {},
+                    body_bytes=event.get("body_bytes"),
+                )
+                entry.requests.append(request)
+                requests_by_seq[event["seq"]] = request
 
         for key, entry in activities.items():
             entry.processes = sorted(touching[key])
@@ -389,7 +397,6 @@ class TraceRecorder:
         record: object = object.__new__(type("TraceOptions", (), {}))
         for source in SOURCES:
             object.__setattr__(record, source, self._options[source])
-        object.__setattr__(record, "request-content", self._options["request_content"])
         object.__setattr__(record, "buffer-bytes", self._options["buffer_bytes"])
         unwrap_result(exports["session-trace-start"](session_id, record))
 

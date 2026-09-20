@@ -23,7 +23,6 @@ pub struct TraceOptions {
     pub files: bool,
     pub network: bool,
     pub mounts: bool,
-    pub request_content: bool,
     pub buffer_bytes: usize,
 }
 
@@ -34,7 +33,6 @@ impl Default for TraceOptions {
             files: true,
             network: true,
             mounts: true,
-            request_content: false,
             buffer_bytes: DEFAULT_BUFFER_BYTES,
         }
     }
@@ -84,10 +82,6 @@ impl Tracer {
 
     pub fn traces_network(&self) -> bool {
         self.options.network
-    }
-
-    pub fn traces_request_content(&self) -> bool {
-        self.options.network && self.options.request_content
     }
 
     pub fn traces_mounts(&self) -> bool {
