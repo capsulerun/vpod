@@ -140,6 +140,7 @@ impl<'a> RamView<'a> {
         }
         let idx = self.idx(physical_address);
         self.ram.write_u8(idx, val);
+        self.ram.note_device_write(idx, 1);
     }
 
     pub fn write_u16(&mut self, physical_address: u64, val: u16) {
@@ -149,6 +150,7 @@ impl<'a> RamView<'a> {
         }
         let idx = self.idx(physical_address);
         self.ram.write_u16(idx, val);
+        self.ram.note_device_write(idx, 2);
     }
 
     pub fn write_u32(&mut self, physical_address: u64, val: u32) {
@@ -158,6 +160,7 @@ impl<'a> RamView<'a> {
         }
         let idx = self.idx(physical_address);
         self.ram.write_u32(idx, val);
+        self.ram.note_device_write(idx, 4);
     }
 
     pub fn write_u64(&mut self, physical_address: u64, val: u64) {
@@ -167,6 +170,7 @@ impl<'a> RamView<'a> {
         }
         let idx = self.idx(physical_address);
         self.ram.write_u64(idx, val);
+        self.ram.note_device_write(idx, 8);
     }
 
     pub fn read_bytes(&self, physical_address: u64, buf: &mut [u8]) {
@@ -188,6 +192,7 @@ impl<'a> RamView<'a> {
             None => {
                 let idx = self.idx(physical_address);
                 self.ram.write_from(idx, buf);
+                self.ram.note_device_write(idx, buf.len());
             }
         }
     }

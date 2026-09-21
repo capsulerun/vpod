@@ -16,6 +16,8 @@ pub struct CowRam {
     len: usize,
     mask: u64,
     epoch: u64,
+    device_written_pages: Vec<u32>,
+    device_written_seen: Vec<u64>,
 }
 
 impl CowRam {
@@ -35,6 +37,8 @@ impl CowRam {
             len: ram_size as usize + 8,
             mask: ram_size - 1,
             epoch: next_epoch(),
+            device_written_pages: Vec::new(),
+            device_written_seen: Vec::new(),
         }
     }
 
@@ -53,6 +57,8 @@ impl CowRam {
             len,
             mask: ram_size - 1,
             epoch: next_epoch(),
+            device_written_pages: Vec::new(),
+            device_written_seen: Vec::new(),
         }
     }
 
@@ -70,6 +76,8 @@ impl CowRam {
             len: logical_len,
             mask: ram_size - 1,
             epoch: next_epoch(),
+            device_written_pages: Vec::new(),
+            device_written_seen: Vec::new(),
         }
     }
 
@@ -80,12 +88,42 @@ impl CowRam {
             len: self.len,
             mask: self.mask,
             epoch: next_epoch(),
+            device_written_pages: Vec::new(),
+            device_written_seen: Vec::new(),
         }
     }
 
     #[inline(always)]
     pub fn epoch(&self) -> u64 {
         self.epoch
+    }
+
+    pub fn note_device_write(&mut self, index: usize, len: usize) {
+        if len == 0 {
+            return;
+        }
+        let first_page = index / PAGE_SIZE;
+        let last_page = (index + len - 1) / PAGE_SIZE;
+
+        for page in first_page..=last_page {
+            let word = page / 64;
+            let bit = 1u64 << (page % 64);
+            if word >= self.device_written_seen.len() {
+                self.device_written_seen.resize(word + 1, 0);
+            }
+            if self.device_written_seen[word] & bit == 0 {
+                self.device_written_seen[word] |= bit;
+                self.device_written_pages.push(page as u32);
+            }
+        }
+    }
+
+    pub fn drain_device_written_pages(&mut self, mut visit: impl FnMut(usize)) {
+        for page in self.device_written_pages.drain(..) {
+            let page = page as usize;
+            self.device_written_seen[page / 64] &= !(1u64 << (page % 64));
+            visit(page);
+        }
     }
 
     #[inline(always)]
@@ -304,6 +342,31 @@ mod tests {
     use super::*;
 
     const WASM32_ISIZE_MAX: usize = (1usize << 31) - 1;
+
+    #[test]
+    fn device_writes_are_listed_once_per_page_until_drained() {
+        let mut ram = CowRam::new(1 << 20);
+        ram.note_device_write(10, 4);
+        ram.note_device_write(20, 4);
+        ram.note_device_write(PAGE_SIZE - 2, 4);
+
+        let mut drained = Vec::new();
+        ram.drain_device_written_pages(|page| drained.push(page));
+        assert_eq!(drained, vec![0, 1]);
+
+        let mut again = Vec::new();
+        ram.drain_device_written_pages(|page| again.push(page));
+        assert!(again.is_empty(), "a drain left pages behind: {again:?}");
+
+        ram.note_device_write(5, 1);
+        let mut rewritten = Vec::new();
+        ram.drain_device_written_pages(|page| rewritten.push(page));
+        assert_eq!(
+            rewritten,
+            vec![0],
+            "a drained page could not be recorded again"
+        );
+    }
 
     #[test]
     fn new_allocates_page_padded_and_never_grows() {

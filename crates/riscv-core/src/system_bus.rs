@@ -28,6 +28,11 @@ pub trait SystemBus {
         0
     }
 
+    fn drain_device_written_pages(&mut self, visit: &mut dyn FnMut(u64)) -> bool {
+        let _ = visit;
+        false
+    }
+
     fn timer_interrupt_pending(&self) -> Option<bool> {
         None
     }

@@ -393,12 +393,18 @@ impl BlockCache {
     }
 }
 
+#[inline(never)]
 pub fn decode_block<B: SystemBus>(bus: &mut B, physical_address: u64) -> Option<Block> {
-    let mut ops: Vec<DecodedInsn> = Vec::new();
+    let mut ops = [DecodedInsn {
+        op: Op::Fallback { raw: 0 },
+        pc_off: 0,
+        ilen: 0,
+    }; MAX_BLOCK_OPS];
+    let mut op_count = 0;
     let mut offset_in_block: u64 = 0;
     let page_end = 0x1000 - (physical_address & 0xfff);
 
-    while ops.len() < MAX_BLOCK_OPS && offset_in_block + 2 <= page_end {
+    while op_count < MAX_BLOCK_OPS && offset_in_block + 2 <= page_end {
         let low_halfword = bus.read_halfword(physical_address + offset_in_block) as u32;
 
         let (op, ilen) = if low_halfword & 0x3 != 0x3 {
@@ -426,11 +432,12 @@ pub fn decode_block<B: SystemBus>(bus: &mut B, physical_address: u64) -> Option<
         };
 
         let terminator = matches!(op, Op::Jal { .. } | Op::Jalr { .. });
-        ops.push(DecodedInsn {
+        ops[op_count] = DecodedInsn {
             op,
             pc_off: offset_in_block as u16,
             ilen,
-        });
+        };
+        op_count += 1;
         offset_in_block += ilen as u64;
 
         if terminator {
@@ -438,12 +445,12 @@ pub fn decode_block<B: SystemBus>(bus: &mut B, physical_address: u64) -> Option<
         }
     }
 
-    if ops.is_empty() {
+    if op_count == 0 {
         return None;
     }
 
     Some(Block {
-        ops: ops.into_boxed_slice(),
+        ops: Box::from(&ops[..op_count]),
         byte_len: offset_in_block as u32,
     })
 }
@@ -1100,26 +1107,26 @@ pub fn exec_block<B: SystemBus>(
 
         match decoded_instruction.op {
             Op::Lui { rd, imm } => {
-                ctx.regs.write(rd as usize, imm as u64);
+                ctx.regs.write_masked(rd, imm as u64);
             }
             Op::Auipc { rd, imm } => {
-                ctx.regs.write(rd as usize, pc.wrapping_add(imm as u64));
+                ctx.regs.write_masked(rd, pc.wrapping_add(imm as u64));
             }
             Op::AluImm { kind, rd, rs1, imm } => {
-                let a = ctx.regs.read(rs1 as usize);
-                ctx.regs.write(rd as usize, alu(kind, a, imm as u64));
+                let a = ctx.regs.read_masked(rs1);
+                ctx.regs.write_masked(rd, alu(kind, a, imm as u64));
             }
             Op::AluReg { kind, rd, rs1, rs2 } => {
-                let a = ctx.regs.read(rs1 as usize);
-                let b = ctx.regs.read(rs2 as usize);
+                let a = ctx.regs.read_masked(rs1);
+                let b = ctx.regs.read_masked(rs2);
 
-                ctx.regs.write(rd as usize, alu(kind, a, b));
+                ctx.regs.write_masked(rd, alu(kind, a, b));
             }
             Op::Load { kind, rd, rs1, imm } => {
-                let virtual_address = ctx.regs.read(rs1 as usize).wrapping_add(imm as u64);
+                let virtual_address = ctx.regs.read_masked(rs1).wrapping_add(imm as u64);
 
                 match do_load(ctx, satp, kind, virtual_address, pc) {
-                    Ok(v) => ctx.regs.write(rd as usize, v),
+                    Ok(v) => ctx.regs.write_masked(rd, v),
                     Err(()) => {
                         ctx.csr.instret = ctx.csr.instret.wrapping_add(pending);
                         return (retired_instructions + 1, StepResult::Ok);
@@ -1132,8 +1139,8 @@ pub fn exec_block<B: SystemBus>(
                 rs2,
                 imm,
             } => {
-                let virtual_address = ctx.regs.read(rs1 as usize).wrapping_add(imm as u64);
-                let val = ctx.regs.read(rs2 as usize);
+                let virtual_address = ctx.regs.read_masked(rs1).wrapping_add(imm as u64);
+                let val = ctx.regs.read_masked(rs2);
                 if do_store(ctx, satp, kind, virtual_address, val, pc).is_err() {
                     ctx.csr.instret = ctx.csr.instret.wrapping_add(pending);
                     return (retired_instructions + 1, StepResult::Ok);
@@ -1145,8 +1152,8 @@ pub fn exec_block<B: SystemBus>(
                 rs2,
                 offset,
             } => {
-                let a = ctx.regs.read(rs1 as usize);
-                let b = ctx.regs.read(rs2 as usize);
+                let a = ctx.regs.read_masked(rs1);
+                let b = ctx.regs.read_masked(rs2);
                 let taken = match kind {
                     BranchKind::Beq => a == b,
                     BranchKind::Bne => a != b,
@@ -1163,10 +1170,8 @@ pub fn exec_block<B: SystemBus>(
                 }
             }
             Op::Jal { rd, offset } => {
-                ctx.regs.write(
-                    rd as usize,
-                    pc.wrapping_add(decoded_instruction.ilen as u64),
-                );
+                ctx.regs
+                    .write_masked(rd, pc.wrapping_add(decoded_instruction.ilen as u64));
 
                 ctx.regs.pc = pc.wrapping_add(offset as u64);
                 ctx.csr.instret = ctx.csr.instret.wrapping_add(pending + 1);
@@ -1174,11 +1179,9 @@ pub fn exec_block<B: SystemBus>(
                 return (retired_instructions + 1, StepResult::Ok);
             }
             Op::Jalr { rd, rs1, imm } => {
-                let target = ctx.regs.read(rs1 as usize).wrapping_add(imm as u64) & !1;
-                ctx.regs.write(
-                    rd as usize,
-                    pc.wrapping_add(decoded_instruction.ilen as u64),
-                );
+                let target = ctx.regs.read_masked(rs1).wrapping_add(imm as u64) & !1;
+                ctx.regs
+                    .write_masked(rd, pc.wrapping_add(decoded_instruction.ilen as u64));
 
                 ctx.regs.pc = target;
                 ctx.csr.instret = ctx.csr.instret.wrapping_add(pending + 1);
@@ -1609,6 +1612,30 @@ pub fn effective_satp(priv_mode: PrivMode, satp: u64) -> u64 {
 mod tests {
     use crate::system_bus::FlatMemory;
     use crate::{Hart, StepResult};
+
+    #[test]
+    fn a_decoded_write_to_x0_leaves_it_zero() {
+        const ADDI_X0_X0_5: u32 = 0x0050_0013;
+        const ADDI_X5_X0_7: u32 = 0x0070_0293;
+        const JUMP_TO_SELF: u32 = 0x0000_006f;
+        let mut memory = FlatMemory::new(1024 * 1024);
+        for (index, word) in [ADDI_X0_X0_5, ADDI_X5_X0_7, JUMP_TO_SELF]
+            .iter()
+            .enumerate()
+        {
+            memory.load_at(index * 4, &word.to_le_bytes());
+        }
+
+        let mut hart = Hart::new(0);
+        hart.run(&mut memory, 8);
+
+        assert_eq!(hart.regs.read(0), 0);
+        assert_eq!(
+            hart.regs.read(5),
+            7,
+            "a block wrote x0 and a later op in it read the value back"
+        );
+    }
 
     fn mem_with(words: &[(u64, u32)]) -> FlatMemory {
         let mut mem = FlatMemory::new(1024 * 1024);
