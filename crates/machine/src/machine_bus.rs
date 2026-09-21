@@ -370,8 +370,14 @@ impl SystemBus for MachineBus {
         0
     }
 
-    #[inline]
+    #[inline(always)]
     fn read_halfword(&mut self, address: u64) -> u16 {
+        if address >= RAM_BASE && address + 1 < RAM_BASE + self.ram.len() as u64 {
+            let index = (address - RAM_BASE) as usize;
+
+            return self.ram.read_u16(index);
+        }
+
         u16::from_le_bytes([self.read_byte(address), self.read_byte(address + 1)])
     }
 

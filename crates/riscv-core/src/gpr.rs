@@ -21,6 +21,17 @@ impl Gpr {
     }
 
     #[inline(always)]
+    pub fn read_masked(&self, reg: u8) -> u64 {
+        self.x[(reg & 31) as usize]
+    }
+
+    #[inline(always)]
+    pub fn write_masked(&mut self, reg: u8, val: u64) {
+        self.x[(reg & 31) as usize] = val;
+        self.x[0] = 0;
+    }
+
+    #[inline(always)]
     pub fn read_f(&self, reg: usize) -> u64 {
         self.f[reg]
     }
