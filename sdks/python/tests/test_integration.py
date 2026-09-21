@@ -1276,3 +1276,33 @@ def test_a_secret_without_a_host_is_refused():
 def test_a_secret_needs_a_value():
     with pytest.raises(ValueError, match="non-empty string value"):
         Sandbox.create(secrets={"K": {"value": "", "hosts": ["api.example.com"]}})
+
+
+def test_network_tracing_records_what_a_request_carried():
+    body = '{"model":"claude","prompt":"hello"}'
+
+    with Sandbox.create(trace={"network": True}) as sbx:
+        result = sbx.commands.run(
+            "wget -q -O- --header='Content-Type: application/json' "
+            f"--post-data='{body}' https://pypi.org/pypi/six/json > /dev/null 2>&1; true",
+            timeout=90,
+        )
+        assert result.exit_code == 0
+
+        requests = [
+            request
+            for activity in sbx.trace.collect().network()
+            for request in activity.requests
+        ]
+
+    posted = [request for request in requests if request.method == "POST"]
+    if not posted:
+        pytest.skip("no route to the network")
+
+    request = posted[0]
+    assert request.headers.get("Content-Type") == "application/json"
+    assert request.headers.get("Host") == "pypi.org"
+    assert request.body_bytes == len(body)
+    assert request.body == body
+    assert request.body_encoding == "utf8"
+    assert not request.body_truncated

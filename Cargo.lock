@@ -1758,6 +1758,7 @@ dependencies = [
 name = "machine"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "const-oid",
  "der",
  "dirs 6.0.0",

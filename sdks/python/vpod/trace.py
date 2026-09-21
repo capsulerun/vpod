@@ -64,6 +64,11 @@ class FileActivity:
 class HttpRequest:
     method: str
     url: str
+    headers: dict[str, str] = field(default_factory=dict)
+    body_bytes: Optional[int] = None
+    body: Optional[str] = None
+    body_encoding: Optional[str] = None
+    body_truncated: bool = False
 
 
 @dataclass
@@ -210,10 +215,19 @@ class Trace:
                 touching[key].add(pid)
             return entry
 
+        requests_by_seq: dict[int, HttpRequest] = {}
+
         for event in self._events:
             if event.get("internal") and not internal:
                 continue
             kind = event["kind"]
+
+            if kind == "net.http.body":
+                if (request := requests_by_seq.get(event.get("request_seq"))) is not None:
+                    request.body = event.get("content")
+                    request.body_encoding = event.get("encoding")
+                    request.body_truncated = bool(event.get("truncated"))
+                continue
 
             if kind not in ("net.connect", "net.flow", "net.udp", "net.http"):
                 continue
@@ -233,7 +247,14 @@ class Trace:
                 entry.failed = False
             else:
                 entry.host = entry.host or urlsplit(event["url"]).hostname
-                entry.requests.append(HttpRequest(event["method"], event["url"]))
+                request = HttpRequest(
+                    event["method"],
+                    event["url"],
+                    headers=event.get("headers") or {},
+                    body_bytes=event.get("body_bytes"),
+                )
+                entry.requests.append(request)
+                requests_by_seq[event["seq"]] = request
 
         for key, entry in activities.items():
             entry.processes = sorted(touching[key])

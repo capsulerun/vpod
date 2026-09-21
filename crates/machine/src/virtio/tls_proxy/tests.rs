@@ -8,6 +8,8 @@ use rustls::pki_types::ServerName;
 use std::net::TcpListener;
 use std::thread;
 
+use crate::trace::{TraceOptions, Tracer};
+
 const UPSTREAM_REPLY: &[u8] = b"HTTP/1.0 200 OK\r\nContent-Length: 5\r\n\r\nhello";
 
 fn provider() -> Arc<CryptoProvider> {
@@ -891,8 +893,6 @@ fn large_response_delivered_in_full_without_truncation() {
     assert_eq!(body, Some(BODY), "large body truncated: {body:?} of {BODY}");
 }
 
-/// Drive a real guest TLS client through the proxy and return what the upstream
-/// received, or `None` when the proxy refused the connection.
 fn request_through_proxy(
     proxy: &mut TlsProxy,
     up_ca: &str,
@@ -1039,4 +1039,44 @@ fn a_request_without_a_credential_is_unchanged_by_the_substitution() {
     let _ = host.join();
 
     assert_eq!(received, wire);
+}
+
+#[test]
+fn a_traced_header_holds_the_stand_in_and_never_the_credential() {
+    let (port, up_ca, seen, host) = spawn_capturing_upstream(UPSTREAM_REPLY);
+    let ctx = TlsContext::new().unwrap();
+    let mut proxy = proxy_carrying(&ctx, &up_ca, port, &["localhost"]);
+
+    let tracer = Tracer::new(TraceOptions::default());
+    proxy.observe_http(crate::trace::HttpObserver::new(
+        tracer.clone(),
+        "https",
+        [127, 0, 0, 1],
+        443,
+    ));
+
+    let received = request_through_proxy(
+        &mut proxy,
+        &up_ca,
+        &seen,
+        "GET /v1/messages?key=vpod-secret-key-a1b2c3d4 HTTP/1.1\r\nHost: localhost\r\n\
+         x-api-key: vpod-secret-key-a1b2c3d4\r\nContent-Length: 0\r\n\r\n",
+    )
+    .expect("the upstream never saw a request");
+
+    let _ = host.join();
+    let drained = String::from_utf8(tracer.drain(usize::MAX)).unwrap();
+
+    assert!(
+        received.contains("sk-ant-the-real-thing"),
+        "the substitution did not happen at all: {received}"
+    );
+    assert!(
+        !drained.contains("sk-ant-the-real-thing"),
+        "the trace recorded the real credential: {drained}"
+    );
+    assert!(
+        drained.contains("vpod-secret-key-a1b2c3d4"),
+        "the trace recorded neither the stand-in nor anything else useful: {drained}"
+    );
 }

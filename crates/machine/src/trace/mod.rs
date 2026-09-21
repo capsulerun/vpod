@@ -103,6 +103,10 @@ impl Tracer {
     }
 
     pub fn record(&self, kind: &str, fields: &[(&str, Value)]) {
+        self.record_seq(kind, fields);
+    }
+
+    pub fn record_seq(&self, kind: &str, fields: &[(&str, Value)]) -> Option<u64> {
         let wall_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|elapsed| elapsed.as_millis() as u64)
@@ -117,18 +121,21 @@ impl Tracer {
 
             if recorder.buffered_bytes + marker.len() > capacity {
                 recorder.dropped += 1;
-                return;
+                return None;
             }
             recorder.dropped = 0;
             recorder.push(marker);
         }
 
+        let seq = recorder.next_seq;
         let line = recorder.line(kind, wall_ms, fields);
         if recorder.buffered_bytes + line.len() > capacity {
             recorder.dropped += 1;
-            return;
+            return None;
         }
         recorder.push(line);
+
+        Some(seq)
     }
 
     pub fn drain(&self, max_bytes: usize) -> Vec<u8> {

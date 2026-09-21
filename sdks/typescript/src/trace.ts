@@ -40,6 +40,11 @@ export interface FileActivity {
 export interface HttpRequest {
     method: string;
     url: string;
+    headers: Record<string, string>;
+    bodyBytes: number | null;
+    body: string | null;
+    bodyEncoding: string | null;
+    bodyTruncated: boolean;
 }
 
 export interface NetworkActivity {
@@ -305,10 +310,22 @@ export class Trace {
 
     network(options: { internal?: boolean } = {}): NetworkActivity[] {
         const activities = new Map<string, NetworkActivity>();
+        // A body event names the head it belongs to by sequence number.
+        const requestsBySeq = new Map<number, HttpRequest>();
         const touching = new Map<string, Set<number>>();
 
         for (const event of this.#events) {
             if (event.internal === true && !options.internal) continue;
+            if (event.kind === "net.http.body") {
+                const request = requestsBySeq.get(count(event.request_seq));
+                if (request !== undefined) {
+                    request.body = text(event.content);
+                    request.bodyEncoding = text(event.encoding);
+                    request.bodyTruncated = event.truncated === true;
+                }
+                continue;
+            }
+
             if (!["net.connect", "net.flow", "net.udp", "net.http"].includes(event.kind)) continue;
             if (typeof event.address !== "string" || typeof event.port !== "number") continue;
 
@@ -349,7 +366,20 @@ export class Trace {
                     break;
                 case "net.http":
                     entry.host ??= hostOf(String(event.url));
-                    entry.requests.push({ method: String(event.method), url: String(event.url) });
+                    {
+                        const request: HttpRequest = {
+                            method: String(event.method),
+                            url: String(event.url),
+                            headers: (event.headers as Record<string, string>) ?? {},
+                            bodyBytes:
+                                typeof event.body_bytes === "number" ? event.body_bytes : null,
+                            body: null,
+                            bodyEncoding: null,
+                            bodyTruncated: false,
+                        };
+                        entry.requests.push(request);
+                        requestsBySeq.set(count(event.seq), request);
+                    }
                     break;
             }
         }
