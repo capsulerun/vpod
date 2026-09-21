@@ -592,6 +592,13 @@ impl SystemBus for MachineBus {
         Some(self.ram.page_mut_ptr(page))
     }
 
+    fn drain_device_written_pages(&mut self, visit: &mut dyn FnMut(u64)) -> bool {
+        let first_ram_page = RAM_BASE >> 12;
+        self.ram
+            .drain_device_written_pages(|page| visit(first_ram_page + page as u64));
+        true
+    }
+
     #[inline(always)]
     fn ram_epoch(&self) -> u64 {
         self.ram.epoch()
@@ -826,6 +833,72 @@ mod tests {
             bus.read_word(PLIC_BASE + PLIC_CLAIM_COMPLETE_OFFSET),
             0,
             "claim returned an interrupt recorded by an earlier poll"
+        );
+    }
+
+    const JUMP_TO_SELF: u32 = 0x0000_006f;
+    const FENCE_I: u32 = 0x0000_100f;
+    const FENCE_I_PAGE: u64 = RAM_BASE + 0x1000;
+
+    fn load_x5_with(value: u32) -> u32 {
+        (value << 20) | (5 << 7) | 0x13
+    }
+
+    fn load_words(bus: &mut MachineBus, address: u64, words: &[u32]) {
+        let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+        bus.load_ram(address - RAM_BASE, &bytes);
+    }
+
+    fn run_from(hart: &mut Hart, bus: &mut MachineBus, pc: u64) {
+        hart.regs.pc = pc;
+        hart.run(bus, 16);
+    }
+
+    fn machine_with_code_decoded_at_ram_base() -> (Hart, MachineBus) {
+        const RAM_SIZE: u64 = 1 << 20;
+
+        let mut bus = MachineBus::new(RAM_SIZE, CowRam::new(RAM_SIZE));
+        let mut hart = Hart::new(RAM_BASE);
+        load_words(&mut bus, RAM_BASE, &[load_x5_with(1), JUMP_TO_SELF]);
+        load_words(&mut bus, FENCE_I_PAGE, &[FENCE_I, JUMP_TO_SELF]);
+
+        run_from(&mut hart, &mut bus, RAM_BASE);
+        assert_eq!(hart.regs.read(5), 1);
+        assert!(
+            hart.blocks.lookup(RAM_BASE).is_some(),
+            "nothing was decoded"
+        );
+
+        (hart, bus)
+    }
+
+    #[test]
+    fn code_a_device_overwrote_is_decoded_again_after_fence_i() {
+        let (mut hart, mut bus) = machine_with_code_decoded_at_ram_base();
+
+        let mask = bus.ram_mask;
+        RamView::new(&mut bus.ram, mask).write_u32(RAM_BASE, load_x5_with(2));
+        run_from(&mut hart, &mut bus, FENCE_I_PAGE);
+        run_from(&mut hart, &mut bus, RAM_BASE);
+
+        assert_eq!(
+            hart.regs.read(5),
+            2,
+            "a block decoded before a device overwrote its page survived FENCE.I, \
+             so the guest ran code that is no longer in memory"
+        );
+    }
+
+    #[test]
+    fn fence_i_keeps_code_nothing_overwrote() {
+        let (mut hart, mut bus) = machine_with_code_decoded_at_ram_base();
+
+        run_from(&mut hart, &mut bus, FENCE_I_PAGE);
+
+        assert!(
+            hart.blocks.lookup(RAM_BASE).is_some(),
+            "FENCE.I dropped code nothing had overwritten; a JIT fences thousands \
+             of times per process and would re-decode its working set on each"
         );
     }
 

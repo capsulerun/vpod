@@ -838,7 +838,13 @@ fn exec_full<B: SystemBus>(
 
         OP_FENCE => {
             if inst.funct3() == 0x1 {
-                ctx.blocks.flush_all();
+                let blocks = &mut *ctx.blocks;
+                let tracked = ctx
+                    .bus
+                    .drain_device_written_pages(&mut |page| blocks.notify_store(page << 12));
+                if !tracked {
+                    ctx.blocks.flush_all();
+                }
                 invalidate_fetch_cache(ctx);
             }
 
